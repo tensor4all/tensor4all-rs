@@ -3,8 +3,9 @@ use std::sync::Arc;
 use num_complex::Complex64;
 
 use tensor4all_core::{
-    contract_pair_with_operand_options, outer_product, tensordot, DynIndex, ExecutionContext,
-    IdxTensor, PairwiseContractionOptions, TensorContractionLike,
+    contract_pair_with_operand_options, direct_sum, direct_sum_many, outer_product, tensordot,
+    AnyScalar, DynIndex, ExecutionContext, IdxTensor, PairwiseContractionOptions,
+    TensorContractionLike,
 };
 use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
@@ -13,6 +14,83 @@ fn cpu_context() -> ExecutionContext {
     ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
         CpuBackend::new(),
     )))
+}
+
+#[test]
+fn direct_sum_publication_and_promotion_keep_the_operand_context() {
+    let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
+        CpuBackend::with_threads(1).unwrap(),
+    )));
+    let a_index = DynIndex::new_dyn(2);
+    let b_index = DynIndex::new_dyn(1);
+    let a = IdxTensor::from_dense_in(&context, vec![a_index.clone()], vec![1.0_f64, 2.0]).unwrap();
+    let b = IdxTensor::from_dense_in(
+        &context,
+        vec![b_index.clone()],
+        vec![Complex64::new(3.0, -1.0)],
+    )
+    .unwrap();
+    let (sum, _) = direct_sum(&a, &b, &[(a_index.clone(), b_index.clone())]).unwrap();
+    sum.validate_context(&context).unwrap();
+    assert_eq!(
+        sum.to_vec::<Complex64>().unwrap(),
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, -1.0)
+        ]
+    );
+    let c_index = DynIndex::new_dyn(1);
+    let c = IdxTensor::from_dense_in(&context, vec![c_index.clone()], vec![4.0_f64]).unwrap();
+    let (many, _) = direct_sum_many(&[&a, &b, &c], &[vec![a_index, b_index, c_index]]).unwrap();
+    many.validate_context(&context).unwrap();
+    assert_eq!(
+        many.to_vec::<Complex64>().unwrap(),
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, -1.0),
+            Complex64::new(4.0, 0.0)
+        ]
+    );
+}
+
+#[test]
+fn untracked_scalar_coefficients_join_the_operand_runtime() {
+    let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
+        CpuBackend::with_threads(1).unwrap(),
+    )));
+    for indices in [Vec::new(), vec![DynIndex::new_dyn(2)]] {
+        let len = if indices.is_empty() { 1 } else { 2 };
+        let data = vec![3.0_f64; len];
+        let tensor = IdxTensor::from_dense_in(&context, indices, data).unwrap();
+        let real = tensor.scale(AnyScalar::new_real(2.0)).unwrap();
+        real.validate_context(&context).unwrap();
+        assert_eq!(real.to_vec::<f64>().unwrap(), vec![6.0; len]);
+        let complex = tensor.scale(AnyScalar::new_complex(2.0, -1.0)).unwrap();
+        complex.validate_context(&context).unwrap();
+        assert_eq!(
+            complex.to_vec::<Complex64>().unwrap(),
+            vec![Complex64::new(6.0, -3.0); len]
+        );
+    }
+}
+
+#[test]
+fn foreign_tracked_coefficients_are_not_detached_to_change_runtime() {
+    let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
+        CpuBackend::with_threads(1).unwrap(),
+    )));
+    let tensor =
+        IdxTensor::from_dense_in(&context, vec![DynIndex::new_dyn(2)], vec![3.0_f64, 4.0]).unwrap();
+    let scalar = AnyScalar::new_real(2.0).enable_grad().unwrap();
+    let error: anyhow::Error = tensor.scale(scalar).unwrap_err().into();
+    assert!(
+        error
+            .chain()
+            .any(|cause| cause.to_string().contains("different eager AD contexts")),
+        "{error:#}"
+    );
 }
 
 #[test]

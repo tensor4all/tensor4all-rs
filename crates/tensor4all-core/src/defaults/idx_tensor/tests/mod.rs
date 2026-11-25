@@ -1247,3 +1247,5 @@ fn structured_host_contraction_in_context_stays_in_that_context() {
         implicit.to_vec::<f64>().unwrap()
     );
 }
+
+mod scalar_context;

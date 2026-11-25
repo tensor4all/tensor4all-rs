@@ -1677,7 +1677,7 @@ pub trait TensorFactorizationLike: TensorIndex {
     }
 }
 
-/// Constructors and selection helpers for index-labelled tensors.
+/// Constructors, scalar conversion, and selection helpers for index-labelled tensors.
 pub trait TensorConstructionLike: TensorContractionLike {
     /// Create a diagonal (Kronecker delta) tensor for a single index pair.
     ///
@@ -1732,6 +1732,43 @@ pub trait TensorConstructionLike: TensorContractionLike {
     /// required construction (an invalid scalar dtype or a backend
     /// construction failure).
     fn scalar_one() -> std::result::Result<Self, Self::Error>;
+
+    /// Extract a rank-zero tensor's value as an `AnyScalar`.
+    ///
+    /// The default pairs `scalar_one()` with this tensor. Implementations with
+    /// runtime-owned storage should override it to extract the value in its
+    /// existing runtime, preserving automatic differentiation metadata.
+    ///
+    /// # Returns
+    /// The rank-zero value, retaining tracked state where the implementation
+    /// supports it.
+    ///
+    /// # Errors
+    /// Returns `Self::Error` when external indices remain or scalar
+    /// construction, contraction, or value extraction fails.
+    /// `IdxTensor` reports `IdxTensorError::ShapeMismatch` for a nonzero rank
+    /// and preserves storage or backend failures during scalar extraction.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::{IdxTensor, TensorConstructionLike};
+    /// # fn main() -> anyhow::Result<()> {
+    /// let tensor = IdxTensor::from_dense(vec![], vec![3.0_f64])?;
+    /// assert_eq!(tensor.to_scalar()?.real(), 3.0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn to_scalar(&self) -> std::result::Result<AnyScalar, Self::Error>
+    where
+        Self: TensorVectorSpace,
+    {
+        if self.num_external_indices() != 0 {
+            return Err(anyhow::anyhow!(
+                "to_scalar requires a rank-zero tensor; contract the remaining external indices first"
+            ).into());
+        }
+        Self::scalar_one()?.inner_product(self)
+    }
 
     /// Create a tensor filled with 1.0 for the given indices.
     ///

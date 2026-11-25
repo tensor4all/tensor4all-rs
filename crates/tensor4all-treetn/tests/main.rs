@@ -43,3 +43,4 @@ mod tensor_like;
 mod treetn_operation_error;
 mod truncate_validation;
 mod unfuse;
+mod vector_space;

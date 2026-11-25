@@ -3,6 +3,14 @@
 Tree tensor networks with arbitrary graph topology. Supports canonicalization,
 truncation, naive/zip-up/fit/SRC contraction, and linear solving.
 
+Nonempty `TreeTN` values also implement `tensor4all_core::TensorVectorSpace` for
+the core GMRES solvers on arbitrary trees. See the checked
+[`gmres_tree` example](examples/gmres_tree.rs): exact sums precede the explicit
+compression callback, and operator outputs keep the vector's full site indices.
+Use f64/Complex64 cores for the unitary QR/SVD paths; single-precision
+factorization restrictions remain in effect. Trait norms leave the input's
+gauge unchanged. Elementwise extrema require explicit dense reference checks.
+
 ## Cargo features
 
 The default build has no features and does not depend on SimpleTT.

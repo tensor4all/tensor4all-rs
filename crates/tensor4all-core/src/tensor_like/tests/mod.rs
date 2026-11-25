@@ -1,6 +1,17 @@
 use super::*;
 use crate::{DynIndex, IdxTensor};
 
+#[test]
+fn default_scalar_extraction_requires_rank_zero() {
+    let scalar = DefaultOnlyTensor::scalar_one()
+        .unwrap()
+        .scale(AnyScalar::new_real(-3.0))
+        .unwrap();
+    assert_eq!(scalar.to_scalar().unwrap().real(), -3.0);
+    let vector = DefaultOnlyTensor::ones(&[DynIndex::new_dyn(1)]).unwrap();
+    assert!(vector.to_scalar().is_err());
+}
+
 // ============================================================================
 // `DefaultOnlyTensor`: a minimal `TensorLike` implementor that never
 // overrides `factorize_probe_columns_incremental`, `src_error_estimate`,

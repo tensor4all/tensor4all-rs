@@ -1131,7 +1131,23 @@ impl IdxTensorStorage {
             Self::Deferred { error, .. } => return Err(anyhow::Error::new((**error).clone())),
         };
         let scalar_inner = match scalar.as_tensor() {
-            Ok(tensor) => std::borrow::Cow::Borrowed(tensor.try_materialized_inner()?),
+            Ok(tensor) => {
+                let inner = tensor.try_materialized_inner()?;
+                if Arc::ptr_eq(inner.runtime(), payload.runtime()) || scalar.tracks_grad() {
+                    std::borrow::Cow::Borrowed(inner)
+                } else {
+                    // An untracked coefficient has no AD graph to preserve.
+                    // Rehome its existing value in the operand's runtime;
+                    // tracked foreign coefficients still reach the backend's
+                    // context-mismatch error instead of being detached.
+                    // INVARIANT: AnyScalar contains one rank-zero value, so
+                    // this copy is constant-sized, independent of tensor size.
+                    std::borrow::Cow::Owned(IdxTensor::untracked_inner(
+                        inner.value()?.as_tensor_view().duplicate()?,
+                        Arc::clone(payload.runtime()),
+                    )?)
+                }
+            }
             // An untracked scalar without its own eager tensor (a build without
             // `global-defaults` has no runtime to create it in) joins the
             // payload's runtime, so a context-owned operand stays in its context.
@@ -8075,6 +8091,17 @@ impl TensorConstructionLike for IdxTensor {
         IdxTensor::from_dense(vec![], vec![1.0_f64])
     }
 
+    fn to_scalar(&self) -> std::result::Result<AnyScalar, Self::Error> {
+        if self.num_external_indices() != 0 {
+            return Err(IdxTensorError::ShapeMismatch {
+                operation: "to_scalar",
+                expected: "rank zero".to_string(),
+                actual: format!("rank {}", self.num_external_indices()),
+            });
+        }
+        self.sum()
+    }
+
     fn ones(indices: &[DynIndex]) -> std::result::Result<Self, Self::Error> {
         if indices.is_empty() {
             return <Self as TensorConstructionLike>::scalar_one();
@@ -8370,6 +8397,24 @@ impl IdxTensor {
         Self::validate_dense_payload_len(data.len(), &dims)?;
         let native = dense_native_tensor_from_col_major_owned(data, &dims)?;
         Self::from_native(indices, native).map_err(IdxTensorError::from)
+    }
+
+    /// Publish an untracked dense host result in the template's owning runtime.
+    /// Runtime-free templates keep the result runtime-free as well.
+    pub(crate) fn from_dense_like<T: TensorElement>(
+        template: &Self,
+        indices: Vec<DynIndex>,
+        data: Vec<T>,
+    ) -> std::result::Result<Self, IdxTensorError> {
+        let Some(runtime) = template.eager_runtime() else {
+            return Self::from_dense_compact(indices, data);
+        };
+        let dims = Self::expected_dims_from_indices(&indices);
+        Self::validate_indices(&indices)?;
+        Self::validate_dense_payload_len(data.len(), &dims)?;
+        let native = dense_native_tensor_from_col_major_owned(data, &dims)?;
+        Self::from_inner(indices, Self::untracked_inner(native, runtime)?)
+            .map_err(IdxTensorError::from)
     }
 
     /// Create a tensor from dense payload data provided as [`AnyScalar`] values.

@@ -4,6 +4,20 @@
 
 ### Behavior changes
 
+- Nonempty `TreeTN<T, V>` implements `TensorVectorSpace`, enabling the core's
+  `gmres_with_truncation` and `restart_gmres_with_truncation` on branched trees
+  (#1423). Sums remain exact until the explicit truncation callback; operands
+  retain strict full-site-index identity. Trait norms leave the input's gauge
+  unchanged; use `TreeTN::norm(&mut tree)` for in-place canonicalization.
+  Elementwise extrema remain unsupported without explicit dense materialization,
+  and existing single-precision QR/SVD restrictions still apply.
+- Core scalar multiplication, rank-zero extraction, and direct-sum publication
+  keep caller-owned CPU runtimes when used by TreeTN Krylov vectors (#1423).
+  `TensorConstructionLike::to_scalar` extracts rank-zero values without a
+  foreign scalar-one allocation; `IdxTensor` retains its scalar AD graph.
+  Untracked scalar coefficients may join the operand's runtime, while tracked
+  foreign coefficients and initialization failures remain errors. Direct sums
+  retain their existing non-differentiable host-copy semantics.
 - `TreeTN::inner` returns `1.0` instead of `0.0` for two empty networks,
   following the empty-product convention and matching `TensorTrain::inner`
   (#1383). Passing exactly one empty network still returns an error.

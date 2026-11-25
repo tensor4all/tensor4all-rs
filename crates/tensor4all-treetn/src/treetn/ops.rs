@@ -546,9 +546,8 @@ where
             )));
         }
 
-        let scalar_one = T::scalar_one().context("inner: failed to create scalar_one")?;
-        scalar_one
-            .inner_product(&result_tensor)
+        result_tensor
+            .to_scalar()
             .context("inner: failed to extract scalar value")
             .map_err(TreeTNOperationError::from)
     }
