@@ -1134,13 +1134,13 @@ const BRANCHED_EVALUATED_POINTS_BAND: f64 = 1e-3;
 /// iteration the residuals the global search compares are rounding noise
 /// (about 1e-15, against the 1e-8 threshold). `floating_zone_walk` takes the
 /// greedy argmax of those residuals and stops on exact equality of the running
-/// maximum (`tensor4all-core/src/floating_zone.rs:340-364`), so the number of
+/// maximum (`crates/tensor4all-core/src/floating_zone.rs:340-364`), so the number of
 /// walk evaluations follows the rounding of the approximation readout, which
 /// differs between CPU architectures. Measured:
 /// x86_64 Linux 161713; aarch64 macOS (Accelerate) and aarch64 Linux 161674,
 /// 39 (0.024%) fewer, from the second iteration on (38465 vs 38452 points).
-/// Ranks, pivots, errors above the noise and the dense residual agree, and
-/// they still lock the trajectory exactly. The band therefore guards the cost
+/// Ranks, the first-iteration error and the dense residual agree across the
+/// architectures and stay asserted. The band therefore guards the cost
 /// against a gross change only (the chain's count moved 22073 to 13754 with
 /// #1371); a change of a few dozen points on this fixture is not detected,
 /// and is the price of one count valid on both architectures. Do not re-pin
