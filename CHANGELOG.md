@@ -18,6 +18,16 @@
   Untracked scalar coefficients may join the operand's runtime, while tracked
   foreign coefficients and initialization failures remain errors. Direct sums
   retain their existing non-differentiable host-copy semantics.
+- Native einsum tracing/profiling settings and core contraction/GMRES profiling
+  settings are read once per crate on first use (#1387). Set the `T4A_PROFILE_*`,
+  `T4A_TRACE_NATIVE_EINSUM_*`, and `T4A_GMRES_OP_PROFILE` environment variables
+  before the first operation. The undocumented automatic cleanup switches
+  `T4A_RESET_NATIVE_EINSUM_ENGINE_AFTER_CALL`,
+  `T4A_RESET_NATIVE_EINSUM_BUFFER_POOL_AFTER_CALL`, and
+  `T4A_RELEASE_ALLOCATOR_AFTER_NATIVE_EINSUM_CALL` are removed. Manage cleanup
+  explicitly with `CpuExecutionContext::reset_graph_runtime`,
+  `CpuExecutionContext::reset_graph_buffer_pool`, and
+  `release_process_allocator_cached_memory` instead.
 - `TreeTN::inner` returns `1.0` instead of `0.0` for two empty networks,
   following the empty-product convention and matching `TensorTrain::inner`
   (#1383). Passing exactly one empty network still returns an error.
@@ -318,6 +328,22 @@
   With `min_sweeps = 1`, 9 of 400 cttn runs now end `MaxSweeps` on the known
   local-error plateau (dense error 1.01e-3) instead of stopping at up to 5.8e-3.
   `TreeAciDiagnostics::evaluated_points` includes the re-measurements.
+- `tensor4all-treeaci`: two bonds through a vertex of local dimension 1 no longer
+  cap each other (#1435, mechanism 1). A commit whose side has such a vertex, while
+  that vertex's other bonds offer fewer than twice the edge's rank (the untuned
+  constant of TreeTCI's #1434), also reads, for that one commit, the neighbour's
+  side samples of the largest-rank other bond. On the #1435 table (three branches
+  joined at a dimension-1 centre, tolerance 1e-10, 11 seeds) 8 seeds now stop
+  `Converged` at the true centre ranks (12, 1, 12) with a dense relative error of at
+  most 6.1e-16, where they stopped `Converged` at (2, 1, 2) to (10, 1, 10) with
+  dense errors of 2.5e-8 to 0.33; the table costs 1.22x the oracle points (167,501
+  instead of 137,084). Seeds 2, 3 and 7 still return the zero output, a separate
+  mechanism that stays open in #1435. Runs on trees without a dimension-1 vertex
+  are unchanged: the same table with the centre absorbed into a binary site and
+  the G0 and star workload sweep (213 runs) are bit-identical. Runs on trees with
+  one change their trajectory: in the non-heavy dense-oracle audit, 14 of 92 cases
+  change, all on the `mixed-axes` geometry, with the same `Converged` terminations,
+  the same or fewer passes and dense errors of the same size.
 
 ### Added
 

@@ -966,11 +966,6 @@ fn native_read_input_owned_and_plan_helpers_cover_debug_paths() {
     assert_eq!(input.shape(), &[2]);
     assert_eq!(input.as_read().shape(), &[2]);
 
-    assert_eq!(native_einsum_path_trace_min_bytes(), 0);
-    assert_eq!(native_einsum_path_trace_max_signatures(), 64);
-    assert_eq!(native_einsum_pool_trace_min_output_bytes(), 0);
-    assert_eq!(native_einsum_pool_trace_min_retained_bytes(), 0);
-
     assert_eq!(dtype_size_bytes(DType::F32), 4);
     assert_eq!(dtype_size_bytes(DType::F64), 8);
     assert_eq!(dtype_size_bytes(DType::C32), 8);

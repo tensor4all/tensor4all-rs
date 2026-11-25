@@ -40,6 +40,7 @@ pub use col_major_array::{ColMajorArray, ColMajorArrayMut, ColMajorArrayRef};
 // Common (tags, utilities, scalar)
 /// Dynamic scalar compatibility wrapper built on rank-0 `IdxTensor`.
 pub mod any_scalar;
+mod diagnostics;
 pub mod global_default;
 mod implicit_route;
 /// Bit-packed integer keys for multi-index maps.

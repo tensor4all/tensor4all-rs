@@ -1187,7 +1187,7 @@ where
     b.validate()?;
     x0.validate()?;
 
-    let profile_enabled = std::env::var_os("T4A_GMRES_OP_PROFILE").is_some();
+    let profile_enabled = crate::diagnostics::core_diagnostics().gmres_profile;
     let profile_id = if profile_enabled {
         GMRES_OP_PROFILE_COUNTER.fetch_add(1, Ordering::Relaxed)
     } else {

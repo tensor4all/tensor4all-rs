@@ -15,7 +15,6 @@ use rand_distr::{Distribution, StandardNormal};
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tenferro::{
@@ -106,8 +105,7 @@ thread_local! {
 }
 
 fn pairwise_contract_profile_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| env::var("T4A_PROFILE_PAIRWISE_CONTRACT").is_ok())
+    crate::diagnostics::core_diagnostics().pairwise_contract_profile
 }
 
 fn record_pairwise_contract_profile(section: &'static str, elapsed: Duration) {

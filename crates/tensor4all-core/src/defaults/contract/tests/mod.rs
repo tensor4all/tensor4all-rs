@@ -2,37 +2,8 @@ use super::*;
 use crate::defaults::{Index, TagSet};
 use crate::TensorContractionLike;
 use num_complex::Complex64;
-use std::ffi::OsString;
 use std::time::Duration;
 use tensor4all_tensorbackend::StorageKind;
-
-struct ScopedEnvVar {
-    key: &'static str,
-    previous: Option<OsString>,
-}
-
-impl ScopedEnvVar {
-    fn set(key: &'static str, value: &str) -> Self {
-        let previous = std::env::var_os(key);
-        unsafe {
-            std::env::set_var(key, value);
-        }
-        Self { key, previous }
-    }
-}
-
-impl Drop for ScopedEnvVar {
-    fn drop(&mut self) {
-        match &self.previous {
-            Some(value) => unsafe {
-                std::env::set_var(self.key, value);
-            },
-            None => unsafe {
-                std::env::remove_var(self.key);
-            },
-        }
-    }
-}
 
 fn make_test_tensor(shape: &[usize], ids: &[u64]) -> IdxTensor {
     let indices: Vec<DynIndex> = ids
@@ -734,21 +705,32 @@ fn test_union_find_remap_and_tensor_id_helpers() {
 
 #[test]
 fn test_contract_profile_helpers() {
-    let _profile_env = ScopedEnvVar::set("T4A_PROFILE_CONTRACT", "1");
-    reset_contract_profile();
+    crate::diagnostics::with_test_diagnostics(
+        |config| config.contract_profile = true,
+        || {
+            reset_contract_profile();
 
-    let signature = ContractSignature {
-        operands: vec![ContractOperandSignature {
-            dims: vec![2, 3],
-            ids: vec![1, 2],
-            is_diag: false,
-        }],
-        output_ids: vec![1],
-        output_dims: vec![2],
-    };
-    record_contract_profile(signature, Duration::from_micros(10));
-    print_and_reset_contract_profile();
-    reset_contract_profile();
+            let signature = ContractSignature {
+                operands: vec![ContractOperandSignature {
+                    dims: vec![2, 3],
+                    ids: vec![1, 2],
+                    is_diag: false,
+                }],
+                output_ids: vec![1],
+                output_dims: vec![2],
+            };
+            record_contract_profile(signature.clone(), Duration::from_micros(10));
+            CONTRACT_PROFILE_STATE.with(|state| {
+                let state = state.borrow();
+                let entry = state.get(&signature).unwrap();
+                assert_eq!(entry.calls, 1);
+                assert_eq!(entry.total_time, Duration::from_micros(10));
+            });
+            print_and_reset_contract_profile();
+            CONTRACT_PROFILE_STATE.with(|state| assert!(state.borrow().is_empty()));
+            reset_contract_profile();
+        },
+    );
 }
 
 // ========================================================================
