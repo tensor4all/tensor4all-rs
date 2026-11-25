@@ -29,28 +29,6 @@ pub(crate) struct PassReport {
     pub(crate) evaluated_points: u64,
 }
 
-/// The directed edges a pass committed, in order. Recorded only in test
-/// builds, where `PassReport::updated_edges` exposes them.
-#[derive(Debug, Default)]
-struct UpdateTrace {
-    #[cfg(test)]
-    ordered: Vec<DirectedEdgeId>,
-}
-
-impl UpdateTrace {
-    fn with_capacity(_capacity: usize) -> Self {
-        Self {
-            #[cfg(test)]
-            ordered: Vec::with_capacity(_capacity),
-        }
-    }
-
-    fn record(&mut self, _edge: DirectedEdgeId) {
-        #[cfg(test)]
-        self.ordered.push(_edge);
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SweepHistory {
     pub(crate) max_ranks: Vec<usize>,
@@ -256,7 +234,10 @@ where
     crate::state::profile_debug_stats::record(|stats| {
         stats.schedule_acquire += schedule_acquire_started.elapsed();
     });
-    let mut update_trace = UpdateTrace::with_capacity(state.problem.directed_edges.len() / 2);
+    // The directed edges this pass commits, in order. Recorded only in test
+    // builds, where `PassReport::updated_edges` exposes them.
+    #[cfg(test)]
+    let mut updated_edges = Vec::with_capacity(state.problem.directed_edges.len() / 2);
     let mut evaluated_points = 0u64;
 
     // A pass leaves the output as its commits wrote it. No canonicalization
@@ -272,7 +253,8 @@ where
             phase,
             rank_hysteresis,
             operator,
-            &mut update_trace,
+            #[cfg(test)]
+            &mut updated_edges,
             &mut evaluated_points,
             exec,
         )?;
@@ -289,7 +271,7 @@ where
     Ok(PassReport {
         direction,
         #[cfg(test)]
-        updated_edges: update_trace.ordered,
+        updated_edges,
         max_rank,
         max_error,
         evaluated_points,
@@ -303,7 +285,7 @@ fn run_phase_serial<T, V, F>(
     phase: &PathPhase,
     rank_hysteresis: bool,
     operator: &mut F,
-    update_trace: &mut UpdateTrace,
+    #[cfg(test)] updated_edges: &mut Vec<DirectedEdgeId>,
     evaluated_points: &mut u64,
     exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<()>
@@ -351,7 +333,8 @@ where
                 .ok_or(TreeAciError::SizeOverflow {
                     context: "pass evaluated point count",
                 })?;
-            update_trace.record(directed);
+            #[cfg(test)]
+            updated_edges.push(directed);
         }
     }
     Ok(())

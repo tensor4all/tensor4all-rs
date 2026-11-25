@@ -114,10 +114,11 @@ actually injected. Target values, reconstructed values,
 residuals, and guard thresholds must be finite, including the exact single-node
 shortcut. Callback and residual non-finiteness has a dedicated typed error.
 
-Convergence requires a window of `min_sweeps` consecutive pass results with
-no growth on **any** output edge, starting with the first result as the
-baseline. A rank decrease is allowed, but subsequent regrowth restarts the
-window. Network-maximum rank stability alone is insufficient: on the #741
+Convergence requires a window of `min_sweeps` consecutive pass results. Its
+first entry is the baseline: the first pass, or the last pass whose ranks grew
+on any edge. The remaining `min_sweeps - 1` results must show no growth on
+**any** output edge, so with `min_sweeps = 1` the rank condition cannot fail.
+A rank decrease is allowed, but subsequent regrowth restarts the window. Network-maximum rank stability alone is insufficient: on the #741
 low-temperature CTTN, the maximum stayed at 233 while smaller cuts were still
 growing and the reconstructed output retained a large localized error.
 The implementation retains one previous rank per edge and a stability counter,

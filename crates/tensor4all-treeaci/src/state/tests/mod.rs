@@ -685,8 +685,11 @@ fn profile_unequal_incident_bonds_at_coordination_four() {
     }
 }
 
+/// Without an initial guess, initialization keeps the random cores' values,
+/// puts the canonical region at the traversal root (node 1 here) and claims
+/// no canonical form: the output is never canonicalized numerically (#1449).
 #[test]
-fn unseeded_initialization_defers_numeric_canonicalization() {
+fn unseeded_initialization_keeps_random_cores_and_claims_no_canonical_form() {
     let sites = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
     let inputs = vec![two_node_tree(sites, 2, 1.0)];
     let options = TreeAciOptions {

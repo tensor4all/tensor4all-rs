@@ -26,7 +26,9 @@ pub enum TreeAciTermination {
     /// An inaccurate edge reached its algebraic/configured rank cap, or the
     /// guard found an unresolved residual while all cuts were saturated.
     RankLimited,
-    /// The configured sweep limit was reached.
+    /// The configured pass limit,
+    /// [`TreeAciOptions::max_sweeps`](crate::TreeAciOptions::max_sweeps), was
+    /// reached.
     ///
     /// This includes runs whose ranks have settled except for a few
     /// threshold-limited edges that keep gaining a pivot; see the known
@@ -104,9 +106,18 @@ pub struct TreeAciDiagnostics<V> {
 pub struct TreeAciResult<V: TreeAciNode> {
     /// Interpolated output with the prepared input topology and site indices.
     pub tree: TreeTN<IdxTensor, V>,
-    /// Maximum output edge rank after each sweep.
+    /// Maximum output edge rank after each recorded pass (one entry per pass
+    /// of the sweep loop; see [`max_errors`](Self::max_errors) for the
+    /// unrecorded cleanup pass).
     pub max_ranks: Vec<usize>,
-    /// Maximum normalized local error after each sweep.
+    /// Maximum normalized local error after each recorded pass (one entry per
+    /// pass of the sweep loop).
+    ///
+    /// When the global guard injected pivots after the last recorded pass,
+    /// one more cleanup pass runs before the result is returned. It is not
+    /// recorded here or in [`max_ranks`](Self::max_ranks), so the last entry
+    /// then describes the output before that pass, not
+    /// [`tree`](Self::tree).
     ///
     /// Each entry is the largest recorded per-edge residual after that pass:
     /// for every edge, the LUCI residual of the latest commit on that edge,

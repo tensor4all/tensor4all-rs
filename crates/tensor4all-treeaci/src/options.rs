@@ -87,18 +87,32 @@ impl TolerancePolicy {
 /// ```
 #[derive(Clone, Debug)]
 pub struct TreeAciOptions<V: TreeAciNode> {
-    /// Maximum number of complete sweeps. Default: `20`.
-    pub max_sweeps: usize,
-    /// Minimum consecutive passes with no rank growth on any edge, including
-    /// the baseline pass. Default: `2`. A growing cut restarts this window
-    /// even if the network's maximum rank stays constant; rank decreases are
-    /// allowed. The local error and global-guard criteria must also pass.
+    /// Maximum number of directional passes. Default: `20`.
     ///
-    /// The global guard searches at most once per pass, and a
-    /// [`TreeAciTermination::Converged`](crate::TreeAciTermination::Converged)
-    /// stop needs it to find no pivot in each of the last `min_sweeps` passes.
-    /// With `min_sweeps = 1` that stop therefore rests on a single randomized
-    /// guard search and is not a dense-error certificate.
+    /// Each pass is one forward or one return walk over the tree, so the
+    /// default allows 10 forward/return rounds. A cleanup pass that may run
+    /// after the last one (see [`TreeAciResult::max_errors`](crate::TreeAciResult::max_errors))
+    /// is not counted.
+    pub max_sweeps: usize,
+    /// Length of the rank-stability window, in passes. Default: `2`.
+    ///
+    /// The window counts the last pass whose ranks grew on any edge as its
+    /// first entry, so a stop needs `min_sweeps - 1` further passes with no
+    /// rank growth. A growing cut restarts the window even if the network's
+    /// maximum rank stays constant; rank decreases are allowed. With
+    /// `min_sweeps = 1` the rank condition cannot fail. The local error and
+    /// global-guard criteria must also pass.
+    ///
+    /// The global guard searches at most once per pass. It is skipped when
+    /// [`enable_global_guard`](Self::enable_global_guard) is off, when
+    /// [`nsearch_global_pivots`](Self::nsearch_global_pivots) or
+    /// [`max_nglobal_pivots`](Self::max_nglobal_pivots) is zero, and on a
+    /// rank-limited pass; a skipped search counts as one that found no pivot.
+    /// A [`TreeAciTermination::Converged`](crate::TreeAciTermination::Converged)
+    /// stop needs no pivot found in each of the last `min_sweeps` passes, so
+    /// it rests on at most `min_sweeps` randomized guard searches, and on none
+    /// when every one of them was skipped. With `min_sweeps = 1` that is at
+    /// most one search, and the stop is not a dense-error certificate.
     pub min_sweeps: usize,
     /// Optional rank cap on every output edge. Default: no explicit cap.
     pub max_bond_dim: Option<usize>,
