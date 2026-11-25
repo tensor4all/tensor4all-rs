@@ -2,7 +2,7 @@
 
 use num_complex::Complex64;
 use tensor4all_core::{AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor, IndexLike, TensorIndex};
-use tensor4all_treetn::TreeTN;
+use tensor4all_treetn::{TreeTN, TreeTNOperationError};
 
 // ============================================================================
 // Helper Functions
@@ -145,6 +145,29 @@ fn test_norm_against_dense() {
 // ============================================================================
 // Tests for inner product
 // ============================================================================
+
+#[test]
+fn test_inner_empty_networks_returns_one() {
+    let left = TreeTN::<IdxTensor, usize>::new();
+    let right = TreeTN::<IdxTensor, usize>::new();
+
+    let inner = left.inner(&right).unwrap();
+
+    assert_eq!(inner.real(), 1.0);
+    assert_eq!(inner.imag(), 0.0);
+}
+
+#[test]
+fn test_inner_rejects_exactly_one_empty_network() {
+    let empty = TreeTN::<IdxTensor, usize>::new();
+    let tensor = make_tensor(vec![idx(2)], vec![3.0, 4.0]);
+    let nonempty = TreeTN::from_tensors(vec![tensor], vec![0]).unwrap();
+
+    for (left, right) in [(&empty, &nonempty), (&nonempty, &empty)] {
+        let error = left.inner(right).unwrap_err();
+        assert!(matches!(error, TreeTNOperationError::InvalidGraph { .. }));
+    }
+}
 
 #[test]
 fn test_inner_self() {

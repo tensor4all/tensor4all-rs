@@ -405,6 +405,9 @@ where
     /// Both TreeTNs must have the same site indices (same IDs).
     /// Link indices may differ between the two TreeTNs.
     ///
+    /// Two empty networks have inner product `1.0`, following the empty-product
+    /// convention.
+    ///
     /// # Algorithm
     /// 1. Replace link indices in `other` with fresh IDs to avoid collision.
     /// 2. At each node, contract `conj(self_tensor) * other_tensor` pairwise.
@@ -431,6 +434,11 @@ where
     /// // <v|v> = 3^2 + 4^2 = 25
     /// let ip = tn.inner(&tn).unwrap();
     /// assert!((ip.real() - 25.0).abs() < 1e-10);
+    ///
+    /// let empty = TreeTN::<IdxTensor, usize>::new();
+    /// let empty_ip = empty.inner(&empty).unwrap();
+    /// assert_eq!(empty_ip.real(), 1.0);
+    /// assert_eq!(empty_ip.imag(), 0.0);
     /// ```
     pub fn inner(&self, other: &Self) -> std::result::Result<AnyScalar, TreeTNOperationError>
     where
@@ -438,7 +446,7 @@ where
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
         if self.node_count() == 0 && other.node_count() == 0 {
-            return Ok(AnyScalar::new_real(0.0));
+            return Ok(AnyScalar::new_real(1.0));
         }
         if !self.share_equivalent_site_index_network(other) {
             return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
