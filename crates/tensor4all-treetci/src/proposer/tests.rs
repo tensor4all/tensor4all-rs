@@ -427,3 +427,76 @@ fn default_proposer_offers_enrichment_candidates_of_the_junction_side() {
     // The leaf side has no recorded candidates and is unchanged.
     assert_eq!(leaf, vec![vec![0], vec![1], vec![2], vec![3]]);
 }
+
+#[test]
+fn default_proposer_expands_a_delta_junction_without_losing_its_local_index() {
+    // Two pivot columns agree at the junction (nonzero value 1) and the
+    // separable leaf 3. Leaf 2 therefore caps leaf 1 at rank 2.
+    let tci = star_state(2, &[vec![1, 0, 0, 0], vec![1, 1, 1, 0]]);
+    let (junction, _) = DefaultProposer
+        .candidates(&tci, TreeTciEdge::new(0, 1))
+        .unwrap();
+    let expected: Vec<_> = (0..4)
+        .flat_map(|leaf| (0..2).map(move |local| vec![local, leaf, 0]))
+        .collect();
+    assert_eq!(junction, expected);
+}
+
+#[test]
+fn default_proposer_does_not_infer_a_delta_from_one_pivot() {
+    let tci = star_state(2, &[vec![1, 0, 0, 0]]);
+    let (junction, _) = DefaultProposer
+        .candidates(&tci, TreeTciEdge::new(0, 1))
+        .unwrap();
+    assert_eq!(junction, vec![vec![0, 0, 0], vec![1, 0, 0]]);
+}
+
+#[test]
+fn default_proposer_keeps_a_junction_with_varying_local_pivots() {
+    let tci = star_state(2, &[vec![0, 0, 0, 0], vec![1, 1, 1, 0]]);
+    let (junction, _) = DefaultProposer
+        .candidates(&tci, TreeTciEdge::new(0, 1))
+        .unwrap();
+    assert_eq!(
+        junction,
+        vec![vec![0, 0, 0], vec![1, 0, 0], vec![0, 1, 0], vec![1, 1, 0]]
+    );
+}
+
+#[test]
+fn default_proposer_keeps_full_local_index_when_delta_junction_has_slack() {
+    let tci = star_state(2, &[vec![1, 0, 0, 0], vec![1, 1, 1, 1]]);
+    let (junction, _) = DefaultProposer
+        .candidates(&tci, TreeTciEdge::new(0, 1))
+        .unwrap();
+    let expected: Vec<_> = (0..2)
+        .flat_map(|a| (0..2).flat_map(move |b| (0..2).map(move |local| vec![local, a, b])))
+        .collect();
+    assert_eq!(junction, expected);
+}
+
+#[test]
+fn default_proposer_keeps_chain_candidates_with_fixed_local_pivots() {
+    let mut tci =
+        TreeTCI2::<f64>::new(vec![4, 2, 4], TreeTciGraph::linear_chain(3).unwrap()).unwrap();
+    tci.add_global_pivots(&[vec![0, 1, 0], vec![1, 1, 1]])
+        .unwrap();
+    let (_, right) = DefaultProposer
+        .candidates(&tci, TreeTciEdge::new(0, 1))
+        .unwrap();
+    assert_eq!(right, vec![vec![0, 0], vec![1, 0], vec![0, 1], vec![1, 1]]);
+}
+
+#[test]
+fn fixed_local_pivots_rejects_malformed_columns_and_handles_missing_keys() {
+    let mut tci = star_state(2, &[vec![1, 0, 0, 0], vec![1, 1, 1, 0]]);
+    assert!(!super::fixed_local_pivots(&tci, &SubtreeKey::new(vec![99]), 0).unwrap());
+    let (key, _) = tci
+        .graph
+        .subregion_vertices(TreeTciEdge::new(0, 1))
+        .unwrap();
+    assert!(super::fixed_local_pivots(&tci, &key, usize::MAX).is_err());
+    tci.ijset
+        .insert(key.clone(), ColMajorArray::new(vec![0], vec![1]).unwrap());
+    assert!(super::fixed_local_pivots(&tci, &key, 0).is_err());
+}
