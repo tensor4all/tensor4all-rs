@@ -94,11 +94,18 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// even if the network's maximum rank stays constant; rank decreases are
     /// allowed. The local error and global-guard criteria must also pass.
     ///
-    /// The global guard searches at most once per pass, and a
-    /// [`TreeAciTermination::Converged`](crate::TreeAciTermination::Converged)
-    /// stop needs it to find no pivot in each of the last `min_sweeps` passes.
-    /// With `min_sweeps = 1` that stop therefore rests on a single randomized
-    /// guard search and is not a dense-error certificate.
+    /// The global guard searches at most once per pass. It is skipped when
+    /// [`enable_global_guard`](Self::enable_global_guard) is off, when
+    /// [`nsearch_global_pivots`](Self::nsearch_global_pivots) or
+    /// [`max_nglobal_pivots`](Self::max_nglobal_pivots) is zero, and on a
+    /// rank-limited pass; a skipped search counts as one that found no pivot.
+    /// A [`TreeAciTermination::Converged`](crate::TreeAciTermination::Converged)
+    /// stop needs no pivot found in each of the last `min_sweeps` passes, so
+    /// it rests on at most `min_sweeps` randomized guard searches, and on none
+    /// when every one of them was skipped. With `min_sweeps = 1` that is at
+    /// most one search, the rank-stability window is always met (the pass
+    /// that grew ranks counts itself), and the stop is not a dense-error
+    /// certificate.
     pub min_sweeps: usize,
     /// Optional rank cap on every output edge. Default: no explicit cap.
     pub max_bond_dim: Option<usize>,
