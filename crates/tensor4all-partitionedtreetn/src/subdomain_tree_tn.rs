@@ -11,8 +11,9 @@ use tensor4all_core::{
     TagSetLike, TensorElement,
 };
 use tensor4all_treetn::{
+    apply_linear_operator,
     contraction::{self, ContractionMethod, ContractionOptions},
-    SiteIndexNetwork, SumEngine, TreeTN, TruncationOptions,
+    ApplyOptions, LinearOperator, SiteIndexNetwork, SumEngine, TreeTN, TruncationOptions,
 };
 
 /// A TreeTN together with the projector defining its subdomain.
@@ -760,10 +761,50 @@ where
         center: &V,
         options: ContractionOptions,
     ) -> Result<Option<Self>> {
+        self.contract_pair(other, center, options, false)
+    }
+
+    /// Partition algebra preserves exact unit-bond pairs; adaptive probes and
+    /// standalone subdomain contraction retain their compressed-pair policy.
+    pub(crate) fn contract_partition_pair(
+        &self,
+        other: &Self,
+        center: &V,
+        options: ContractionOptions,
+    ) -> Result<Option<Self>> {
+        self.contract_pair(other, center, options, true)
+    }
+
+    fn contract_pair(
+        &self,
+        other: &Self,
+        center: &V,
+        options: ContractionOptions,
+        exact_unit_bonds: bool,
+    ) -> Result<Option<Self>> {
         let Some(merged) = self.prepare_pair_contraction(other, center, &options)? else {
             return Ok(None);
         };
-        let data = contraction::contract(&self.data, &other.data, center, options)?;
+        let data = if exact_unit_bonds && (self.max_bond_dim() == 1 || other.max_bond_dim() == 1) {
+            // The site indices are already bound by full identity. Empty maps
+            // request no relabeling; naive apply contracts local tensors and
+            // fuses link pairs, whose dimensions are 1 * the other link's.
+            let operator = LinearOperator::new_multi(
+                other.data.clone(),
+                std::collections::HashMap::new(),
+                std::collections::HashMap::new(),
+            );
+            apply_linear_operator(
+                &operator,
+                &self.data,
+                ApplyOptions {
+                    center: Some(center.clone()),
+                    ..ApplyOptions::naive()
+                },
+            )?
+        } else {
+            contraction::contract(&self.data, &other.data, center, options)?
+        };
         self.finish_pair_contraction(data, merged).map(Some)
     }
 
@@ -1105,6 +1146,7 @@ pub(crate) fn validate_contraction_options(options: &ContractionOptions) -> Resu
             reason: "convergence_tol must be finite and non-negative",
         });
     }
+    options.validate()?;
     Ok(())
 }
 

@@ -2750,6 +2750,32 @@ impl Default for ContractionOptions {
 }
 
 impl ContractionOptions {
+    /// Validate truncation, initialization, and method-specific factorization options.
+    ///
+    /// Call this before choosing an exact shortcut that bypasses [`contract`].
+    /// It checks option consistency without accessing tensors or running kernels.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeTNOperationError::InvalidConfiguration`] for a zero bond
+    /// cap, an invalid SVD threshold, inconsistent RSVD parameters, or invalid
+    /// SRC rank/tolerance settings. Tensor topology and dense reference limits
+    /// are checked separately when the contraction runs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::ContractionOptions;
+    ///
+    /// let options = ContractionOptions::default();
+    /// options.validate()?;
+    /// assert!(options.with_initial_max_bond_dim(0).validate().is_err());
+    /// # Ok::<(), tensor4all_treetn::TreeTNOperationError>(())
+    /// ```
+    pub fn validate(&self) -> std::result::Result<(), TreeTNOperationError> {
+        validate_contract_options(self).map_err(TreeTNOperationError::invalid_configuration)
+    }
+
     /// Create options with specified method.
     pub fn new(method: ContractionMethod) -> Self {
         Self {

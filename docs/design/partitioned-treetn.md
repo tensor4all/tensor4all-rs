@@ -148,13 +148,27 @@ site-index assignment, and dtype compatibility.
 
 Contraction likewise requires the two partitions to use the same named topology
 in v1; it does not call `restructure_to` or a mismatched-topology dense fallback.
-For each compatible projector pair it:
+For each compatible projector pair, the ordinary partition operations
+`PartitionedTreeTN::contract` and `contract_selected`:
 
-1. contracts the already masked TreeTNs with
-   `tensor4all_treetn::contraction::contract` at the explicit center;
+1. contracts the already masked TreeTNs locally and exactly when every link
+   of either operand has dimension one (including trees without links), using
+   `apply_linear_operator` with `ApplyOptions::naive()` and already-bound
+   indices; otherwise uses `tensor4all_treetn::contraction::contract` at the
+   explicit center;
 2. keeps projector entries only for surviving external full indices; and
 3. combines duplicate output projectors with strict TreeTN addition and the
    requested truncation policy.
+
+The dimension-one rule depends only on links; local tensors may be arbitrary,
+including singular maps, phases and multi-leg copy tensors. The exact pair
+inherits the other operand's link dimensions and ignores the rank cap and
+truncation threshold. Options are still validated before this shortcut through
+the owning `ContractionOptions::validate` seam. Exact local apply establishes no
+orthogonal gauge, so it returns empty canonical metadata. An output with one
+contribution is returned unchanged; multiple contributions are summed exactly
+and truncated once under the call's policy. The adaptive probe/outcome adapter
+continues to use its requested contraction algorithm and stopping policy.
 
 ### Sum engine
 

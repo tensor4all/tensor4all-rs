@@ -104,6 +104,8 @@ use crate::treetn::TreeTN;
 /// state/operator link pair into one product link. It does not materialize the
 /// full state or operator tensor. Truncation fields such as `max_bond_dim`,
 /// `svd_policy`, and `qr_rtol` are ignored by the naive path.
+/// No orthogonal gauge is established: the result has no canonical region or
+/// form. Canonicalize it explicitly when a certified center is needed.
 ///
 /// # Defaults
 ///
@@ -174,8 +176,10 @@ pub struct ApplyOptions<V> {
     /// `None` keeps the default centre: the smaller-named
     /// chain endpoint on a chain, otherwise the smallest node name. Set it to an
     /// interior node (for example the one with the largest bonds) to keep the
-    /// result canonical there and to start zip-up from that side. A centre that
-    /// is not a node of the state is rejected before any contraction work.
+    /// result canonical there and to start zip-up from that side. Naive local
+    /// apply only validates the center and returns an uncertified gauge; it
+    /// does not factorize tensors. A centre that is not a node of the state is
+    /// rejected before any contraction work.
     pub center: Option<V>,
 }
 
@@ -292,7 +296,8 @@ impl<V> ApplyOptions<V> {
 /// With [`ApplyOptions::naive`], this function uses a dedicated local exact
 /// apply path instead of the generic dense [`ContractionMethod::Naive`] TreeTN
 /// contraction. No full state/operator tensor is materialized; bonds may grow
-/// as state/operator product links.
+/// as state/operator product links. Local contraction does not establish an
+/// orthogonal gauge, so the result has no canonical region or form.
 ///
 /// # Partial operators
 ///
@@ -486,7 +491,7 @@ where
     };
 
     let contracted = if options.method == ContractionMethod::Naive {
-        apply_linear_operator_naive_local(&full_operator, &transformed_state, &center)
+        apply_linear_operator_naive_local(&full_operator, &transformed_state)
             .context("Failed to locally apply state with operator")?
     } else if options.method == ContractionMethod::Zipup {
         transformed_state
@@ -997,7 +1002,6 @@ where
 fn apply_linear_operator_naive_local<T, V>(
     operator: &LinearOperator<T, V>,
     transformed_state: &TreeTN<T, V>,
-    center: &V,
 ) -> Result<TreeTN<T, V>>
 where
     T: TensorLike,
@@ -1049,21 +1053,12 @@ where
             )
         })?;
 
-        let contracted = if mpo
-            .site_space(node)
-            .is_some_and(|site_space| site_space.is_empty())
-        {
-            state_tensor.contract_pair(mpo_tensor).with_context(|| {
-                format!(
-                    "apply_linear_operator_naive_local: failed spectator product at {:?}",
-                    node
-                )
-            })?
-        } else {
-            T::contract(&[state_tensor, mpo_tensor]).with_context(|| {
-                format!("apply_linear_operator_naive_local: failed at {:?}", node)
-            })?
-        };
+        // A node may carry only distinct external axes on the two operands,
+        // even when both site spaces are nonempty. The binary primitive
+        // handles that outer product as well as shared-index contraction.
+        let contracted = state_tensor
+            .contract_pair(mpo_tensor)
+            .with_context(|| format!("apply_linear_operator_naive_local: failed at {:?}", node))?;
         tensors_by_node.insert(node.clone(), contracted);
     }
 
@@ -1139,11 +1134,8 @@ where
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let mut result = TreeTN::from_tensors(tensors, node_names)
+    let result = TreeTN::from_tensors(tensors, node_names)
         .context("apply_linear_operator_naive_local: failed to build result TreeTN")?;
-    result
-        .set_canonical_region(std::iter::once(center.clone()))
-        .context("apply_linear_operator_naive_local: failed to set canonical center")?;
 
     Ok(result)
 }

@@ -4,6 +4,116 @@ use super::*;
 use crate::{CanonicalForm, CanonicalizationOptions};
 
 #[test]
+fn naive_local_apply_allows_nonempty_disjoint_site_spaces() {
+    let a = make_index(2);
+    let b = a.prime();
+    let c = make_index(2);
+    let d = c.prime();
+    let state_bond = make_index(2);
+    let op_bond = make_index(1);
+    let state = TreeTN::from_tensors(
+        vec![
+            IdxTensor::from_dense(vec![a, state_bond.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+            IdxTensor::from_dense(vec![state_bond, c], vec![2.0, 1.0, 0.0, 3.0]).unwrap(),
+        ],
+        vec![0usize, 1],
+    )
+    .unwrap();
+    let mpo = TreeTN::from_tensors(
+        vec![
+            IdxTensor::from_dense(vec![b, op_bond.clone()], vec![5.0, 6.0]).unwrap(),
+            IdxTensor::from_dense(vec![op_bond, d], vec![7.0, 8.0]).unwrap(),
+        ],
+        vec![0usize, 1],
+    )
+    .unwrap();
+    let expected = state
+        .to_dense()
+        .unwrap()
+        .contract_pair(&mpo.to_dense().unwrap())
+        .unwrap();
+    let operator = LinearOperator::new_multi(mpo, HashMap::new(), HashMap::new());
+    let result = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
+    assert_eq!(result.link_dims(), vec![2]);
+    assert!(
+        result
+            .to_dense()
+            .unwrap()
+            .sub(&expected)
+            .unwrap()
+            .maxabs()
+            .unwrap()
+            < 1e-11
+    );
+}
+
+#[test]
+fn naive_local_apply_does_not_claim_an_orthogonal_gauge() {
+    let (state, sites) = build_chain_state();
+    let mut operator = build_identity_operator(&sites);
+    // A non-isometric local map destroys any input gauge, even if the state
+    // was already canonicalized at the requested center.
+    let node = operator.mpo.node_index(&sites[0].0).unwrap();
+    let scaled = operator
+        .mpo
+        .tensor(node)
+        .unwrap()
+        .scale(tensor4all_core::AnyScalar::new_real(3.0))
+        .unwrap();
+    operator.mpo.replace_tensor(node, scaled).unwrap();
+    let state = state
+        .canonicalize([sites[1].0.clone()], Default::default())
+        .unwrap();
+    let mut result = apply_linear_operator(
+        &operator,
+        &state,
+        ApplyOptions {
+            center: Some(sites[1].0.clone()),
+            ..ApplyOptions::naive()
+        },
+    )
+    .unwrap();
+    assert!(result.canonical_region().is_empty());
+    assert_eq!(result.canonical_form(), None);
+    result.validate_ortho_consistency().unwrap();
+    let expected = state
+        .to_dense()
+        .unwrap()
+        .scale(tensor4all_core::AnyScalar::new_real(3.0))
+        .unwrap();
+    assert!(
+        result
+            .to_dense()
+            .unwrap()
+            .sub(&expected)
+            .unwrap()
+            .maxabs()
+            .unwrap()
+            < 1e-11
+    );
+    assert!((result.norm().unwrap() - expected.norm().unwrap()).abs() < 1e-11);
+    let mut expected_tree = state;
+    expected_tree
+        .scale_mut(tensor4all_core::AnyScalar::new_real(3.0))
+        .unwrap();
+    let options = crate::TruncationOptions::default().with_max_bond_dim(1);
+    result.truncate_mut([sites[1].0.clone()], options).unwrap();
+    expected_tree
+        .truncate_mut([sites[1].0.clone()], options)
+        .unwrap();
+    assert!(
+        result
+            .to_dense()
+            .unwrap()
+            .sub(&expected_tree.to_dense().unwrap())
+            .unwrap()
+            .maxabs()
+            .unwrap()
+            < 1e-11
+    );
+}
+
+#[test]
 fn exact_identity_skip_promotes_a_real_spectator_under_a_complex_operator() {
     use crate::treetn::contraction::zipup_identity_node_skips;
     use tensor4all_core::AnyScalar;
