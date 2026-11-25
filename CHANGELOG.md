@@ -329,10 +329,30 @@
   the G0 and star workload sweep (213 runs) are bit-identical. Runs on trees with
   one change their trajectory: in the non-heavy dense-oracle audit, 14 of 92 cases
   change, all on the `mixed-axes` geometry, with the same `Converged` terminations,
-  the same or fewer passes and dense errors of the same size.
+  the same or fewer passes and dense errors of the same size. The stale-residual
+  re-measurement of #1451 measures the plain local matrix of the current candidate
+  sets, not the expanded one. The return pass's re-commits (#1450) are planned as
+  without the expansion and, being ordinary commits, expand by the same rule; on
+  the #1435 table they do on the bond from the off-spine branch into the centre.
+- `tensor4all-treeaci`: the unit-vertex expansion of #1435 no longer makes a commit
+  fail on a shape limit it fits without the expansion (#1464). An expanded bond is
+  charged against the limit of the side it enlarges (`max_candidate_rows` or
+  `max_candidate_cols`, counted over the whole enlarged side) and against the
+  local-matrix element ceiling, and is skipped for that commit when it would
+  exceed one; before, the commit returned `TreeAciError::ResourceLimit`. With the
+  default limits no measured run reaches them: the #1435 table, the same table
+  without the unit vertex and the G0 and star workload sweep (213 runs) are
+  bit-identical. The working-byte, frame-byte and sample-arena budgets are still
+  hard errors for an expanded commit. A failed proposal that undoes an expansion
+  now also drops the memoized candidate frames over the removed samples, whose ids
+  the arena hands out again.
 
 ### Added
 
+- `tensor4all-treeaci`: `TreeAciError::RollbackFailed { error, rollback }` (#1464).
+  When a step fails and undoing its partial state fails too, the step's own error
+  is returned in `error` with the rollback failure in `rollback`; before, the
+  rollback error replaced the step's error.
 - `tensor4all_tensorbackend::explicit::Session::batched_mat_mul_same_shape_owned`: the session
   twin of the process-global batched same-shape GEMM, one einsum on the session's engine
   (#1382).

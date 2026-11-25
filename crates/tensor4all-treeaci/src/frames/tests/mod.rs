@@ -668,6 +668,72 @@ fn candidate_frame_hits_the_cache_on_a_repeated_lookup() {
     );
 }
 
+/// `forget_candidates_past` drops exactly the memoized candidate frames that
+/// name a sample at or past the kept count of its edge, or that it cannot
+/// place (an unknown edge or an incoming position the edge lacks), and
+/// releases their charge.
+#[test]
+fn forgetting_rolled_back_samples_drops_exactly_the_memo_entries_naming_them() {
+    use super::{
+        CandidateCacheKey,
+        CandidateIncomingKey::{None as NoIncoming, One, Two},
+    };
+
+    let input = y_tree::<f64>();
+    let problem =
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
+    let (arena, _) = SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0, 0]]).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(
+        std::slice::from_ref(&input),
+        &problem,
+        &arena,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
+    let edges = problem.directed_edges.len();
+    let towards_leaf = (0..edges)
+        .find(|&edge| problem.directed_edges[edge].incoming_to_from.len() == 2)
+        .unwrap();
+    let from_leaf = (0..edges)
+        .find(|&edge| problem.directed_edges[edge].incoming_to_from.is_empty())
+        .unwrap();
+    // One seed: every directed arena holds exactly sample 0.
+    let kept = vec![1; edges];
+    let key = |directed_edge, incoming| CandidateCacheKey {
+        input: 0,
+        directed_edge,
+        local_coordinate: 0,
+        incoming,
+    };
+    let entries = [
+        (key(from_leaf, NoIncoming), true),
+        (key(towards_leaf, Two(0, 0)), true),
+        (key(towards_leaf, Two(0, 1)), false),
+        (key(towards_leaf, Two(1, 0)), false),
+        (key(from_leaf, One(0)), false),
+        (key(edges, NoIncoming), false),
+    ];
+    let (_, _, bytes_before) = frames.cache_debug_totals();
+    for (key, _) in entries {
+        frames.cache_candidate_if_fits(&problem, key, Rc::from(vec![1.0, 2.0]));
+    }
+    let entry_bytes = 2 * std::mem::size_of::<f64>() + std::mem::size_of::<CandidateCacheKey>();
+    let (_, _, bytes_filled) = frames.cache_debug_totals();
+    assert_eq!(bytes_filled, bytes_before + entries.len() * entry_bytes);
+
+    frames.forget_candidates_past(&problem, &kept);
+
+    for (key, kept) in entries {
+        assert_eq!(frames.cached_candidate(&key).is_some(), kept, "{key:?}");
+    }
+    let dropped = entries.iter().filter(|(_, kept)| !kept).count();
+    let (_, _, bytes_after) = frames.cache_debug_totals();
+    assert_eq!(bytes_after, bytes_filled - dropped * entry_bytes);
+    assert!(frames.candidate_cache_names_only_kept(&problem, &kept));
+    assert!(!frames.candidate_cache_names_only_kept(&problem, &vec![0; edges]));
+}
+
 /// When the shared frame budget has no headroom left for the candidate
 /// cache, `candidate_frame` must keep returning the correct value -- just
 /// without caching it -- rather than erroring or corrupting the result.

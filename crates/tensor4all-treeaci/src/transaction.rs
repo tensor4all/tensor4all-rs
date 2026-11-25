@@ -75,10 +75,7 @@ where
             expansion.finish(state);
             Ok(report)
         }
-        (Err(error), Some(expansion)) => {
-            expansion.abandon(state)?;
-            Err(error)
-        }
+        (Err(error), Some(expansion)) => Err(error.after_rollback(expansion.abandon(state))),
         (committed, None) => committed,
     }
 }
@@ -174,7 +171,7 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
         stats.output_staging += output_started.elapsed();
     });
     let checkpoint = state.sample_arena.checkpoint();
-    let staged = (|| {
+    let staged = (|| -> Result<_> {
         #[cfg(test)]
         let samples_started = std::time::Instant::now();
         let left_ids = row_samples
@@ -211,10 +208,7 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
     })();
     let (left_ids, right_ids, proposed_frames) = match staged {
         Ok(staged) => staged,
-        Err(error) => {
-            state.sample_arena.rollback(checkpoint)?;
-            return Err(error);
-        }
+        Err(error) => return Err(error.after_rollback(state.sample_arena.rollback(checkpoint))),
     };
 
     // The commit rule: pivot pairs set the bond rank and own `P_e`, while the

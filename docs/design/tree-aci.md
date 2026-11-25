@@ -109,7 +109,17 @@ bonds, as TreeTCI's `DefaultProposer` does since #1434 (`crate::unit_vertex`):
 - **For how long.** One commit. The commit factors the enlarged local matrix,
   its factor is restricted to the bond-basis prefix as for Guard samples, and
   the set is cut back to its length before the expansion. A failed proposal or
-  commit also removes the interned samples and their frames.
+  commit also removes the interned samples and their frames, and drops the
+  memoized candidate frames that name them: the arena hands their ids out
+  again (#1464).
+- **Within the shape limits.** An expanded bond is charged against the limit of
+  the side it enlarges (`max_candidate_rows` or `max_candidate_cols`, over the
+  whole enlarged side) and against the local-matrix element ceiling. A bond
+  that would exceed one is not expanded for that commit, which then has the
+  shape it has without the expansion, so the expansion never adds a shape
+  failure (#1464). The working-byte, frame-byte and sample-arena budgets are
+  not checked ahead: an expanded commit over one of them fails with
+  `ResourceLimit`.
 
 The expansion reads only the current candidate sets of the neighbouring bonds:
 no retained pivot is re-validated and no earlier matrix or history is replayed
@@ -130,7 +140,28 @@ measured runs (the #1435 table at tolerances 1e-10, 1e-4 and 1e-3 and with
 `max_bond_dim = 6`, 11 seeds each, and the #1449 three-branch fixture); within
 passes it showed the same transient values (up to 1.4 after pass 1) as on
 `main`. This is measured, not proven: a selected row outside the neighbour's
-basis is reproduced through that bond's interpolation.
+basis is not reproduced by the factor, which local factor construction
+restricts to that bond's basis (the leading hyper-rectangle of the candidate
+grid, `CandidateBasisProjection`).
+
+The cut-back shortens the candidate set only. The samples an expansion
+interned stay in the arena with their frames: the selected ones because the
+commit's pivots name them, the others because they are interleaved with the
+selected ones in the expanded bond's arena, so dropping only them would
+renumber samples the commit's records name. A later expansion of the same sets
+finds them again and reuses their records and frames. Per expanding commit
+the retained samples are at most the enumerated side samples of the expanded
+bond, within the candidate limit of the side, each costing one arena record
+plus `bond_dim` scalars per input. Over a run they are bounded by the distinct
+side samples the neighbouring candidate sets ever offer, so the retention stops
+once those sets settle. Measured (#1464): on the #1435 table, in its default
+runs (11 seeds) and over 40 passes (seeds 1, 4, 9, tolerance 1e-12), no
+expansion interned a new sample, as every expanded sample was already in the
+arena; on a 19-node tree with a degree-3 and a degree-2 unit vertex and random
+cores of bond dimension up to 32 or 64 (reached as ranks), over 40 passes, 120
+expanding commits left 156 or 183 unselected samples, at most 48 per commit, 44.5 KB or 79.4 KB
+(9.8 % or 7.4 % of the arena and frame bytes), all within the first 5 or 3
+passes and none after.
 
 Measured on the #1435 table (tolerance 1e-10, 11 seeds): 8 seeds now stop
 `Converged` at (12, 1, 12) with a dense relative error of at most 6.1e-16, for

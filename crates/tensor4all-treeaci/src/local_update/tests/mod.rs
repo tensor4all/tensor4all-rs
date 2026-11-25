@@ -8,7 +8,8 @@ use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
 use super::{
-    enumerate_candidates, materialize_and_factor_edge, select_pivot_samples, zero_rank_one_skeleton,
+    enumerate_candidates, materialize_and_factor_edge, select_pivot_samples, side_candidate_count,
+    zero_rank_one_skeleton,
 };
 use crate::{
     frames::InputFrameStore, problem::prepare_problem, samples::SampleArena, TreeAciError,
@@ -35,6 +36,51 @@ fn two_node_tree_with_indices(
     .unwrap();
     let right = IdxTensor::from_dense(vec![bond, s1], vec![3.0, 4.0, 30.0, 40.0]).unwrap();
     TreeTN::from_tensors(vec![left, right], vec![0, 1]).unwrap()
+}
+
+/// A side whose candidate count overflows `usize` is `None` for
+/// `side_candidate_count`, which the unit-vertex expansion treats as over
+/// every limit, and a size overflow for enumeration.
+#[test]
+fn an_overflowing_side_count_is_none_and_refused_by_enumeration() {
+    let bonds = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
+    let sites = (0..3).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let tensors = vec![
+        IdxTensor::from_dense(vec![sites[0].clone(), bonds[0].clone()], vec![1.0; 4]).unwrap(),
+        IdxTensor::from_dense(
+            vec![bonds[0].clone(), sites[1].clone(), bonds[1].clone()],
+            vec![1.0; 8],
+        )
+        .unwrap(),
+        IdxTensor::from_dense(vec![bonds[1].clone(), sites[2].clone()], vec![1.0; 4]).unwrap(),
+    ];
+    let input = TreeTN::from_tensors(tensors, vec![0, 1, 2]).unwrap();
+    let mut problem =
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
+    // Two seeds that differ everywhere give every cut two candidates.
+    let (_, candidates) =
+        SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0], vec![1, 1, 1]]).unwrap();
+    let edge = (0..problem.directed_edges.len())
+        .find(|&edge| problem.directed_edges[edge].incoming_to_from.len() == 1)
+        .unwrap();
+    assert_eq!(
+        side_candidate_count(&problem, &candidates, edge).unwrap(),
+        Some(4)
+    );
+    let source = problem.node_positions[&problem.directed_edges[edge].from];
+    problem.physical[source].local_dim = usize::MAX;
+
+    assert_eq!(
+        side_candidate_count(&problem, &candidates, edge).unwrap(),
+        None
+    );
+    assert!(matches!(
+        enumerate_candidates(&problem, &candidates, edge, "test", usize::MAX),
+        Err(TreeAciError::SizeOverflow {
+            context: "candidate count"
+        })
+    ));
 }
 
 #[test]

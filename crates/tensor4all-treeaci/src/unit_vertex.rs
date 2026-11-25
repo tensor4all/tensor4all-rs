@@ -38,9 +38,9 @@
 
 use crate::{
     frames::InputFrameStore,
-    local_update::enumerate_candidates,
+    local_update::{enumerate_candidates, side_candidate_count},
     problem::{DirectedEdgeId, PreparedTreeProblem},
-    samples::SampleArenaCheckpoint,
+    samples::{CandidateSets, SampleArena, SampleArenaCheckpoint},
     state::TreeAciState,
     Result, TreeAciError, TreeAciNode, TreeAciOptions, TreeAciScalar,
 };
@@ -117,7 +117,10 @@ pub(crate) fn unit_vertex_expansion_targets<V: TreeAciNode>(
         if local_dim != 1 {
             continue;
         }
-        // A saturated product exceeds every threshold, as the exact one would.
+        // Saturating arithmetic only rules out overflow. A saturated product
+        // is at least any threshold, so the side does not expand; the exact
+        // comparison can disagree only when the threshold saturates too, at
+        // an edge rank near `usize::MAX / 2`, which no run reaches.
         let mut offered = 1usize;
         let mut widest: Option<(DirectedEdgeId, usize)> = None;
         for &incoming in &directed.incoming_to_from {
@@ -146,8 +149,9 @@ pub(crate) fn unit_vertex_expansion_targets<V: TreeAciNode>(
 pub(crate) struct UnitVertexExpansion<T> {
     /// Expanded directed edges with their candidate-set lengths before.
     restore: Vec<(DirectedEdgeId, usize)>,
-    /// Arena and frames before the expansion, for [`Self::abandon`].
+    /// Arena before the expansion, for [`Self::abandon`].
     checkpoint: SampleArenaCheckpoint,
+    /// The input frames the expansion replaced, for [`Self::abandon`].
     frames: InputFrameStore<T>,
 }
 
@@ -162,10 +166,19 @@ impl<T: TreeAciScalar> UnitVertexExpansion<T> {
     /// Cuts every expanded candidate set back to its length before the
     /// expansion, after a successful commit.
     ///
-    /// The interned samples and their frames stay: the commit's pivots may
-    /// name them. A commit replaces only the two candidate sets of its own
-    /// edge, never an expanded one, so the expanded entries are exactly the
-    /// ones past the recorded length.
+    /// A commit replaces only the two candidate sets of its own edge, never
+    /// an expanded one, so the expanded entries are exactly the ones past the
+    /// recorded length.
+    ///
+    /// The interned samples and their frames stay in the arena. The selected
+    /// ones must: the commit's pivots name them. The unselected ones are
+    /// interleaved with them in the expanded bond's arena, so dropping only
+    /// those would renumber samples the commit's records name; they stay, and
+    /// a later expansion of the same sets reuses their records and frames.
+    /// What one commit leaves is bounded by the enumerated side samples of its
+    /// expanded bonds, which [`expand_unit_vertices`] keeps within the
+    /// candidate limits; the measured growth over long runs is in
+    /// `docs/design/tree-aci.md` (#1464).
     pub(crate) fn finish<V: TreeAciNode>(self, state: &mut TreeAciState<'_, T, V>) {
         for (edge, len) in self.restore {
             if let Some(ids) = state.candidates.ids.get_mut(edge) {
@@ -175,7 +188,9 @@ impl<T: TreeAciScalar> UnitVertexExpansion<T> {
     }
 
     /// Undoes the expansion entirely, after a failed proposal or commit:
-    /// candidate sets, input frames and sample arena are as before it.
+    /// candidate sets, input frames and sample arena are as before it, and
+    /// the candidate-frame memo forgets every entry that names a sample the
+    /// rollback removes (an id the arena will hand out again).
     ///
     /// # Errors
     ///
@@ -193,6 +208,12 @@ impl<T: TreeAciScalar> UnitVertexExpansion<T> {
             }
         }
         state.input_frames = frames;
+        // The restored store shares the candidate-frame memo, which the
+        // failed proposal may have filled with frames of expanded samples.
+        // Their ids are about to be reused, so those entries go too.
+        state
+            .input_frames
+            .forget_candidates_past(&state.problem, checkpoint.record_counts());
         state.sample_arena.rollback(checkpoint)
     }
 }
@@ -200,17 +221,27 @@ impl<T: TreeAciScalar> UnitVertexExpansion<T> {
 /// Expands the candidate sets the commit of `forward` reads across a unit
 /// vertex (see the module documentation).
 ///
+/// Each target is charged against the shape limits of the commit it feeds:
+/// the side it enlarges (the rows for a target on the forward side, the
+/// columns for one on the reverse side) must stay within
+/// [`TreeAciOptions::max_candidate_rows`] / `max_candidate_cols`, and the
+/// enlarged local matrix within the run's local-matrix element ceiling. A
+/// target whose expansion would exceed one of them is skipped, so the commit
+/// keeps the shape it has without the expansion: the expansion never adds a
+/// shape failure to a commit that fits without it. Targets are charged in
+/// order, so a reverse-side target sees the forward side as already grown.
+///
 /// Returns `None`, with the state unchanged, when no side of the edge
-/// qualifies or every expanded sample is already in its candidate set.
-/// Otherwise the expanded sets and the input frames over their samples are
-/// published, and the returned expansion must be finished or abandoned.
+/// qualifies, every qualifying target is skipped, or every expanded sample is
+/// already in its candidate set. Otherwise the expanded sets and the input
+/// frames over their samples are published, and the returned expansion must
+/// be finished or abandoned.
 ///
 /// # Errors
 ///
-/// Returns [`TreeAciError::ResourceLimit`] when an expanded side exceeds
-/// [`TreeAciOptions::max_candidate_rows`] / `max_candidate_cols` (the limit of
-/// the side it feeds) or the sample-arena budget, and propagates frame
-/// failures. On error the state is unchanged.
+/// Returns [`TreeAciError::ResourceLimit`] when the interned samples exceed
+/// the sample-arena budget or their frames the frame budget, and propagates
+/// other frame failures. On error the state is unchanged.
 pub(crate) fn expand_unit_vertices<T, V>(
     state: &mut TreeAciState<'_, T, V>,
     forward: DirectedEdgeId,
@@ -225,46 +256,116 @@ where
     if targets.is_empty() {
         return Ok(None);
     }
-    // A forward-side target feeds the rows, a reverse-side one the columns;
-    // each is charged against that side's candidate limit.
-    let row_side = &state.problem.directed_edges[forward].incoming_to_from;
-    let limits: Vec<_> = targets
+    // A forward-side target feeds the rows, a reverse-side one the columns.
+    let edge = &state.problem.directed_edges[forward];
+    let sides: Vec<_> = targets
         .iter()
-        .map(|target| {
-            if row_side.contains(target) {
-                ("candidate rows", options.max_candidate_rows)
+        .map(|&target| {
+            if edge.incoming_to_from.contains(&target) {
+                TargetSide {
+                    target,
+                    side: forward,
+                    opposite: edge.reverse,
+                    limit: options.max_candidate_rows,
+                }
             } else {
-                ("candidate columns", options.max_candidate_cols)
+                TargetSide {
+                    target,
+                    side: edge.reverse,
+                    opposite: forward,
+                    limit: options.max_candidate_cols,
+                }
             }
         })
         .collect();
     let checkpoint = state.sample_arena.checkpoint();
-    let frames = state.input_frames.clone();
-    let restore = state.grow_candidate_sets(exec, |arena, problem, candidates| {
+    let grown = state.grow_candidate_sets(exec, |arena, problem, candidates| {
         let mut grown = candidates.clone();
-        let mut restore = Vec::with_capacity(targets.len());
-        for (&target, &(resource, limit)) in targets.iter().zip(&limits) {
-            let samples = enumerate_candidates(problem, candidates, target, resource, limit)?;
-            let before = grown.ids[target].len();
-            for sample in samples {
-                let id = arena.intern_component(problem, target, sample)?;
-                grown.push_unique(target, id);
-            }
-            if grown.ids[target].len() > before {
-                restore.push((target, before));
+        let mut restore = Vec::with_capacity(sides.len());
+        for side in &sides {
+            if let Some(before) = side.expand(arena, problem, candidates, &mut grown)? {
+                restore.push((side.target, before));
             }
         }
         Ok((!restore.is_empty()).then_some((grown, restore)))
     })?;
     #[cfg(test)]
-    if let Some(restore) = &restore {
+    if let Some((restore, _)) = &grown {
         expansion_debug_log::record(forward, restore);
     }
-    Ok(restore.map(|restore| UnitVertexExpansion {
+    Ok(grown.map(|(restore, frames)| UnitVertexExpansion {
         restore,
         checkpoint,
         frames,
     }))
+}
+
+/// One expansion target with the side of the commit it enlarges.
+struct TargetSide {
+    /// The incoming bond `n -> a` whose candidate set is expanded.
+    target: DirectedEdgeId,
+    /// The directed edge whose side (rows or columns) holds `target`.
+    side: DirectedEdgeId,
+    /// The directed edge of the other side of the commit.
+    opposite: DirectedEdgeId,
+    /// The candidate limit of `side`.
+    limit: usize,
+}
+
+impl TargetSide {
+    /// Appends `target`'s expansion to `grown` when the commit still fits its
+    /// shape limits, interning the new samples in `arena`.
+    ///
+    /// `candidates` are the sets before any expansion, from which the samples
+    /// are enumerated; `grown` already holds the targets charged before this
+    /// one. Returns the candidate-set length before the expansion, or `None`
+    /// when nothing was appended: the expansion would exceed a shape limit
+    /// (its interned samples are then rolled back), or every sample is
+    /// already present.
+    fn expand<V: TreeAciNode>(
+        &self,
+        arena: &mut SampleArena,
+        problem: &PreparedTreeProblem<V>,
+        candidates: &CandidateSets,
+        grown: &mut CandidateSets,
+    ) -> Result<Option<usize>> {
+        let within = |count: Option<usize>, limit: usize| count.is_some_and(|count| count <= limit);
+        // The enlarged side holds every enumerated sample, so an enumeration
+        // above the limit cannot fit; skip it before materializing it.
+        if !within(
+            side_candidate_count(problem, candidates, self.target)?,
+            self.limit,
+        ) {
+            return Ok(None);
+        }
+        let samples = enumerate_candidates(
+            problem,
+            candidates,
+            self.target,
+            "candidate expansion",
+            self.limit,
+        )?;
+        let before = grown.ids[self.target].len();
+        let undo = arena.checkpoint();
+        for sample in samples {
+            let id = arena.intern_component(problem, self.target, sample)?;
+            grown.push_unique(self.target, id);
+        }
+        if grown.ids[self.target].len() == before {
+            return Ok(None);
+        }
+        let side = side_candidate_count(problem, grown, self.side)?;
+        let opposite = side_candidate_count(problem, grown, self.opposite)?;
+        let elements = side
+            .zip(opposite)
+            .and_then(|(side, opposite)| side.checked_mul(opposite));
+        if within(side, self.limit) && within(elements, problem.max_local_matrix_elements) {
+            return Ok(Some(before));
+        }
+        grown.ids[self.target].truncate(before);
+        arena.rollback(undo)?;
+        Ok(None)
+    }
 }
 
 /// Test-only log of the expansions made on this thread.

@@ -729,6 +729,37 @@ fn candidate_layout<V: TreeAciNode>(
     resource: &'static str,
     limit: usize,
 ) -> Result<CandidateLayout> {
+    let count =
+        side_candidate_count(problem, candidate_sets, edge)?.ok_or(TreeAciError::SizeOverflow {
+            context: "candidate count",
+        })?;
+    enforce_limit(resource, count, limit)?;
+    let directed = &problem.directed_edges[edge];
+    let bytes = directed
+        .incoming_to_from
+        .len()
+        .checked_mul(size_of::<(DirectedEdgeId, crate::samples::SampleId)>())
+        .and_then(|pairs| pairs.checked_add(size_of::<ComponentSample>()))
+        .and_then(|record| record.checked_mul(count))
+        .ok_or(TreeAciError::SizeOverflow {
+            context: "candidate metadata bytes",
+        })?;
+    Ok(CandidateLayout { count, bytes })
+}
+
+/// The number of component samples on one side of `edge`'s local matrix:
+/// the source node's local dimension times the sizes of the candidate sets of
+/// its other incoming bonds. `None` when that product overflows `usize`.
+///
+/// # Errors
+///
+/// Returns [`TreeAciError::InternalInvariant`] for an unknown source node or
+/// a missing or empty incoming candidate set.
+pub(crate) fn side_candidate_count<V: TreeAciNode>(
+    problem: &PreparedTreeProblem<V>,
+    candidate_sets: &CandidateSets,
+    edge: DirectedEdgeId,
+) -> Result<Option<usize>> {
     let directed = &problem.directed_edges[edge];
     let node =
         *problem
@@ -750,23 +781,12 @@ fn candidate_layout<V: TreeAciNode>(
                 message: "candidate incoming edge has an empty candidate set",
             });
         }
-        count = count
-            .checked_mul(ids.len())
-            .ok_or(TreeAciError::SizeOverflow {
-                context: "candidate count",
-            })?;
+        let Some(product) = count.checked_mul(ids.len()) else {
+            return Ok(None);
+        };
+        count = product;
     }
-    enforce_limit(resource, count, limit)?;
-    let bytes = directed
-        .incoming_to_from
-        .len()
-        .checked_mul(size_of::<(DirectedEdgeId, crate::samples::SampleId)>())
-        .and_then(|pairs| pairs.checked_add(size_of::<ComponentSample>()))
-        .and_then(|record| record.checked_mul(count))
-        .ok_or(TreeAciError::SizeOverflow {
-            context: "candidate metadata bytes",
-        })?;
-    Ok(CandidateLayout { count, bytes })
+    Ok(Some(count))
 }
 
 /// The component samples of one side of `edge`'s local matrix: the source
