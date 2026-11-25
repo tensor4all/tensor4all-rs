@@ -1487,3 +1487,43 @@ fn seed_positions_pair_previous_pivots_by_position_in_the_combined_lists() {
         Vec::<(usize, usize)>::new()
     );
 }
+
+#[test]
+fn rook_batch_requests_follow_block_order_and_skip_cached_entries() {
+    let prefixes = [vec![1, 2], vec![3, 4]];
+    let suffixes = [vec![5], vec![6], vec![7]];
+    let calls = Cell::new(0);
+    let batch = |indices: &[MultiIndex]| {
+        let call = calls.get();
+        calls.set(call + 1);
+        let expected = match call {
+            0 => vec![vec![3, 4, 7], vec![1, 2, 7], vec![3, 4, 5], vec![1, 2, 5]],
+            1 => vec![vec![1, 2, 6], vec![3, 4, 6]],
+            _ => panic!("unexpected batch {call}"),
+        };
+        assert_eq!(indices, expected);
+        let pointers: HashSet<_> = indices.iter().map(|index| index.as_ptr()).collect();
+        assert_eq!(pointers.len(), indices.len());
+        indices
+            .iter()
+            .map(|index| (100 * index[0] + 10 * index[1] + index[2]) as f64)
+            .collect()
+    };
+    let batch = Some(batch);
+    let evaluator = LazyPiEvaluator::new(
+        &prefixes,
+        &suffixes,
+        &|_| panic!("expected a batch request"),
+        &batch,
+        0.0,
+    );
+    let mut out = [0.0; 4];
+    evaluator.fill_block(&[1, 0], &[2, 0], &mut out);
+    assert_eq!(out, [347.0, 127.0, 345.0, 125.0]);
+    evaluator.fill_block(&[0, 1], &[0, 1], &mut out);
+    assert_eq!(out, [125.0, 345.0, 126.0, 346.0]);
+    evaluator.fill_block(&[1, 0], &[1, 2], &mut out);
+    assert_eq!(out, [346.0, 126.0, 347.0, 127.0]);
+    assert_eq!(calls.get(), 2);
+    assert_eq!(evaluator.sampled_max(), 347.0);
+}

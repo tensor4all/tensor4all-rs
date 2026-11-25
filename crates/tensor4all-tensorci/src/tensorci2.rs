@@ -7,8 +7,10 @@
 use crate::error::{validate_nonnegative_finite, validate_positive, Result, TCIError};
 use crate::globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput};
 use rand::SeedableRng;
+use rustc_hash::FxHasher;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasherDefault;
 use tensor4all_core::legacy::solve_matrix;
 use tensor4all_core::{
     matrix_luci_factors_from_blocks_seeded, matrix_luci_factors_from_matrix_owned,
@@ -1139,10 +1141,12 @@ where
         let mut pi = Matrix::try_zeros(ni, nj).map_err(|error| TCIError::InvalidOperation {
             message: format!("two-site candidate matrix construction failed: {error}"),
         })?;
+        let mut full_idx = Vec::new();
         for (i, i_multi) in is.iter().enumerate() {
             for (j, j_multi) in js.iter().enumerate() {
-                let mut full_idx = i_multi.clone();
-                full_idx.extend(j_multi.iter().cloned());
+                full_idx.clear();
+                full_idx.extend_from_slice(i_multi);
+                full_idx.extend_from_slice(j_multi);
                 let val = f(&full_idx);
                 pi[[i, j]] = val;
                 let abs_val = f64::sqrt(Scalar::abs_sq(val));
@@ -1318,10 +1322,12 @@ where
                 Matrix::try_zeros(ni, nj).map_err(|error| TCIError::InvalidOperation {
                     message: format!("one-site candidate matrix construction failed: {error}"),
                 })?;
+            let mut full_idx = Vec::new();
             for (i, i_multi) in i_kron.iter().enumerate() {
                 for (j, j_multi) in j_set_b.iter().enumerate() {
-                    let mut full_idx = i_multi.clone();
-                    full_idx.extend(j_multi.iter().cloned());
+                    full_idx.clear();
+                    full_idx.extend_from_slice(i_multi);
+                    full_idx.extend_from_slice(j_multi);
                     pi1[[i, j]] = f(&full_idx);
                 }
             }
@@ -1356,10 +1362,12 @@ where
                     Matrix::try_zeros(np, nj).map_err(|error| TCIError::InvalidOperation {
                         message: format!("one-site pivot matrix construction failed: {error}"),
                     })?;
+                let mut full_idx = Vec::new();
                 for (i, i_multi) in i_set_bp1.iter().enumerate() {
                     for (j, j_multi) in j_set_b.iter().enumerate() {
-                        let mut full_idx = i_multi.clone();
-                        full_idx.extend(j_multi.iter().cloned());
+                        full_idx.clear();
+                        full_idx.extend_from_slice(i_multi);
+                        full_idx.extend_from_slice(j_multi);
                         p_mat[[i, j]] = f(&full_idx);
                     }
                 }
@@ -2299,10 +2307,12 @@ where
                 }
             }
         } else {
+            let mut full_idx = Vec::new();
             for (i, i_multi) in i_combined.iter().enumerate() {
                 for (j, j_multi) in j_combined.iter().enumerate() {
-                    let mut full_idx = i_multi.clone();
-                    full_idx.extend(j_multi.iter().cloned());
+                    full_idx.clear();
+                    full_idx.extend_from_slice(i_multi);
+                    full_idx.extend_from_slice(j_multi);
                     let value = f(&full_idx);
                     pi[[i, j]] = value;
                     update_max_sample_value(tci, value);
@@ -2497,6 +2507,8 @@ fn callback_length_mismatch(actual: usize, expected: usize) -> TCIError {
     }
 }
 
+type PanelCache<T> = HashMap<(usize, usize), T, BuildHasherDefault<FxHasher>>;
+
 struct LazyPiEvaluator<'a, T, F, B>
 where
     T: Scalar + TTScalar + Default + MatrixLuciScalar,
@@ -2507,7 +2519,9 @@ where
     j_combined: &'a [MultiIndex],
     f: &'a F,
     batched_f: &'a Option<B>,
-    cache: RefCell<HashMap<(usize, usize), T>>,
+    // Keys are internal panel positions. The cache is only used for lookup and insertion.
+    // Block traversal and sampled maxima follow request order, independent of hash order.
+    cache: RefCell<PanelCache<T>>,
     pending_error: RefCell<Option<TCIError>>,
     sampled_max: Cell<f64>,
 }
@@ -2530,7 +2544,7 @@ where
             j_combined,
             f,
             batched_f,
-            cache: RefCell::new(HashMap::new()),
+            cache: RefCell::new(HashMap::default()),
             pending_error: RefCell::new(None),
             sampled_max: Cell::new(initial_max),
         }
