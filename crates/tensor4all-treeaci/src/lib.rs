@@ -79,6 +79,7 @@ mod state;
 mod test_support;
 mod transaction;
 mod traversal;
+mod unit_vertex;
 
 #[cfg(test)]
 mod order_experiment;

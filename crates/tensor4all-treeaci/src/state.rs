@@ -62,7 +62,9 @@ pub(crate) mod profile_debug_stats {
         pub(crate) global_injection: Duration,
         pub(crate) guard_candidate_clone: Duration,
         pub(crate) guard_projection: Duration,
-        pub(crate) guard_frame_extension: Duration,
+        // Frame extension of a staged candidate growth: Guard injection and
+        // the unit-vertex expansion (`TreeAciState::grow_candidate_sets`).
+        pub(crate) candidate_growth_frame_extension: Duration,
         pub(crate) guard_input_evaluation: Duration,
         pub(crate) guard_output_evaluation: Duration,
         pub(crate) guard_input_points: usize,
@@ -309,6 +311,82 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
                 message: "candidate basis check references an unknown edge",
             }),
         }
+    }
+
+    /// Grows candidate sets by samples that `grow` interns, and extends the
+    /// input frames over those samples, as one staged step.
+    ///
+    /// `grow` receives the sample arena, the prepared problem and the current
+    /// candidate sets. It interns the samples it needs and returns the grown
+    /// candidate sets with a value for the caller, or `None` when nothing
+    /// grew. The input frames are then extended over every record interned
+    /// since the call began. The grown sets and the extended frames are
+    /// published only when both steps succeed and something grew; otherwise
+    /// the arena is rolled back and the state is unchanged. Bond ranks,
+    /// selected pivots and the output are never touched.
+    ///
+    /// Guard injection (`inject_global_pivots`) and the unit-vertex expansion
+    /// (`crate::unit_vertex`) both grow candidate sets this way.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the errors of `grow` and of the frame extension, and returns
+    /// [`crate::TreeAciError::InternalInvariant`] when the arena cannot be
+    /// rolled back.
+    pub(crate) fn grow_candidate_sets<R>(
+        &mut self,
+        exec: &mut crate::exec::Exec<'_, '_>,
+        grow: impl FnOnce(
+            &mut SampleArena,
+            &PreparedTreeProblem<V>,
+            &CandidateSets,
+        ) -> Result<Option<(CandidateSets, R)>>,
+    ) -> Result<Option<R>> {
+        let checkpoint = self.sample_arena.checkpoint();
+        match self.stage_candidate_growth(exec, grow) {
+            Ok(Some((candidates, frames, value))) => {
+                self.candidates = candidates;
+                self.input_frames = frames;
+                self.generation = self.candidates.generation;
+                Ok(Some(value))
+            }
+            Ok(None) => {
+                self.sample_arena.rollback(checkpoint)?;
+                Ok(None)
+            }
+            Err(error) => {
+                self.sample_arena.rollback(checkpoint)?;
+                Err(error)
+            }
+        }
+    }
+
+    /// The fallible part of [`Self::grow_candidate_sets`]; publishes nothing.
+    #[allow(clippy::type_complexity)]
+    fn stage_candidate_growth<R>(
+        &mut self,
+        exec: &mut crate::exec::Exec<'_, '_>,
+        grow: impl FnOnce(
+            &mut SampleArena,
+            &PreparedTreeProblem<V>,
+            &CandidateSets,
+        ) -> Result<Option<(CandidateSets, R)>>,
+    ) -> Result<Option<(CandidateSets, InputFrameStore<T>, R)>> {
+        let Some((candidates, value)) =
+            grow(&mut self.sample_arena, &self.problem, &self.candidates)?
+        else {
+            return Ok(None);
+        };
+        #[cfg(test)]
+        let frames_started = std::time::Instant::now();
+        let frames =
+            self.input_frames
+                .extend(self.inputs, &self.problem, &self.sample_arena, exec)?;
+        #[cfg(test)]
+        profile_debug_stats::record(|stats| {
+            stats.candidate_growth_frame_extension += frames_started.elapsed();
+        });
+        Ok(Some((candidates, frames, value)))
     }
 }
 

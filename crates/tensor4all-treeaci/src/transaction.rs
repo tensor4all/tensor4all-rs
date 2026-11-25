@@ -6,6 +6,7 @@ use crate::{
     local_update::{materialize_and_factor_edge, LocalUpdateResult},
     problem::DirectedEdgeId,
     state::TreeAciState,
+    unit_vertex::expand_unit_vertices,
     Result, TreeAciError, TreeAciNode, TreeAciOptions, TreeAciScalar, TreeElementwiseBatch,
 };
 
@@ -47,7 +48,10 @@ where
     } else {
         None
     };
-    let proposal = materialize_and_factor_edge(
+    // Across a unit vertex, the commit reads an expanded candidate set for
+    // this one proposal (#1435); it is cut back once the commit stands.
+    let expansion = expand_unit_vertices(state, forward, options, exec)?;
+    let committed = materialize_and_factor_edge(
         state.inputs,
         &state.problem,
         &state.candidates,
@@ -58,12 +62,25 @@ where
         previous_rank,
         operator,
         exec,
-    )?;
-    #[cfg(test)]
-    crate::state::profile_debug_stats::record(|stats| {
-        stats.proposals += proposal_started.elapsed();
+    )
+    .and_then(|proposal| {
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.proposals += proposal_started.elapsed();
+        });
+        commit_edge_proposal(state, forward, proposal, exec)
     });
-    commit_edge_proposal(state, forward, proposal, exec)
+    match (committed, expansion) {
+        (Ok(report), Some(expansion)) => {
+            expansion.finish(state);
+            Ok(report)
+        }
+        (Err(error), Some(expansion)) => {
+            expansion.abandon(state)?;
+            Err(error)
+        }
+        (committed, None) => committed,
+    }
 }
 
 fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(

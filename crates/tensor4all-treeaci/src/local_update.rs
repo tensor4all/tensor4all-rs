@@ -769,7 +769,17 @@ fn candidate_layout<V: TreeAciNode>(
     Ok(CandidateLayout { count, bytes })
 }
 
-#[cfg(test)]
+/// The component samples of one side of `edge`'s local matrix: the source
+/// node's local coordinate times the candidate sets of its other incoming
+/// bonds, in the order of the local matrix (local coordinate fastest, then the
+/// incoming bonds in `incoming_to_from` order).
+///
+/// # Errors
+///
+/// Returns [`TreeAciError::ResourceLimit`] when the count exceeds `limit`
+/// (reported as `resource`), [`TreeAciError::SizeOverflow`] when it
+/// overflows, and [`TreeAciError::InternalInvariant`] for an unknown node or
+/// an empty incoming candidate set.
 pub(crate) fn enumerate_candidates<V: TreeAciNode>(
     problem: &PreparedTreeProblem<V>,
     candidate_sets: &CandidateSets,

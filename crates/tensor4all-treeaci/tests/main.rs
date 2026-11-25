@@ -5,6 +5,8 @@
 
 #[path = "support/g0.rs"]
 mod g0;
+#[path = "support/unit_junction.rs"]
+mod unit_junction;
 
 mod audit_regressions;
 mod branch_degree;
@@ -20,3 +22,4 @@ mod rank_scaling;
 mod resource_limits;
 mod rng_stream_contract;
 mod session_entry;
+mod unit_vertex_junction;

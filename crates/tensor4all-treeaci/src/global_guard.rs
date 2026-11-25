@@ -348,15 +348,6 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
     for contains_center in &mut required_closure {
         *contains_center = !*contains_center;
     }
-    let checkpoint = state.sample_arena.checkpoint();
-    #[cfg(test)]
-    let clone_started = std::time::Instant::now();
-    let mut proposed_active = state.candidates.clone();
-    #[cfg(test)]
-    crate::state::profile_debug_stats::record(|stats| {
-        stats.guard_candidate_clone += clone_started.elapsed();
-    });
-    let mut injected = 0usize;
     let limits = state
         .edge_ranks
         .iter()
@@ -369,13 +360,23 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
                 })
         })
         .collect::<Result<Vec<_>>>()?;
-    let staged = (|| {
+    // Only query membership and input frames are published. The represented
+    // output, selected pivots and paired basis dimensions remain untouched.
+    let injected = state.grow_candidate_sets(exec, |arena, problem, candidates| {
+        #[cfg(test)]
+        let clone_started = std::time::Instant::now();
+        let mut proposed_active = candidates.clone();
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.guard_candidate_clone += clone_started.elapsed();
+        });
         #[cfg(test)]
         let projection_started = std::time::Instant::now();
+        let mut injected = 0usize;
         for point in points {
-            let report = state.sample_arena.inject_global_point_masked(
+            let report = arena.inject_global_point_masked(
                 &mut proposed_active,
-                &state.problem,
+                problem,
                 point,
                 crate::samples::CandidateCapacity {
                     limits: &limits,
@@ -392,37 +393,9 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
         crate::state::profile_debug_stats::record(|stats| {
             stats.guard_projection += projection_started.elapsed();
         });
-        if injected == 0 {
-            return Ok(None);
-        }
-        #[cfg(test)]
-        let frames_started = std::time::Instant::now();
-        let proposed_frames =
-            state
-                .input_frames
-                .extend(state.inputs, &state.problem, &state.sample_arena, exec)?;
-        #[cfg(test)]
-        crate::state::profile_debug_stats::record(|stats| {
-            stats.guard_frame_extension += frames_started.elapsed();
-        });
-        Ok(Some(proposed_frames))
-    })();
-    let Some(proposed_frames) = (match staged {
-        Ok(staged) => staged,
-        Err(error) => {
-            state.sample_arena.rollback(checkpoint)?;
-            return Err(error);
-        }
-    }) else {
-        state.sample_arena.rollback(checkpoint)?;
-        return Ok(0);
-    };
-    // Only query membership and input frames are published. The represented
-    // output, selected pivots and paired basis dimensions remain untouched.
-    state.candidates = proposed_active;
-    state.input_frames = proposed_frames;
-    state.generation = state.candidates.generation;
-    Ok(injected)
+        Ok((injected > 0).then_some((proposed_active, injected)))
+    })?;
+    Ok(injected.unwrap_or(0))
 }
 
 pub(crate) struct InputEvaluators<'a, V: TreeAciNode> {

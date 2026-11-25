@@ -83,6 +83,62 @@ retained candidates of `c -> p`. The invariant is required on every returned
 tree. A unit-test helper checks it; the library does not, because the check
 evaluates every retained candidate.
 
+### Unit vertices (#1435)
+
+A vertex of local dimension 1 (a node without sites, or with sites of
+dimension 1 only) contributes no local coordinate to a commit's rows or
+columns: its side of the local matrix is just the product of its other bonds'
+candidate sets. Two bonds through such a vertex then cap each other. In the
+#1435 table (three branches of 5 binary sites joined at a dimension-1 centre,
+true centre ranks (12, 1, 12)), the x and z bonds stopped at (2, 1, 2) to
+(10, 1, 10) on 8 of 11 seeds, each update recording a residual of ~1e-16 while
+the dense error was 2.5e-8 to 0.33 (`main` `93a789ba`).
+
+Each commit therefore makes a unit vertex transparent for one of its other
+bonds, as TreeTCI's `DefaultProposer` does since #1434 (`crate::unit_vertex`):
+
+- **When.** A side of the edge whose vertex has local dimension 1 and at
+  least one other bond, while the product of those bonds' ranks is below
+  `UNIT_VERTEX_EXPANSION_FACTOR = 2` times the edge's rank. The factor is the
+  untuned #1434 constant; it was not tuned for tree ACI.
+- **Which bond.** The largest-rank other bond `n -> a` (ties keep the first).
+- **What.** The neighbour's own side samples, `local_dim(n)` times the
+  candidate sets of `n`'s other incoming bonds, are appended after the current
+  entries of `candidates.ids[n -> a]`, with their frames, through the growth
+  path Guard injection uses (`TreeAciState::grow_candidate_sets`).
+- **For how long.** One commit. The commit factors the enlarged local matrix,
+  its factor is restricted to the bond-basis prefix as for Guard samples, and
+  the set is cut back to its length before the expansion. A failed proposal or
+  commit also removes the interned samples and their frames.
+
+The expansion reads only the current candidate sets of the neighbouring bonds:
+no retained pivot is re-validated and no earlier matrix or history is replayed
+(#1372). A tree with no unit vertex, or with unit vertices only at leaves,
+never expands. The cut-back means no later step sees the expanded entries, so:
+
+- the return pass's re-commit excursions (#1450) are planned exactly as
+  without it, and a re-commit, being an ordinary commit, expands by the same
+  rule. In the #1435 table it does on the bond from the off-spine branch into
+  the centre;
+- the stale-residual re-measurement (#1451) measures the plain local matrix of
+  the current candidate sets, not the expanded one.
+
+Unlike a Guard candidate, an expanded sample comes from the same product the
+neighbouring bond's own commits read as rows. The pivot-basis deviation
+max|M - I| was 0 at every pass boundary and on every returned tree in the
+measured runs (the #1435 table at tolerances 1e-10, 1e-4 and 1e-3 and with
+`max_bond_dim = 6`, 11 seeds each, and the #1449 three-branch fixture); within
+passes it showed the same transient values (up to 1.4 after pass 1) as on
+`main`. This is measured, not proven: a selected row outside the neighbour's
+basis is reproduced through that bond's interpolation.
+
+Measured on the #1435 table (tolerance 1e-10, 11 seeds): 8 seeds now stop
+`Converged` at (12, 1, 12) with a dense relative error of at most 6.1e-16, for
+1.22 times the oracle points of `main`. Seeds 2, 3 and 7 still return the zero
+output (mechanism 2 of #1435, a separate issue). The same table with the unit
+centre absorbed into a binary site (case B) and the G0 and star workloads
+(213 runs) have no unit vertex and are bit-identical to `main`.
+
 Discontinuous minimum path covers and parallel paths remain mathematically
 possible, but require sample-aware gauge transport or snapshot/merge semantics.
 They must not be enabled by simply canonicalizing between paths: a binary-tree

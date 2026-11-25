@@ -583,6 +583,98 @@ fn return_pass_recommits_off_spine_bonds_the_guard_enlarged() {
     assert_eq!(state.output.canonical_region(), &HashSet::from([0]));
 }
 
+/// A return-pass re-commit (#1450) is an ordinary commit, so it expands
+/// across a unit vertex like any other (#1435). The expanded set is cut back
+/// before the next step, so the walk is the one without the expansion and the
+/// pivot basis holds after the pass.
+#[test]
+fn return_pass_recommits_expand_across_a_unit_vertex() {
+    // The tree of the test above, with the spine node 1 a unit vertex.
+    let edges = [(0, 1), (1, 2), (2, 3), (1, 4), (4, 5), (4, 6), (2, 7)];
+    let physical = (0..8)
+        .map(|node| DynIndex::new_dyn(if node == 1 { 1 } else { 2 }))
+        .collect::<Vec<_>>();
+    let inputs = vec![crate::test_support::random_decaying_tree::<f64>(
+        &edges,
+        &physical,
+        2,
+        0.5,
+        &mut crate::test_support::SplitMix(5),
+    )];
+    let options = TreeAciOptions {
+        root: Some(0),
+        tolerance: 0.3,
+        ..TreeAciOptions::default()
+    };
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    run_directional_pass(
+        &mut state,
+        &options,
+        PassDirection::Forward,
+        false,
+        &mut identity,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
+    let capacities = global_injection_capacities(&state, &options);
+    let injected = crate::global_guard::inject_global_pivots(
+        &mut state,
+        &[vec![1, 0, 0, 0, 1, 1, 0, 0]],
+        &capacities,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
+    assert_eq!(injected, 1);
+    let step = |from, to| directed_between(&state, from, to);
+    let grown = |state: &TreeAciState<'_, f64, usize>, from, to| {
+        state
+            .candidate_set_outgrew_basis(directed_between(state, from, to))
+            .unwrap()
+    };
+    // The injection enlarged the off-spine bond 4 -> 1 only.
+    assert!(grown(&state, 4, 1));
+    assert!(!grown(&state, 7, 2) && !grown(&state, 5, 4) && !grown(&state, 6, 4));
+    let neighbour = step(0, 1);
+    let neighbour_len = state.candidates.ids[neighbour].len();
+    let (down, up) = (step(1, 4), step(4, 1));
+    let expected_walk = vec![step(3, 2), step(2, 1), down, up, step(1, 0)];
+    crate::unit_vertex::expansion_debug_log::take();
+
+    let reverse = run_directional_pass(
+        &mut state,
+        &options,
+        PassDirection::Reverse,
+        false,
+        &mut identity,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
+
+    // The excursion 1 -> 4, 4 -> 1 re-commits the enlarged bond before the
+    // spine step 1 -> 0, as without the expansion.
+    assert_eq!(reverse.updated_edges, expected_walk);
+    // Both re-commits read the unit vertex 1 (rows of 1 -> 4, columns of
+    // 4 -> 1) and expand its rank-1 bond 0 -> 1 by leaf 0's other
+    // coordinate.
+    let log = crate::unit_vertex::expansion_debug_log::take();
+    let recommit_expansions = log
+        .iter()
+        .filter(|(forward, _)| [down, up].contains(forward))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        recommit_expansions,
+        vec![
+            (down, vec![(neighbour, neighbour_len)]),
+            (up, vec![(neighbour, neighbour_len)]),
+        ]
+    );
+    assert_eq!(state.candidates.ids[neighbour].len(), neighbour_len);
+    assert!(!grown(&state, 4, 1));
+    let deviation = crate::test_support::pivot_basis_deviation(&state);
+    assert!(deviation <= 1e-12, "max|M - I| = {deviation:e}");
+}
+
 fn branched_product_options(max_bond_dim: Option<usize>) -> TreeAciOptions<usize> {
     TreeAciOptions {
         enable_global_guard: false,
