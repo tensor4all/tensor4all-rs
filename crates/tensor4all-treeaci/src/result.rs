@@ -19,9 +19,10 @@ pub enum TreeAciTermination {
     /// The local error target, per-edge rank stability, and enabled global
     /// guard criteria were satisfied. Local residuals and randomized guard
     /// searches are not a certificate of the full-grid maximum error: the
-    /// local error target is checked on the recorded per-edge residuals, each
-    /// of which measures the output only at commit time and only over its own
-    /// local matrix (see [`TreeAciResult::max_errors`]).
+    /// local error target is checked on per-edge residuals, each over one
+    /// local matrix. Before the stop is accepted, the residuals that later
+    /// commits made stale are re-measured on the returned output (see
+    /// [`TreeAciResult::max_errors`]).
     Converged,
     /// An inaccurate edge reached its algebraic/configured rank cap, or the
     /// guard found an unresolved residual while all cuts were saturated.
@@ -132,15 +133,28 @@ pub struct TreeAciResult<V: TreeAciNode> {
     /// basis, that is, each bond has one basis shared by both adjacent cores
     /// and bond axis `k` denotes the `k`-th retained candidate of that bond.
     ///
-    /// What a residual does **not** bound:
+    /// Every later commit rewrites two cores, so it can change the output on
+    /// the points of every earlier residual. Within a pass each commit starts
+    /// where the previous one ended, so after a pass every edge except the one
+    /// committed last holds such a *stale* residual. On a pass that meets
+    /// every other stop condition (the local error target on the recorded
+    /// residuals, rank stability, and no Guard pivot in the window), the stale
+    /// residuals are re-measured before the stop is accepted (#1451): each
+    /// becomes the largest error of the current output over that edge's
+    /// current local matrix, which is the matrix its next commit would read.
+    /// The entry of that pass holds the re-measured maximum, and the stop is
+    /// refused when it exceeds the tolerance. A re-measured residual evaluates
+    /// the output directly, so it does not depend on the pivot basis.
+    ///
+    /// What an entry does **not** bound:
     ///
     /// - the error of the dense output away from the local matrices;
-    /// - the output after later commits, which change it on the same points;
-    /// - the output at all for residuals recorded in pass 1, whose commits read
-    ///   bonds that still carry the initial cores. The return pass revisits
-    ///   only the spine and the off-spine bonds a Guard injection enlarged, so
-    ///   a run that stops after pass 2 can still gate on the pass-1 residuals
-    ///   of the other edges off the spine.
+    /// - for a pass that did not reach the stop test, the output after later
+    ///   commits, which change it on the same points;
+    /// - for such a pass, the output at all for residuals recorded in pass 1,
+    ///   whose commits read bonds that still carry the initial cores (the
+    ///   return pass revisits only the spine and the off-spine bonds a Guard
+    ///   injection enlarged).
     ///
     /// See [`TreeAciTermination::Converged`].
     pub max_errors: Vec<f64>,

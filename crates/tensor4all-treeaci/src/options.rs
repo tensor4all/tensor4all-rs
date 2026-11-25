@@ -127,8 +127,13 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// The local stop criterion compares the recorded per-edge residuals with
     /// this target. A residual is the output's error at commit time over that
     /// commit's local matrix, provided every bond the commit reads is in the
-    /// pivot basis; it does not bound the dense error, the output after later
-    /// commits, or the output at all for residuals recorded in pass 1. See
+    /// pivot basis. On a pass that meets every other stop condition, the
+    /// residuals that later commits made stale are first re-measured on the
+    /// current output over each edge's current local matrix, and the stop is
+    /// refused if one exceeds this target. That costs one operator evaluation
+    /// per entry of those local matrices, about the evaluations of one forward
+    /// pass, on each pass that reaches the stop test. No residual bounds the
+    /// dense error away from the local matrices. See
     /// [`TreeAciResult::max_errors`](crate::TreeAciResult::max_errors).
     ///
     /// Known limitation: a pivot kept this way is dropped only once its error

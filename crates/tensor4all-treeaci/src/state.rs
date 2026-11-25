@@ -147,6 +147,20 @@ pub(crate) struct TreeAciState<'a, T: TreeAciScalar, V: TreeAciNode> {
     /// Running maximum of the committed `edge_scales`.
     pub(crate) max_sample_magnitude: f64,
     pub(crate) generation: u64,
+    /// Number of commits that rewrote output cores so far.
+    ///
+    /// Every commit rewrites the two cores of its edge, and every output value
+    /// contracts every core, so any commit can change the output on any
+    /// edge's local matrix. Guard injection changes candidate sets only and
+    /// does not count.
+    pub(crate) output_revision: u64,
+    /// The [`output_revision`](Self::output_revision) each edge's
+    /// `edge_errors`/`edge_scales` entry was measured on, or `None` before
+    /// the first measurement.
+    ///
+    /// An entry that differs from the current revision is *stale*: it
+    /// describes an output that later commits have since rewritten (#1451).
+    pub(crate) residual_revisions: Vec<Option<u64>>,
 }
 
 impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
@@ -249,7 +263,24 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
             edge_scales: vec![0.0; edge_count],
             max_sample_magnitude: 0.0,
             generation,
+            output_revision: 0,
+            residual_revisions: vec![None; edge_count],
         })
+    }
+
+    /// Whether the recorded residual of `edge_number` was measured on an
+    /// output that a later commit has rewritten, or was never measured.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::TreeAciError::InternalInvariant`] for an unknown edge.
+    pub(crate) fn residual_is_stale(&self, edge_number: usize) -> Result<bool> {
+        self.residual_revisions
+            .get(edge_number)
+            .map(|revision| *revision != Some(self.output_revision))
+            .ok_or(crate::TreeAciError::InternalInvariant {
+                message: "residual staleness check references an unknown edge",
+            })
     }
 
     /// Whether the candidate set of `directed` holds candidates outside its

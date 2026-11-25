@@ -8,6 +8,8 @@ use super::{
     run_directional_pass, run_local_sweeps, track_rank_stability, PassDirection,
 };
 use crate::global_guard::input_evaluator_debug_stats;
+use crate::residual_refresh::refresh_stale_residuals;
+use crate::test_support::{branched_product_inputs, product_of_two};
 use crate::transaction::update_edge_transaction;
 use crate::{state::TreeAciState, TreeAciError, TreeAciOptions, TreeAciTermination};
 
@@ -579,4 +581,170 @@ fn return_pass_recommits_off_spine_bonds_the_guard_enlarged() {
     assert!(deviation <= 1e-12, "max|M - I| = {deviation:e}");
     assert!(!grown(&state, 4, 1) && !grown(&state, 5, 4));
     assert_eq!(state.output.canonical_region(), &HashSet::from([0]));
+}
+
+fn branched_product_options(max_bond_dim: Option<usize>) -> TreeAciOptions<usize> {
+    TreeAciOptions {
+        enable_global_guard: false,
+        tolerance: 1.0e-3,
+        scale_tolerance: false,
+        min_sweeps: 1,
+        max_sweeps: 12,
+        max_bond_dim,
+        ..TreeAciOptions::default()
+    }
+}
+
+/// The first pass of a fresh run, replayed on its own state.
+fn replay_first_pass<'a>(
+    inputs: &'a [TreeTN<IdxTensor, usize>],
+    options: &TreeAciOptions<usize>,
+) -> (TreeAciState<'a, f64, usize>, super::PassReport) {
+    let mut state = TreeAciState::<f64, usize>::initialize(inputs, options).unwrap();
+    let report = run_directional_pass(
+        &mut state,
+        options,
+        PassDirection::Forward,
+        false,
+        &mut product_of_two,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
+    (state, report)
+}
+
+#[test]
+fn stale_residuals_that_hide_an_error_do_not_certify_a_stop() {
+    let (_, inputs) = branched_product_inputs();
+    let options = branched_product_options(None);
+    // Every recorded residual of pass 1 is within tolerance, and the Guard is
+    // off, so the old stop rule would stop here.
+    let (mut replay, first) = replay_first_pass(&inputs, &options);
+    assert!(first.max_error <= options.tolerance);
+    let refresh = refresh_stale_residuals(
+        &mut replay,
+        &options,
+        &mut product_of_two,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
+    assert_eq!(refresh.refreshed_edges, replay.edge_ranks.len() - 1);
+    let refreshed = super::recorded_max_error(&replay, &options);
+    assert!(refreshed > options.tolerance, "refreshed {refreshed:e}");
+
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let history = run_local_sweeps(
+        &mut state,
+        &options,
+        &mut product_of_two,
+        &mut seeded_rng(),
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
+
+    // Pass 1 records the refreshed maximum and does not stop; pass 2 stops
+    // on residuals that were re-measured on the output it returns.
+    assert_eq!(history.max_errors[0], refreshed);
+    assert_eq!(history.termination, TreeAciTermination::Converged);
+    assert_eq!(history.max_errors.len(), 2);
+    assert!(history.max_errors[1] <= options.tolerance);
+    assert_eq!(history.global_pivots_found, vec![0, 0]);
+    assert!(!history.needs_cleanup);
+    for edge in 0..state.edge_ranks.len() {
+        assert!(!state.residual_is_stale(edge).unwrap());
+    }
+    // Both stop attempts paid for a refresh on top of the two passes.
+    assert!(history.evaluated_points > first.evaluated_points + refresh.evaluated_points);
+}
+
+#[test]
+fn a_stop_that_survives_the_refresh_counts_its_points() {
+    let edges = [(0, 1), (1, 2), (1, 3)];
+    let inputs = vec![product_tree(&edges, 4)];
+    let options = TreeAciOptions {
+        enable_global_guard: false,
+        min_sweeps: 1,
+        ..TreeAciOptions::default()
+    };
+    let mut replay = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let first = run_directional_pass(
+        &mut replay,
+        &options,
+        PassDirection::Forward,
+        false,
+        &mut identity,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
+    let refresh = refresh_stale_residuals(
+        &mut replay,
+        &options,
+        &mut identity,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
+    assert_eq!(refresh.refreshed_edges, edges.len() - 1);
+    assert!(refresh.evaluated_points > 0);
+
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let history = run_local_sweeps(
+        &mut state,
+        &options,
+        &mut identity,
+        &mut seeded_rng(),
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
+
+    // The rank-1 input is reproduced exactly, so the refreshed residuals are
+    // within tolerance and pass 1 stops.
+    assert_eq!(history.termination, TreeAciTermination::Converged);
+    assert_eq!(history.max_errors.len(), 1);
+    assert!(history.max_errors[0] <= options.tolerance);
+    assert_eq!(
+        history.evaluated_points,
+        first.evaluated_points + refresh.evaluated_points
+    );
+}
+
+#[test]
+fn stop_rules_that_fail_on_recorded_residuals_skip_the_refresh() {
+    let (_, inputs) = branched_product_inputs();
+    // Rank-limited: the cap of 3 leaves a recorded residual above tolerance.
+    let limited = branched_product_options(Some(3));
+    let (_, first) = replay_first_pass(&inputs, &limited);
+    assert!(first.max_error > limited.tolerance);
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &limited).unwrap();
+    let history = run_local_sweeps(
+        &mut state,
+        &limited,
+        &mut product_of_two,
+        &mut seeded_rng(),
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
+    assert_eq!(history.termination, TreeAciTermination::RankLimited);
+    assert_eq!(history.max_errors, vec![first.max_error]);
+    assert_eq!(history.evaluated_points, first.evaluated_points);
+
+    // Within tolerance but short of the dwell: pass 1 cannot stop, so its
+    // residuals stay as recorded (a refresh would raise them above the
+    // tolerance; see the test above).
+    let dwell = TreeAciOptions {
+        min_sweeps: 2,
+        ..branched_product_options(None)
+    };
+    let (_, first) = replay_first_pass(&inputs, &dwell);
+    assert!(first.max_error <= dwell.tolerance);
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &dwell).unwrap();
+    let history = run_local_sweeps(
+        &mut state,
+        &dwell,
+        &mut product_of_two,
+        &mut seeded_rng(),
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
+    assert_eq!(history.max_errors[0], first.max_error);
+    assert!(history.max_errors.len() > 1);
 }

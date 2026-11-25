@@ -108,6 +108,7 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
         || state.algebraic_edge_bounds.get(edge_number).is_none()
         || state.edge_errors.get(edge_number).is_none()
         || state.edge_scales.get(edge_number).is_none()
+        || state.residual_revisions.get(edge_number).is_none()
         || state.pivots.per_edge.get(edge_number).is_none()
         || state.candidates.ids.get(forward).is_none()
         || state.candidates.ids.get(reverse).is_none()
@@ -123,6 +124,13 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
         .ok_or(TreeAciError::SizeOverflow {
             context: "tree ACI state generation",
         })?;
+    let next_output_revision =
+        state
+            .output_revision
+            .checked_add(1)
+            .ok_or(TreeAciError::SizeOverflow {
+                context: "tree ACI output revision",
+            })?;
     #[cfg(test)]
     let output_started = std::time::Instant::now();
     #[cfg(test)]
@@ -222,6 +230,10 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
     state.edge_ranks[edge_number] = state.pivots.rank(edge_number);
     state.edge_errors[edge_number] = pivot_error;
     state.edge_scales[edge_number] = proposal.sampled_scale;
+    // This residual describes the output this commit leaves; every earlier
+    // residual now describes an output whose cores have since changed.
+    state.output_revision = next_output_revision;
+    state.residual_revisions[edge_number] = Some(next_output_revision);
     state.max_sample_magnitude = state.max_sample_magnitude.max(proposal.sampled_scale);
     state.generation = next_generation;
     #[cfg(test)]
