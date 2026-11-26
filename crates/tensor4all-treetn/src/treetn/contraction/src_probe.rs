@@ -12,7 +12,8 @@
 //! seeding, and error handling are repository engineering choices; the audit
 //! marks unsupported choices `[AI-Supplied]`.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use petgraph::unionfind::UnionFind;
 use rand::Rng;
 #[cfg(test)]
 use rand::SeedableRng;
@@ -470,8 +471,8 @@ where
 /// disconnected product: a site-free node's two local operands carry only
 /// distinct bond indices and share nothing, so the explicit outer product of
 /// [`contract_or_outer_product`](crate::treetn::contract_or_outer_product) is
-/// used. When environment factors are supplied they connect the operands, so
-/// the n-ary contraction order is kept unchanged.
+/// used. An environment or projection may touch only one operand; independent
+/// components are joined explicitly after each connected contraction.
 pub(super) fn contract_site_pair<T>(tensor_a: &T, tensor_b: &T, extra: &[&T]) -> Result<T>
 where
     T: TensorLike,
@@ -485,18 +486,82 @@ where
     factors.push(tensor_a);
     factors.push(tensor_b);
     factors.extend(extra.iter().copied());
-    T::contract(&factors)
+    contract_components(&factors, None)
         .map_err(|error| anyhow::anyhow!("contract_src: local pair contraction failed: {error}"))
 }
 
-/// Contract tensors while preserving a shared batch index.
+/// Contract local SRC factors, explicitly joining independent components.
+///
+/// A one-sided output leaf can leave the other operand disconnected from the
+/// probes or projection. Split by contractable legs and the optional retained
+/// batch leg, contract each component, then take their outer product. All
+/// factors carrying `batch` belong to one component, so their columns are
+/// matched elementwise, never cross-multiplied. Component planning scans local
+/// index metadata; tensor arithmetic stays in the owning backend.
+pub(super) fn contract_components<T>(tensors: &[&T], batch: Option<&T::Index>) -> Result<T>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+{
+    if tensors.is_empty() {
+        anyhow::bail!("contract_src: local contraction has no factors");
+    }
+    let mut components = UnionFind::new(tensors.len());
+    let mut first_factor = HashMap::<T::Index, usize>::new();
+    for (position, tensor) in tensors.iter().enumerate() {
+        for index in tensor.external_indices() {
+            let conjugate = index.conj();
+            if index.is_contractable(&conjugate) {
+                if let Some(&other) = first_factor.get(&conjugate) {
+                    components.union(position, other);
+                }
+            }
+            if batch == Some(&index) {
+                if let Some(&other) = first_factor.get(&index) {
+                    components.union(position, other);
+                }
+            }
+            first_factor.entry(index).or_insert(position);
+        }
+    }
+    let initial_component = if let Some(batch) = batch {
+        let batch_factor = first_factor.get(batch).copied().ok_or_else(|| {
+            anyhow::anyhow!("contract_src: batched contraction has no batch index")
+        })?;
+        components.find(batch_factor)
+    } else {
+        components.find(0)
+    };
+    let mut groups = vec![Vec::new(); tensors.len()];
+    for (position, tensor) in tensors.iter().enumerate() {
+        groups[components.find(position)].push(*tensor);
+    }
+    let retained = batch.map(std::slice::from_ref).unwrap_or(&[]);
+    let mut result = T::contract_retaining_indices(&groups[initial_component], retained)
+        .map_err(anyhow::Error::from)
+        .context("contract_src: component contraction failed")?;
+    for (component, factors) in groups.into_iter().enumerate() {
+        if component == initial_component || factors.is_empty() {
+            continue;
+        }
+        let contracted = T::contract(&factors)
+            .map_err(anyhow::Error::from)
+            .context("contract_src: component contraction failed")?;
+        result = result
+            .outer_product(&contracted)
+            .map_err(anyhow::Error::from)
+            .context("contract_src: component outer product failed")?;
+    }
+    Ok(result)
+}
+
+/// Contract SRC factors while retaining the batch index as the final axis.
 pub(super) fn contract_retaining<T>(tensors: &[&T], batch: &T::Index) -> Result<T>
 where
     T: TensorLike,
     T::Index: IndexLike + Clone + Hash + Eq,
 {
-    let result = T::contract_retaining_indices(tensors, std::slice::from_ref(batch))
-        .map_err(|error| anyhow::anyhow!("contract_src: batched contraction failed: {error}"))?;
+    let result = contract_components(tensors, Some(batch))?;
     let indices = result.external_indices();
     if indices.last() == Some(batch) {
         return Ok(result);

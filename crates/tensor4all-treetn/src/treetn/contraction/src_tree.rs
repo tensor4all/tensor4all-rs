@@ -18,9 +18,9 @@ use tensor4all_core::{IndexLike, SvdTruncationPolicy, TensorLike};
 use tensor4all_tensorbackend::ExecutionContext;
 
 use super::src_probe::{
-    connect_result_edge, contract_retaining, factorize_probe_batches, initial_width,
-    local_output_indices, local_site_pairs, mark_result_canonical, maximum_site_width,
-    probe_batch_tensors, product_dim, ProbeBank,
+    connect_result_edge, contract_components, contract_retaining, factorize_probe_batches,
+    initial_width, local_output_indices, local_site_pairs, mark_result_canonical,
+    maximum_site_width, probe_batch_tensors, product_dim, ProbeBank,
 };
 use super::{SrcOptions, TreeTN};
 
@@ -263,7 +263,7 @@ where
             let mut projection_factors = Vec::with_capacity(source_factors.len() + 1);
             projection_factors.push(&factor_conj);
             projection_factors.extend(source_factors.iter().copied());
-            let projected = T::contract(&projection_factors).map_err(|error| {
+            let projected = contract_components(&projection_factors, None).map_err(|error| {
                 anyhow::anyhow!(
                     "contract_src: tree projection for {:?}->{:?} failed: {error}",
                     child,
@@ -612,23 +612,14 @@ where
 /// Contract a node's two local operands together with any already-projected
 /// child bridges.
 ///
-/// Projected bridges connect the two operands, so they keep the n-ary
-/// contraction; without bridges a site-free node's operands share no index and
-/// [`contract_or_outer_product`](crate::treetn::contract_or_outer_product)
-/// makes their product explicit.
+/// A bridge or projection can touch only one operand. Independent components
+/// are joined explicitly by outer product after their local contractions.
 fn merge_local_pair<T>(tensor_a: &T, tensor_b: &T, rest: &[T], context: &str) -> Result<T>
 where
     T: TensorLike,
 {
-    if rest.is_empty() {
-        return crate::treetn::contract_or_outer_product(tensor_a, tensor_b)
-            .map_err(|error| anyhow::anyhow!("{context}: {error}"));
-    }
-    let mut factors: Vec<&T> = Vec::with_capacity(2 + rest.len());
-    factors.push(tensor_a);
-    factors.push(tensor_b);
-    factors.extend(rest.iter());
-    T::contract(&factors).map_err(|error| anyhow::anyhow!("{context}: {error}"))
+    contract_components(&site_factors(tensor_a, tensor_b, Some(rest)), None)
+        .map_err(|error| anyhow::anyhow!("{context}: {error}"))
 }
 
 fn site_factors<'a, T>(tensor_a: &'a T, tensor_b: &'a T, projected: Option<&'a [T]>) -> Vec<&'a T>
