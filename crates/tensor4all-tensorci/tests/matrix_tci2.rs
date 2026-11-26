@@ -6,7 +6,7 @@ use num_complex::Complex64;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use tensor4all_core::{MatrixLuciScalar, MultiIndex, Scalar};
-use tensor4all_simplett::{AbstractTensorTrain, TTScalar};
+use tensor4all_simplett::TTScalar;
 use tensor4all_tensorbackend::Matrix;
 use tensor4all_tensorci::{
     crossinterpolate2, crossinterpolate2_matrix, MatrixShape, PivotSearchStrategy, TCI2Options,
@@ -318,7 +318,7 @@ fn asymmetric<T: TestScalar>(shape: MatrixShape, x: &[usize]) -> Matrix<T> {
 /// A swapped row/column layout (in the callback contract or in `evaluate`)
 /// would read `F[j, i]` where `F[i, j]` belongs; with an asymmetric target at
 /// `2 x 3` and `3 x 2` that fails either the indexed or the shape check.
-fn swapped_axes_guard<T: TestScalar>(shape: MatrixShape) {
+fn swapped_axes_guard<T: TestScalar>(shape: MatrixShape, pivot_search: PivotSearchStrategy) {
     let dims = [3, 4];
     let fit = crossinterpolate2_matrix::<T, _>(
         |points: &[Vec<usize>], out: &mut [T]| {
@@ -327,7 +327,7 @@ fn swapped_axes_guard<T: TestScalar>(shape: MatrixShape) {
         shape,
         dims.to_vec(),
         vec![],
-        options(PivotSearchStrategy::Full),
+        options(pivot_search),
     )
     .unwrap();
     let points = all_points(&dims);
@@ -351,24 +351,29 @@ fn swapped_axes_guard<T: TestScalar>(shape: MatrixShape) {
     }
 }
 
-#[test]
-fn swapped_axes_guard_2x3_f64() {
-    swapped_axes_guard::<f64>(MatrixShape { rows: 2, cols: 3 });
+macro_rules! swapped_axes_tests {
+    ($($name:ident: $ty:ty, $rows:expr, $cols:expr, $strategy:expr;)*) => {
+        $(
+            #[test]
+            fn $name() {
+                swapped_axes_guard::<$ty>(
+                    MatrixShape { rows: $rows, cols: $cols },
+                    $strategy,
+                );
+            }
+        )*
+    };
 }
 
-#[test]
-fn swapped_axes_guard_3x2_f64() {
-    swapped_axes_guard::<f64>(MatrixShape { rows: 3, cols: 2 });
-}
-
-#[test]
-fn swapped_axes_guard_2x3_complex64() {
-    swapped_axes_guard::<Complex64>(MatrixShape { rows: 2, cols: 3 });
-}
-
-#[test]
-fn swapped_axes_guard_3x2_complex64() {
-    swapped_axes_guard::<Complex64>(MatrixShape { rows: 3, cols: 2 });
+swapped_axes_tests! {
+    swapped_axes_guard_2x3_f64: f64, 2, 3, PivotSearchStrategy::Full;
+    swapped_axes_guard_3x2_f64: f64, 3, 2, PivotSearchStrategy::Full;
+    swapped_axes_guard_2x3_complex64: Complex64, 2, 3, PivotSearchStrategy::Full;
+    swapped_axes_guard_3x2_complex64: Complex64, 3, 2, PivotSearchStrategy::Full;
+    swapped_axes_guard_rook_2x3_f64: f64, 2, 3, PivotSearchStrategy::Rook;
+    swapped_axes_guard_rook_3x2_f64: f64, 3, 2, PivotSearchStrategy::Rook;
+    swapped_axes_guard_rook_2x3_complex64: Complex64, 2, 3, PivotSearchStrategy::Rook;
+    swapped_axes_guard_rook_3x2_complex64: Complex64, 3, 2, PivotSearchStrategy::Rook;
 }
 
 /// Components are unrelated functions of `x` (different frequencies and
@@ -413,19 +418,27 @@ fn unrelated_components<T: TestScalar>(pivot_search: PivotSearchStrategy) {
     let bound = RECONSTRUCTION_RTOL * scale(&points, block);
     assert!(max_deviation(&fit, &points, block) < bound);
 
-    let tt = fit.to_tensor_train().unwrap();
+    // One dense materialization of the (L+2)-site train (column-major over
+    // `[rows, d1, d2, cols]`), compared with the dense target assembled once in
+    // the same layout.
+    let (tt_data, tt_dims) = fit.to_tensor_train().unwrap().full_tensor().unwrap();
+    assert_eq!(tt_dims, internal_dims(shape, &dims));
+    let mut target_data = vec![T::default(); tt_data.len()];
     for x in &points {
         let exact = unrelated::<T>(shape, x);
         for i in 0..shape.rows {
             for j in 0..shape.cols {
-                let mut index = vec![i];
-                index.extend(x);
-                index.push(j);
-                let value = tt.evaluate(&index).unwrap();
-                assert!(Scalar::abs_sq(value - exact[[i, j]]).sqrt() < bound);
+                let offset = x[0] + dims[0] * x[1];
+                target_data[i + shape.rows * (offset + dims[0] * dims[1] * j)] = exact[[i, j]];
             }
         }
     }
+    let tt_error = tt_data
+        .iter()
+        .zip(&target_data)
+        .map(|(a, e)| Scalar::abs_sq(*a - *e).sqrt())
+        .fold(0.0, f64::max);
+    assert!(tt_error < bound, "tensor-train max error = {tt_error}");
 }
 
 #[test]
@@ -436,4 +449,14 @@ fn unrelated_components_full_f64() {
 #[test]
 fn unrelated_components_full_complex64() {
     unrelated_components::<Complex64>(PivotSearchStrategy::Full);
+}
+
+#[test]
+fn unrelated_components_rook_f64() {
+    unrelated_components::<f64>(PivotSearchStrategy::Rook);
+}
+
+#[test]
+fn unrelated_components_rook_complex64() {
+    unrelated_components::<Complex64>(PivotSearchStrategy::Rook);
 }
