@@ -952,12 +952,11 @@ fn compress_train<T: InterpolativeScalar>(
         return Ok((tree, sites));
     }
 
-    let tree = tree
-        .compress_chain_on_session(
-            options.tolerance,
-            options.max_bond_dim,
-            &mut Session::new(exec),
-        )?;
+    let tree = tree.compress_chain_on_session(
+        options.tolerance,
+        options.max_bond_dim,
+        &mut Session::new(exec),
+    )?;
     Ok((tree, sites))
 }
 
@@ -1213,9 +1212,15 @@ where
     T: InterpolativeScalar,
     F: Fn(&[f64]) -> T,
 {
-    build_refined_qtt(exec, f, domain, num_bits, basis, options, |interval, level| {
-        !is_dangerous(interval, &dangerous_at_level[level])
-    })
+    build_refined_qtt(
+        exec,
+        f,
+        domain,
+        num_bits,
+        basis,
+        options,
+        |interval, level| !is_dangerous(interval, &dangerous_at_level[level]),
+    )
 }
 
 fn copy_core<T: InterpolativeScalar>(

@@ -10,6 +10,41 @@ use crate::interval::NInterval;
 
 use super::*;
 
+/// Run `body` on the engine of a fresh test-owned single-thread context.
+///
+/// The builders take the caller's engine (tensor4all-rs#1379); these tests own
+/// a context instead of reaching for a process-global one.
+fn on_test_engine<R>(
+    body: impl FnOnce(&mut dyn tensor4all_tensorbackend::ExecutionEngine) -> R,
+) -> R {
+    let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+        tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+    );
+    context.with_session(|engine| body(engine)).unwrap()
+}
+
+/// Context-free test spellings of the builders: same arguments as the public
+/// functions minus `exec`, which each call takes from [`on_test_engine`]. They
+/// shadow the glob-imported public names inside this test tree.
+macro_rules! with_test_engine {
+    ($(fn $name:ident<$f:ty>($($arg:ident: $ty:ty),*);)*) => {$(
+        #[allow(clippy::too_many_arguments)]
+        fn $name<T: InterpolativeScalar, F: Fn($f) -> T>(f: F, $($arg: $ty),*) -> Result<InterpolativeQtt> {
+            on_test_engine(|exec| super::$name(exec, f, $($arg),*))
+        }
+    )*};
+}
+with_test_engine! {
+    fn interpolate_single_scale<f64>(a: f64, b: f64, num_bits: usize, degree: usize, options: &InterpolativeQttOptions);
+    fn interpolate_single_scale_nd<&[f64]>(lower: &[f64], upper: &[f64], num_bits: usize, degree: usize, options: &InterpolativeQttOptions);
+    fn interpolate_multi_scale<f64>(a: f64, b: f64, num_bits: usize, degree: usize, cusps: &[f64], options: &InterpolativeQttOptions);
+    fn interpolate_multi_scale_nd<&[f64]>(lower: &[f64], upper: &[f64], num_bits: usize, degree: usize, cusps: &[Vec<f64>], options: &InterpolativeQttOptions);
+    fn interpolate_adaptive<f64>(a: f64, b: f64, num_bits: usize, degree: usize, tolerance: f64, singularities: &[f64], options: &InterpolativeQttOptions);
+    fn interpolate_adaptive_nd<&[f64]>(lower: &[f64], upper: &[f64], num_bits: usize, degree: usize, tolerance: f64, singularities: &[Vec<f64>], options: &InterpolativeQttOptions);
+    fn interpolate_single_scale_sparse<f64>(a: f64, b: f64, num_bits: usize, degree: usize, radius: usize, options: &InterpolativeQttOptions);
+    fn interpolate_single_scale_sparse_nd<&[f64]>(lower: &[f64], upper: &[f64], num_bits: usize, degree: usize, radius: usize, options: &InterpolativeQttOptions);
+}
+
 mod complex;
 mod heavy_single_scale;
 mod refined_batches;
