@@ -2,8 +2,10 @@
 
 ## Current integration and output-layout limits (2026-11-26)
 
-The implementation is rebased onto `5af3e719` with both sets of CHANGELOG
-entries retained. The scheduler algorithm is unchanged. Historical acceptance
+The implementation is rebased onto `373c246b`, including #1479's SRC component
+join fix, with both sets of CHANGELOG entries retained. A range-diff confirms
+that all four existing implementation/evidence patches are unchanged by this
+synchronization. The scheduler algorithm is unchanged. Historical acceptance
 measurements remain evidence for their recorded source and dependency revisions,
 not new performance measurements of the synchronized branch.
 
@@ -23,17 +25,18 @@ dense product-DFT residual against the reported allowance. A coarser-layout
 request explicitly retains the existing boundaries. The 64-by-64 input-patch
 case and a hard peak-memory bound remain unverified and are not claimed.
 
-Focused validation on the synchronized source passes: 22 scheduler units (one
+Fresh focused validation on the synchronized source passes: 22 scheduler units (one
 pre-existing timing test remains ignored), 21 reconstruction integration cases,
 14 patched Fourier cases, 49 QFT reconstruction cases and 49 Fourier doctests.
 The new test rejects an injected tolerance-merge mutation that retains both
 operands instead of consolidating them; the production source was restored
-before the passing Fourier suites. Strict affected-crate Clippy, rustdoc link
-validation, formatting, the API inventory, public-error documentation, test-target
-inventory, the implicit-engine ratchet and deterministic repository-rules review
-pass. The guide changes are prose only; guide snippets and their APIs are
-unchanged, so the mdBook executable suite was not repeated. Hosted checks and
-implementation review must run on the published rebased head.
+before the passing Fourier suites. Strict affected-crate Clippy, formatting,
+the implicit-engine ratchet and deterministic repository-rules review were
+repeated and pass. Earlier rustdoc-link, API-inventory, public-error-documentation
+and test-target-inventory evidence remains applicable: this synchronization
+changes no public API, example or guide snippet. The mdBook executable suite
+was not repeated locally. Hosted checks and implementation review must run on
+the published rebased head.
 
 ## Decisions
 
