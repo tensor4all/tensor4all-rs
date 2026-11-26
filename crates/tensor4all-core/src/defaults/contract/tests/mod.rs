@@ -108,18 +108,6 @@ fn test_outer_product_is_explicit_disconnected_entry() {
 }
 
 #[test]
-fn test_contract_owned_rejects_disconnected_inputs() {
-    let i = DynIndex::new_dyn(2);
-    let j = DynIndex::new_dyn(2);
-
-    let a = IdxTensor::from_dense(vec![i], vec![1.0_f64, 2.0]).unwrap();
-    let b = IdxTensor::from_dense(vec![j], vec![3.0_f64, 4.0]).unwrap();
-
-    let err = contract_owned(vec![a, b]).unwrap_err();
-    assert!(err.to_string().contains("disconnected"));
-}
-
-#[test]
 fn test_contract_diag_diag_partial_preserves_diagonal_storage() {
     let i = Index::new(DynId(1), 3);
     let j = Index::new(DynId(2), 3);
@@ -425,7 +413,7 @@ fn test_contract_with_options_retained_index_connects_components() {
 }
 
 #[test]
-fn test_contract_owned_with_options_matches_borrowed_with_options() {
+fn test_prepared_with_options_matches_ordinary() {
     let batch = Index::new(DynId(70), 2);
     let i = Index::new(DynId(71), 2);
     let k = Index::new(DynId(72), 3);
@@ -444,19 +432,22 @@ fn test_contract_owned_with_options_matches_borrowed_with_options() {
 
     let retain_indices = [batch.clone()];
     let options = ContractionOptions::new().with_retain_indices(&retain_indices);
-    let owned = contract_owned_with_options(vec![a.clone(), b.clone()], options).unwrap();
+    let prepared = PreparedContraction::new(&[&a, &b], options)
+        .unwrap()
+        .execute(&[&a, &b])
+        .unwrap();
     let borrowed = contract_with_options(&[&a, &b], options).unwrap();
 
-    assert_eq!(owned.indices(), borrowed.indices());
-    assert_eq!(owned.dims(), borrowed.dims());
+    assert_eq!(prepared.indices(), borrowed.indices());
+    assert_eq!(prepared.dims(), borrowed.dims());
     assert_eq!(
-        owned.to_vec::<f64>().unwrap(),
+        prepared.to_vec::<f64>().unwrap(),
         borrowed.to_vec::<f64>().unwrap()
     );
 }
 
 #[test]
-fn test_contract_owned_with_options_single_matches_borrowed() {
+fn test_prepared_single_matches_ordinary() {
     let a = make_test_tensor_from_data(
         &[2, 3],
         vec![Index::new(DynId(74), 2), Index::new(DynId(75), 3)],
@@ -464,18 +455,21 @@ fn test_contract_owned_with_options_single_matches_borrowed() {
     );
     let options = ContractionOptions::new();
 
-    let owned = contract_owned_with_options(vec![a.clone()], options).unwrap();
+    let prepared = PreparedContraction::new(&[&a], options)
+        .unwrap()
+        .execute(&[&a])
+        .unwrap();
     let borrowed = contract_with_options(&[&a], options).unwrap();
 
-    assert_eq!(owned.indices(), borrowed.indices());
+    assert_eq!(prepared.indices(), borrowed.indices());
     assert_eq!(
-        owned.to_vec::<f64>().unwrap(),
+        prepared.to_vec::<f64>().unwrap(),
         borrowed.to_vec::<f64>().unwrap()
     );
 }
 
 #[test]
-fn test_contract_owned_with_options_falls_back_for_structured_storage() {
+fn test_prepared_pair_preserves_structured_storage() {
     let i = Index::new(DynId(76), 3);
     let j = Index::new(DynId(77), 3);
     let k = Index::new(DynId(78), 3);
@@ -484,21 +478,24 @@ fn test_contract_owned_with_options_falls_back_for_structured_storage() {
     let b = IdxTensor::from_diag(vec![j, k.clone()], vec![4.0_f64, 5.0, 6.0]).unwrap();
     let options = ContractionOptions::new();
 
-    let owned = contract_owned_with_options(vec![a.clone(), b.clone()], options).unwrap();
+    let prepared = PreparedContraction::new(&[&a, &b], options)
+        .unwrap()
+        .execute(&[&a, &b])
+        .unwrap();
     let borrowed = contract_with_options(&[&a, &b], options).unwrap();
 
-    assert_eq!(owned.indices(), borrowed.indices());
+    assert_eq!(prepared.indices(), borrowed.indices());
     assert_eq!(
-        owned.storage().unwrap().storage_kind(),
+        prepared.storage().unwrap().storage_kind(),
         StorageKind::Diagonal
     );
-    assert!(owned.isapprox(&borrowed, 1e-12, 0.0).unwrap());
+    assert!(prepared.isapprox(&borrowed, 1e-12, 0.0).unwrap());
     let expected = IdxTensor::from_diag(vec![i, k], vec![4.0_f64, 10.0, 18.0]).unwrap();
-    assert!(owned.isapprox(&expected, 1e-12, 0.0).unwrap());
+    assert!(prepared.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
-fn test_contract_owned_with_options_supports_three_way_retained_label() {
+fn test_prepared_supports_three_way_retained_label() {
     let batch = Index::new(DynId(80), 2);
     let i = Index::new(DynId(81), 2);
     let j = Index::new(DynId(82), 3);
@@ -522,24 +519,26 @@ fn test_contract_owned_with_options_supports_three_way_retained_label() {
 
     let retain_indices = [batch.clone()];
     let options = ContractionOptions::new().with_retain_indices(&retain_indices);
-    let owned =
-        contract_owned_with_options(vec![a.clone(), b.clone(), c.clone()], options).unwrap();
+    let prepared = PreparedContraction::new(&[&a, &b, &c], options)
+        .unwrap()
+        .execute(&[&a, &b, &c])
+        .unwrap();
     let borrowed = contract_with_options(&[&a, &b, &c], options).unwrap();
 
     assert_eq!(
-        owned.indices(),
+        prepared.indices(),
         &[batch.clone(), i.clone(), j.clone(), k.clone()]
     );
-    assert_eq!(owned.dims(), vec![2, 2, 3, 2]);
-    assert_eq!(owned.indices(), borrowed.indices());
+    assert_eq!(prepared.dims(), vec![2, 2, 3, 2]);
+    assert_eq!(prepared.indices(), borrowed.indices());
     assert_eq!(
-        owned.to_vec::<f64>().unwrap(),
+        prepared.to_vec::<f64>().unwrap(),
         borrowed.to_vec::<f64>().unwrap()
     );
 }
 
 #[test]
-fn test_contract_owned_with_options_falls_back_to_borrowed_for_grad_tensors() {
+fn test_prepared_retained_contraction_preserves_gradients() {
     let batch = Index::new(DynId(90), 2);
     let i = Index::new(DynId(91), 2);
     let k = Index::new(DynId(92), 3);
@@ -560,10 +559,13 @@ fn test_contract_owned_with_options_falls_back_to_borrowed_for_grad_tensors() {
 
     let retain_indices = [batch.clone()];
     let options = ContractionOptions::new().with_retain_indices(&retain_indices);
-    let owned = contract_owned_with_options(vec![x.clone(), y], options).unwrap();
+    let prepared = PreparedContraction::new(&[&x, &y], options)
+        .unwrap()
+        .execute(&[&x, &y])
+        .unwrap();
 
-    let ones = IdxTensor::from_dense(owned.indices().to_vec(), vec![1.0; 8]).unwrap();
-    let loss = contract(&[&owned, &ones]).unwrap();
+    let ones = IdxTensor::from_dense(prepared.indices().to_vec(), vec![1.0; 8]).unwrap();
+    let loss = contract(&[&prepared, &ones]).unwrap();
     loss.backward().unwrap();
 
     let grad = x.grad().unwrap().unwrap();
@@ -586,7 +588,7 @@ fn assert_untracked_result_is_valid_ad_constant(constant: IdxTensor, expected: V
     assert_eq!(grad.to_vec::<f64>().unwrap(), expected);
 }
 
-fn assert_untracked_contraction_result_is_valid_ad_constant(owned: bool) {
+fn assert_untracked_contraction_result_is_valid_ad_constant(prepared: bool) {
     let i = Index::new(DynId(94), 2);
     let k = Index::new(DynId(95), 2);
     let j = Index::new(DynId(96), 2);
@@ -596,8 +598,11 @@ fn assert_untracked_contraction_result_is_valid_ad_constant(owned: bool) {
         vec![1.0, 2.0, 3.0, 4.0],
     );
     let b = make_test_tensor_from_data(&[2, 2], vec![k, j.clone()], vec![5.0, 6.0, 7.0, 8.0]);
-    let constant = if owned {
-        contract_owned(vec![a, b]).unwrap()
+    let constant = if prepared {
+        PreparedContraction::new(&[&a, &b], ContractionOptions::new())
+            .unwrap()
+            .execute(&[&a, &b])
+            .unwrap()
     } else {
         contract(&[&a, &b]).unwrap()
     };
@@ -610,7 +615,7 @@ fn test_borrowed_untracked_result_remains_a_valid_ad_constant() {
 }
 
 #[test]
-fn test_owned_untracked_result_remains_a_valid_ad_constant() {
+fn test_prepared_untracked_result_remains_a_valid_ad_constant() {
     assert_untracked_contraction_result_is_valid_ad_constant(true);
 }
 

@@ -453,6 +453,12 @@
 
 ### Breaking Rust API changes
 
+- Removed `tensor4all_core::contract_owned` and
+  `contract_owned_with_options` (#1381). Use `contract(&[&a, &b, ...])` or
+  `contract_with_options`; `PreparedContraction` reuses index planning for
+  repeated compatible operands. Ordinary and prepared calls share one
+  dense/structured/AD execution dispatch.
+
 - `tensor4all-treetci`: `TreeTciOptimizationResult` and `TreeTciRunResult`
   have a new public field, `local_threshold_factor: f64` (#1371). Neither
   struct is `#[non_exhaustive]`, so downstream struct literals and

@@ -118,10 +118,10 @@ mod global {
 
     pub use tensor4all_tensorbackend::{
         batched_mat_mul_same_shape_owned, einsum_native_subscripts, einsum_native_tensor_reads,
-        einsum_native_tensors, einsum_native_tensors_owned, hermitian_eigendecomposition,
-        hermitian_exponential_first_column, lowest_hermitian_eigenpair, mat_mul, mat_mul_owned,
-        native_tensor_primal_to_diag, qr_backend, solve_matrix, solve_matrix_owned,
-        src_error_estimate, src_error_estimate_general, svd_backend, triangular_solve_matrix_owned,
+        einsum_native_tensors, hermitian_eigendecomposition, hermitian_exponential_first_column,
+        lowest_hermitian_eigenpair, mat_mul, mat_mul_owned, native_tensor_primal_to_diag,
+        qr_backend, solve_matrix, solve_matrix_owned, src_error_estimate,
+        src_error_estimate_general, svd_backend, triangular_solve_matrix_owned,
     };
 
     /// Error returned by [`eager_runtime`].
@@ -348,19 +348,6 @@ mod refuse {
     /// returned error type: there is no process-global context.
     pub fn einsum_native_tensors(
         _operands: &[(&NativeTensor, &[usize])],
-        _output_ids: &[usize],
-    ) -> anyhow::Result<NativeTensor> {
-        Err(refusal())
-    }
-
-    /// Refusing stand-in for the global `einsum_native_tensors_owned`.
-    ///
-    /// # Errors
-    ///
-    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
-    /// returned error type: there is no process-global context.
-    pub fn einsum_native_tensors_owned(
-        _operands: Vec<(NativeTensor, Vec<usize>)>,
         _output_ids: &[usize],
     ) -> anyhow::Result<NativeTensor> {
         Err(refusal())
