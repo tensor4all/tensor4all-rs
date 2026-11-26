@@ -1681,6 +1681,14 @@ where
 
 /// Fraction of the tolerance used as the LU truncation threshold of the local
 /// two-site updates and the final one-site sweep.
+///
+/// This must stay strictly below 1. The global search and the stop test judge
+/// a residual against `tolerance`; if the LU truncated at the same value, a
+/// direction accepted as a global pivot (residual just above `tolerance`)
+/// would be cut again by the next LU, and the run would discard and re-acquire
+/// it forever. That alternation ends in `MaxIterations`, or in a `Converged`
+/// verdict whose sampled error is below `tolerance` while the true error is
+/// above it (#1482). Do not "simplify" this back to `tolerance`.
 const LOCAL_TOLERANCE_FRACTION: f64 = 0.5;
 
 /// Check convergence based on history of ranks, errors, and global pivots.
