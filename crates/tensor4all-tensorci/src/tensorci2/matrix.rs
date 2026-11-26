@@ -26,6 +26,7 @@ use super::{crossinterpolate2_with_rng_linalg, seeded_rng, TCI2OptimizationResul
 use crate::error::{Result, TCIError};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tensor4all_core::{MatrixLuciScalar, MultiIndex, MultiIndexCache, Scalar};
 use tensor4all_simplett::{SimpleTensorTrain, TTScalar, Tensor3Ops};
 use tensor4all_tensorbackend::Matrix;
@@ -83,7 +84,9 @@ pub struct MatrixSamplingStats {
     /// retained-byte limit does **not** bound this value: it counts hash-table
     /// bytes, not the `rows * cols` payload per point. Callers with wide
     /// matrices should watch `payload_bytes` and bound their problem (number of
-    /// physical points, matrix size) accordingly.
+    /// physical points, matrix size) accordingly. The per-point heap
+    /// overhead of the shared payload allocation (reference-count header) is
+    /// not counted.
     pub payload_bytes: usize,
 }
 
@@ -339,7 +342,7 @@ where
     T: Scalar,
 {
     source: F,
-    cache: MultiIndexCache<Box<[T]>>,
+    cache: MultiIndexCache<Arc<[T]>>,
     rows: usize,
     block_len: usize,
     max_points_per_call: usize,
@@ -348,7 +351,7 @@ where
 
 /// How a distinct point of one request batch is obtained.
 enum PointSlot<T> {
-    Ready(Box<[T]>),
+    Ready(Arc<[T]>),
     Missing(usize),
 }
 
@@ -409,13 +412,13 @@ where
             request_slots.push(slot);
         }
 
-        let mut miss_blocks: Vec<Box<[T]>> = Vec::with_capacity(miss_points.len());
+        let mut miss_blocks: Vec<Arc<[T]>> = Vec::with_capacity(miss_points.len());
         for chunk in miss_points.chunks(self.max_points_per_call) {
             let mut out = vec![T::default(); chunk.len() * self.block_len];
             (self.source)(chunk, &mut out);
             self.stats.source_points += chunk.len();
             for (point, block) in chunk.iter().zip(out.chunks_exact(self.block_len)) {
-                let block: Box<[T]> = block.into();
+                let block: Arc<[T]> = block.into();
                 // An insert fails only for an invalid key, which cannot
                 // happen for a point the callback was just asked about.
                 let _ = self.cache.insert(point, block.clone());
