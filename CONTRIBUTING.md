@@ -33,6 +33,15 @@ budget instead of per-test or per-job caps:
 - **5 minutes of suite execution** (`--budget-seconds 300`) in the test jobs, so a
   single test that makes the suite slower than that fails the job that ran it.
 
+What runs where (#1486): the full `CI_rs` pipeline runs on pull requests. A push to
+`main` runs only what depends on `main` itself: `Lint`, `Test` (the merge commit can
+differ from the tested PR head, because branches are not required to be up to date),
+`Maintenance scripts`, and a build-only `Doctests` step that populates the cache pull
+requests restore. Rustdoc and mdBook examples are verified on the pull request head,
+not again on `main`, and `Deploy Documentation` rebuilds the site without re-running
+them. Only `main` saves the kache and Cargo caches; pull requests restore from `main`'s
+newest snapshot.
+
 Do not raise either number to accommodate a slow test. A test that needs more is a
 heavy test:
 
