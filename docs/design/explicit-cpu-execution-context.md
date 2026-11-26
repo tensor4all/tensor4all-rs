@@ -35,9 +35,12 @@ methods are the canonical explicit integration surface.
 Eager tensors do not carry an engine. An implicit eager operation resolves the
 engine from its operand's eager runtime through the owner table
 (`with_runtime_engine`), which maps each runtime to the context that created it.
-A runtime with no live owning context resolves to the process-global default
-context only in a `global-defaults` build; an explicit-only build refuses with
-`ExecutionContextEntryError::NoContext` instead of choosing an engine.
+A runtime with no live owning context has no engine: `with_runtime_engine`
+refuses it with `ExecutionContextEntryError::NoLiveOwner` in every build
+(tensor4all-rs#1378). Only the explicitly named migration bridge
+`with_runtime_engine_or_global` (core's `EngineRoute::Legacy`) still resolves it
+to the process-global default context, in a `global-defaults` build; an
+explicit-only build refuses with `ExecutionContextEntryError::NoContext`.
 
 A session entry is closure-scoped: the engine borrow lasts for the whole
 closure. A nested entry on the same thread into the same context returns the
@@ -100,9 +103,9 @@ Since tensor4all-rs#1397 the `any_scalar`, `backend`, `matrix`, `memory`,
 compile under `explicit-context`; only the functions that resolve the
 process-global context (and `incremental_qr`) are gated on `global-defaults`,
 which is opt-in. `backend-tenferro` remains a compatibility alias for
-`global-defaults`. The eager-runtime owner table and `with_runtime_engine`
-compile under `explicit-context`; only the fallback to the global context is
-gated.
+`global-defaults`. The eager-runtime owner table, `with_runtime_engine` and
+`with_runtime_engine_or_global` compile under `explicit-context`; only the
+bridge's fallback to the global context is gated.
 
 CI checks both isolated code and docs:
 

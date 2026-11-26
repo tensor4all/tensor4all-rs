@@ -305,6 +305,15 @@ A runtime whose creating context was dropped does not produce a typed error; it 
 the global engine. This is issue #1375's finding 2, verbatim, and it is the single
 behavioural change with the widest blast radius (§8).
 
+**Status (#1378).** The silent substitution is gone. `with_runtime_engine` now refuses an
+owner-less runtime with the typed, transitional `ExecutionContextEntryError::NoLiveOwner`
+in every build. The fallback survives only as the `#[doc(hidden)]` bridge
+`with_runtime_engine_or_global` (re-exported as `tensor4all_core::legacy::with_runtime_engine_or_global`),
+and core's eager entries take `EngineRoute::{Context, Legacy}` instead of
+`Option<&ExecutionContext>`: each former literal-`None` site now spells `EngineRoute::Legacy`,
+and a forwarded optional context spells `EngineRoute::context_or_legacy(..)`. Deleting the
+route, the bridge and `NoLiveOwner` stays stage D2.
+
 ### 3.9 F7 — the `global-defaults` modules in `tensor4all-tensorbackend`
 
 Nine modules are compiled only on the legacy route (`crates/tensor4all-tensorbackend/src/lib.rs:13-57`); the first column gives the file under `crates/tensor4all-tensorbackend/src/`:
@@ -905,7 +914,7 @@ Order:
 | A1 | #1392 |
 | A2 | #1393 |
 | A3, and the phase B switch of `treetn` contraction and `interpolativeqtt` builders | #1379 |
-| D2 and the phase B switch of the F1 sites in `core` | #1378 (delete the route; no `NoLiveOwner`) |
+| D2 and the phase B switch of the F1 sites in `core` | #1378 (first step: no silent substitution, explicit `legacy` bridge, transitional `NoLiveOwner`; D2 deletes the route and the variant) |
 | B2 re-exports and D4 | #1377 |
 | phase C for `aci` | #1382 |
 | B1 bridge visibility | #1380 |

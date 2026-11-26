@@ -1250,7 +1250,8 @@ pub enum ExecutionContextEntryError {
     /// published in one. Pass an [`ExecutionContext`] to the operation's
     /// context-taking form. Code that has no engine yet and must keep the legacy
     /// process-global route calls the explicitly named bridge
-    /// [`with_runtime_engine_or_global`] instead.
+    /// [`with_runtime_engine_or_global`] instead. Transitional: it is removed
+    /// with the owner-resolving route in stage D2 of tensor4all-rs#1376.
     #[error(
         "no live owner: no live execution context owns the operand's eager runtime; pass an \
          explicit execution context"
