@@ -31,21 +31,32 @@ fn run(rng_seed: u64) -> (tensor4all_treeaci::TreeAciResult<usize>, f64) {
     (result, error)
 }
 
-/// Asserts that `rng_seed` stops `Converged` after `passes` passes at the true
-/// centre ranks with the exact tree.
-fn assert_exact(rng_seed: u64, passes: usize) {
+/// Asserts that `rng_seed` stops `Converged` in one of `passes` passes at the
+/// true centre ranks with the exact tree.
+///
+/// The pass count is not the invariant: it follows the rounding of the
+/// recorded residual, and arm64 stops one pass earlier than x86_64 for the
+/// same tree (seed 4: 5 passes on macOS, 6 on Linux). The exact tree, the
+/// centre ranks and the tolerance are what the regression is pinned on.
+fn assert_exact(rng_seed: u64, passes: &[usize]) {
     let (result, error) = run(rng_seed);
     let observed = (
         result.termination,
-        result.max_ranks.len(),
         unit_junction::centre_ranks(&result.tree).unwrap(),
         error <= 1e-12,
     );
     assert_eq!(
         observed,
-        (TreeAciTermination::Converged, passes, [12, 1, 12], true),
-        "(termination, passes, centre ranks, exact): dense relative error {error:e}, \
+        (TreeAciTermination::Converged, [12, 1, 12], true),
+        "(termination, centre ranks, exact): {passes:?} passes expected, dense relative \
+         error {error:e}, recorded errors {:?}",
+        result.max_errors
+    );
+    assert!(
+        passes.contains(&result.max_ranks.len()),
+        "{} passes, expected one of {passes:?}: dense relative error {error:e}, \
          recorded errors {:?}",
+        result.max_ranks.len(),
         result.max_errors
     );
 }
@@ -54,7 +65,7 @@ fn assert_exact(rng_seed: u64, passes: usize) {
 /// with a dense relative error of 6.1e-6.
 #[test]
 fn unit_junction_seed_1_reaches_the_true_centre_ranks() {
-    assert_exact(1, 6);
+    assert_exact(1, &[6]);
 }
 
 /// Before the expansion: `Converged` after 7 passes at centre ranks (2, 1, 2)
@@ -62,7 +73,7 @@ fn unit_junction_seed_1_reaches_the_true_centre_ranks() {
 /// third Guard stage (#1466): 8 passes, the same exact tree.
 #[test]
 fn unit_junction_seed_4_reaches_the_true_centre_ranks() {
-    assert_exact(4, 6);
+    assert_exact(4, &[5, 6]);
 }
 
 /// The zero-output case (#1435 mechanism 2, #1466). Before the third Guard
@@ -72,5 +83,5 @@ fn unit_junction_seed_4_reaches_the_true_centre_ranks() {
 /// every residual of the zero output is exactly 0 and no walk moves.
 #[test]
 fn unit_junction_seed_2_leaves_the_zero_output() {
-    assert_exact(2, 6);
+    assert_exact(2, &[6]);
 }

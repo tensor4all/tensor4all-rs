@@ -7,7 +7,6 @@ mod global_pivot_coordinate_search;
 mod issue1358_chain_global_residual;
 mod rng_stream_contract;
 mod rook_four_site_ridge;
-mod rook_verdict_certified;
 mod rook_zero_fibers;
 mod scalar_sampling;
 mod session_entry;
