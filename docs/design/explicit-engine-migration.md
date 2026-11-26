@@ -197,6 +197,21 @@ context-free, so fixing that site needs the public builders themselves to take `
 Verdict: **fails E2.** These are the sites that make `global-defaults` unremovable
 without an API change.
 
+**Status (tensor4all-rs#1379).** `interpolativeqtt` is converted: `compress_train` and the
+eight public QTT builders (`interpolate_single_scale`, `_nd`, `interpolate_multi_scale`, `_nd`,
+`interpolate_adaptive`, `_nd`, `interpolate_single_scale_sparse`, `_nd`) take
+`exec: &mut dyn ExecutionEngine` as their first parameter, and the crate no longer names the
+global context. The other algorithm-crate sites stay in the baseline on purpose, each for a
+stated reason, because converting them is an API change this crate set did not promise:
+
+| Baseline entry (`global-accessor`) | Why it stays |
+| --- | --- |
+| `treetn` `contract`, `contract_src_with_rng` | context-free generic-`T` twins of `contract_in` / `contract_src_with_rng_in`; no engine in hand; removed with the implicit route in stage D2 |
+| `treersi` `hadamard_many` | `global-defaults`-gated wrapper over `hadamard_many_in`; an intended implicit twin |
+| `treersi` `row_interpolation` (CUDA arm) | needs a host CPU engine `Exec::Cuda` does not carry; the `_in` entry needs a companion host-context parameter (`tenferro-cuda` only) |
+| `itensorlike` `norm_squared_from_packed_sites` | fallback only for host-only chains with no CPU-owned site; `norm_squared` has no context parameter |
+| `aci` `default_context`, `elementwise_batched_erased` | the context-free entries' `ProcessGlobal` arm; each has an `*_in` twin |
+
 ### 3.5 F3c — the global context reached from inside an explicit path
 
 One site, and it is a removal blocker rather than an inventory row:

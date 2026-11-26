@@ -10,6 +10,41 @@ use crate::interval::NInterval;
 
 use super::*;
 
+/// Run `body` on the engine of a fresh test-owned single-thread context.
+///
+/// The builders take the caller's engine (tensor4all-rs#1379); these tests own
+/// a context instead of reaching for a process-global one.
+fn on_test_engine<R>(
+    body: impl FnOnce(&mut dyn tensor4all_tensorbackend::ExecutionEngine) -> R,
+) -> R {
+    let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+        tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+    );
+    context.with_session(|engine| body(engine)).unwrap()
+}
+
+/// Context-free test spellings of the builders: same arguments as the public
+/// functions minus `exec`, which each call takes from [`on_test_engine`]. They
+/// shadow the glob-imported public names inside this test tree.
+macro_rules! with_test_engine {
+    ($(fn $name:ident<$f:ty>($($arg:ident: $ty:ty),*);)*) => {$(
+        #[allow(clippy::too_many_arguments)]
+        fn $name<T: InterpolativeScalar, F: Fn($f) -> T>(f: F, $($arg: $ty),*) -> Result<InterpolativeQtt> {
+            on_test_engine(|exec| super::$name(exec, f, $($arg),*))
+        }
+    )*};
+}
+with_test_engine! {
+    fn interpolate_single_scale<f64>(a: f64, b: f64, num_bits: usize, degree: usize, options: &InterpolativeQttOptions);
+    fn interpolate_single_scale_nd<&[f64]>(lower: &[f64], upper: &[f64], num_bits: usize, degree: usize, options: &InterpolativeQttOptions);
+    fn interpolate_multi_scale<f64>(a: f64, b: f64, num_bits: usize, degree: usize, cusps: &[f64], options: &InterpolativeQttOptions);
+    fn interpolate_multi_scale_nd<&[f64]>(lower: &[f64], upper: &[f64], num_bits: usize, degree: usize, cusps: &[Vec<f64>], options: &InterpolativeQttOptions);
+    fn interpolate_adaptive<f64>(a: f64, b: f64, num_bits: usize, degree: usize, tolerance: f64, singularities: &[f64], options: &InterpolativeQttOptions);
+    fn interpolate_adaptive_nd<&[f64]>(lower: &[f64], upper: &[f64], num_bits: usize, degree: usize, tolerance: f64, singularities: &[Vec<f64>], options: &InterpolativeQttOptions);
+    fn interpolate_single_scale_sparse<f64>(a: f64, b: f64, num_bits: usize, degree: usize, radius: usize, options: &InterpolativeQttOptions);
+    fn interpolate_single_scale_sparse_nd<&[f64]>(lower: &[f64], upper: &[f64], num_bits: usize, degree: usize, radius: usize, options: &InterpolativeQttOptions);
+}
+
 mod complex;
 mod heavy_single_scale;
 mod refined_batches;
@@ -1076,4 +1111,39 @@ fn invert_qtt_degree2_exact_when_uncompressed_blend_when_compressed() {
             assert!((s[[i, 2]] - c_one).abs() < 1.0e-12, "tolerance {tolerance}");
         }
     }
+}
+
+/// A builder runs its compression on the engine it was handed (tensor4all-rs#1379).
+///
+/// The compression used to open a session of the process-global context. Here
+/// the global context's session is already held on this thread, so a builder
+/// that still reached for the global context would be refused as a re-entry;
+/// one that runs on the caller's engine, a different context's, is not
+/// affected and yields the same train as an unobstructed run.
+#[test]
+fn builders_compress_on_the_engine_they_are_given() {
+    let caller = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+        tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+    );
+    let global = tensor4all_core::legacy::default_cpu_execution_context().unwrap();
+    assert!(!std::ptr::eq(&*global, &caller));
+    let options = InterpolativeQttOptions::default().with_tolerance(1e-10);
+    let build = |engine: &mut dyn tensor4all_tensorbackend::ExecutionEngine| {
+        super::interpolate_single_scale(engine, |x| (3.0 * x).sin(), 0.0, 1.0, 5, 6, &options)
+    };
+
+    let expected = caller
+        .with_session(|engine| build(engine))
+        .unwrap()
+        .unwrap();
+    let held = global
+        .with_session(|_global_engine| caller.with_session(|engine| build(engine)))
+        .expect("the global context's session is enterable")
+        .expect("the caller's context is a different context")
+        .expect("compression ran on the caller's engine, not the global context");
+
+    assert_eq!(
+        held.0.chain_cores::<f64>(&held.1).unwrap(),
+        expected.0.chain_cores::<f64>(&expected.1).unwrap()
+    );
 }

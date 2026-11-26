@@ -37,6 +37,7 @@ mod session_factorization;
 mod simplett_bridge;
 mod site_free_nodes;
 mod src_context_seam;
+mod src_one_sided_outputs;
 mod swap_test;
 mod tdvp;
 mod tensor_like;

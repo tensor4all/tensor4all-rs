@@ -1,10 +1,12 @@
 //! Interpolation constructors and analysis routines.
 
-use tensor4all_core::legacy::{default_cpu_execution_context, mat_mul};
+use tensor4all_core::legacy::mat_mul;
 use tensor4all_core::{
     ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, IdxTensor, IndexLike,
 };
-use tensor4all_tensorbackend::{explicit::Session, BlasMul, Matrix, StorageScalar, TensorElement};
+use tensor4all_tensorbackend::{
+    explicit::Session, BlasMul, ExecutionEngine, Matrix, StorageScalar, TensorElement,
+};
 use tensor4all_treetn::TreeTN;
 
 use crate::basis::{
@@ -12,7 +14,7 @@ use crate::basis::{
     LagrangePolynomials,
 };
 use crate::core_array::{core_at, core_buffer, core_from_fn, set_core};
-use crate::error::{invalid_argument, InterpolativeQttError, Result};
+use crate::error::{invalid_argument, Result};
 use crate::interval::{Interval, NInterval};
 use crate::options::InterpolativeQttOptions;
 use crate::InterpolativeQtt;
@@ -38,8 +40,12 @@ use crate::InterpolativeQtt;
 /// };
 ///
 /// fn at_origin<T: InterpolativeScalar>(f: impl Fn(f64) -> T) -> (f64, f64) {
-///     let (tree, sites) = interpolate_single_scale(f, 0.0, 1.0, 4, 6,
-///         &InterpolativeQttOptions::default()).unwrap();
+///     let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+///         tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+///     );
+///     let (tree, sites) = context
+///         .with_session(|exec| interpolate_single_scale(exec, f, 0.0, 1.0, 4, 6,
+///         &InterpolativeQttOptions::default())).unwrap().unwrap();
 ///     let value = tree.evaluate_point(&sites, &[0, 0, 0, 0]).unwrap();
 ///     (value.real(), value.imag())
 /// }
@@ -83,18 +89,23 @@ fn lift<T: InterpolativeScalar>(core: &ColMajorArray<f64>) -> Result<ColMajorArr
 /// use tensor4all_interpolativeqtt::{
 ///     interpolate_single_scale, InterpolativeQttOptions,
 /// };
-/// let (tree, sites) = interpolate_single_scale(
+/// let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+///     tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+/// );
+/// let (tree, sites) = context
+///     .with_session(|exec| interpolate_single_scale(exec,
 ///     |x| x * x,
 ///     0.0,
 ///     1.0,
 ///     4,
 ///     8,
 ///     &InterpolativeQttOptions::default(),
-/// ).unwrap();
+/// )).unwrap().unwrap();
 /// let value = tree.evaluate_point(&sites, &[0, 0, 0, 0]).unwrap().real();
 /// assert!(value.abs() < 1e-10);
 /// ```
 pub fn interpolate_single_scale<T, F>(
+    exec: &mut dyn ExecutionEngine,
     f: F,
     a: f64,
     b: f64,
@@ -107,6 +118,7 @@ where
     F: Fn(f64) -> T,
 {
     interpolate_single_scale_nd(
+        exec,
         |coords| f(coords[0]),
         &[a],
         &[b],
@@ -130,18 +142,23 @@ where
 /// use tensor4all_interpolativeqtt::{
 ///     interpolate_single_scale_nd, InterpolativeQttOptions,
 /// };
-/// let (tree, sites) = interpolate_single_scale_nd(
+/// let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+///     tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+/// );
+/// let (tree, sites) = context
+///     .with_session(|exec| interpolate_single_scale_nd(exec,
 ///     |x| x[0] + x[1],
 ///     &[0.0, 0.0],
 ///     &[1.0, 1.0],
 ///     3,
 ///     5,
 ///     &InterpolativeQttOptions::default(),
-/// ).unwrap();
+/// )).unwrap().unwrap();
 /// assert_eq!(tree.node_count(), 3);
 /// assert!((tree.evaluate_point(&sites, &[1, 2, 0]).unwrap().real() - 0.75).abs() < 1e-10);
 /// ```
 pub fn interpolate_single_scale_nd<T, F>(
+    exec: &mut dyn ExecutionEngine,
     f: F,
     lower: &[f64],
     upper: &[f64],
@@ -174,7 +191,7 @@ where
     let right_1d = right_core_1d(&basis)?;
     cores.push(lift(&direct_product_core_tensors(&vec![right_1d; ndims])?)?);
 
-    compress_train(cores, options)
+    compress_train(exec, cores, options)
 }
 
 /// Construct a one-dimensional multiscale interpolative QTT.
@@ -192,7 +209,11 @@ where
 /// use tensor4all_interpolativeqtt::{
 ///     interpolate_multi_scale, InterpolativeQttOptions,
 /// };
-/// let (tree, sites) = interpolate_multi_scale(
+/// let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+///     tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+/// );
+/// let (tree, sites) = context
+///     .with_session(|exec| interpolate_multi_scale(exec,
 ///     |x| x.abs(),
 ///     -1.0,
 ///     1.0,
@@ -200,11 +221,13 @@ where
 ///     8,
 ///     &[0.0],
 ///     &InterpolativeQttOptions::default(),
-/// ).unwrap();
+/// )).unwrap().unwrap();
 /// assert_eq!(tree.node_count(), 4);
 /// assert!((tree.evaluate_point(&sites, &[0, 0, 0, 0]).unwrap().real() - 1.0).abs() < 1e-10);
 /// ```
+#[allow(clippy::too_many_arguments)] // `exec` joins the existing eight (tensor4all-rs#1379)
 pub fn interpolate_multi_scale<T, F>(
+    exec: &mut dyn ExecutionEngine,
     f: F,
     a: f64,
     b: f64,
@@ -219,6 +242,7 @@ where
 {
     let cusps: Vec<_> = cusp_locations.iter().map(|&x| vec![x]).collect();
     interpolate_multi_scale_nd(
+        exec,
         |coords| f(coords[0]),
         &[a],
         &[b],
@@ -243,7 +267,11 @@ where
 /// use tensor4all_interpolativeqtt::{
 ///     interpolate_multi_scale_nd, InterpolativeQttOptions,
 /// };
-/// let (tree, sites) = interpolate_multi_scale_nd(
+/// let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+///     tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+/// );
+/// let (tree, sites) = context
+///     .with_session(|exec| interpolate_multi_scale_nd(exec,
 ///     |x| x[0] * x[1],
 ///     &[0.0, 0.0],
 ///     &[1.0, 1.0],
@@ -251,10 +279,12 @@ where
 ///     4,
 ///     &[vec![0.0, 0.0]],
 ///     &InterpolativeQttOptions::default(),
-/// ).unwrap();
+/// )).unwrap().unwrap();
 /// assert!((tree.evaluate_point(&sites, &[1, 2, 0]).unwrap().real() - 0.125).abs() < 1e-10);
 /// ```
+#[allow(clippy::too_many_arguments)] // `exec` joins the existing eight (tensor4all-rs#1379)
 pub fn interpolate_multi_scale_nd<T, F>(
+    exec: &mut dyn ExecutionEngine,
     f: F,
     lower: &[f64],
     upper: &[f64],
@@ -274,6 +304,7 @@ where
     let domain = NInterval::new(lower, upper)?;
     let cusps = cusp_locations.to_vec();
     build_refined_qtt(
+        exec,
         &f,
         &domain,
         num_bits,
@@ -298,7 +329,11 @@ where
 /// use tensor4all_interpolativeqtt::{
 ///     interpolate_adaptive, InterpolativeQttOptions,
 /// };
-/// let (tree, sites) = interpolate_adaptive(
+/// let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+///     tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+/// );
+/// let (tree, sites) = context
+///     .with_session(|exec| interpolate_adaptive(exec,
 ///     |x| x.sin(),
 ///     0.0,
 ///     1.0,
@@ -307,12 +342,13 @@ where
 ///     1e-8,
 ///     &[],
 ///     &InterpolativeQttOptions::default(),
-/// ).unwrap();
+/// )).unwrap().unwrap();
 /// let origin = tree.evaluate_point(&sites, &[0; 4]).unwrap().real();
 /// assert!((origin - 0.0).abs() < 1e-10);
 /// ```
 #[allow(clippy::too_many_arguments)]
 pub fn interpolate_adaptive<T, F>(
+    exec: &mut dyn ExecutionEngine,
     f: F,
     a: f64,
     b: f64,
@@ -328,6 +364,7 @@ where
 {
     let singularities_nd: Vec<_> = singularities.iter().map(|&x| vec![x]).collect();
     interpolate_adaptive_nd(
+        exec,
         |coords| f(coords[0]),
         &[a],
         &[b],
@@ -354,7 +391,11 @@ where
 /// use tensor4all_interpolativeqtt::{
 ///     interpolate_adaptive_nd, InterpolativeQttOptions,
 /// };
-/// let (tree, sites) = interpolate_adaptive_nd(
+/// let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+///     tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+/// );
+/// let (tree, sites) = context
+///     .with_session(|exec| interpolate_adaptive_nd(exec,
 ///     |x| x[0] + x[1],
 ///     &[0.0, 0.0],
 ///     &[1.0, 1.0],
@@ -363,12 +404,13 @@ where
 ///     1e-8,
 ///     &[],
 ///     &InterpolativeQttOptions::default(),
-/// ).unwrap();
+/// )).unwrap().unwrap();
 /// let origin = tree.evaluate_point(&sites, &[0; 3]).unwrap().real();
 /// assert!((origin - 0.0).abs() < 1e-10);
 /// ```
 #[allow(clippy::too_many_arguments)]
 pub fn interpolate_adaptive_nd<T, F>(
+    exec: &mut dyn ExecutionEngine,
     f: F,
     lower: &[f64],
     upper: &[f64],
@@ -413,10 +455,26 @@ where
     }
 
     if dangerous_at_level.iter().all(Vec::is_empty) {
-        return interpolate_single_scale_nd(f, lower, upper, num_bits, polynomial_degree, options);
+        return interpolate_single_scale_nd(
+            exec,
+            f,
+            lower,
+            upper,
+            num_bits,
+            polynomial_degree,
+            options,
+        );
     }
 
-    build_adaptive_qtt(&f, &domain, num_bits, &basis, &dangerous_at_level, options)
+    build_adaptive_qtt(
+        exec,
+        &f,
+        &domain,
+        num_bits,
+        &basis,
+        &dangerous_at_level,
+        options,
+    )
 }
 
 /// Construct a one-dimensional sparse single-scale interpolative QTT.
@@ -433,7 +491,11 @@ where
 /// use tensor4all_interpolativeqtt::{
 ///     interpolate_single_scale_sparse, InterpolativeQttOptions,
 /// };
-/// let (tree, sites) = interpolate_single_scale_sparse(
+/// let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+///     tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+/// );
+/// let (tree, sites) = context
+///     .with_session(|exec| interpolate_single_scale_sparse(exec,
 ///     |x| x.cos(),
 ///     0.0,
 ///     1.0,
@@ -441,11 +503,13 @@ where
 ///     8,
 ///     2,
 ///     &InterpolativeQttOptions::default(),
-/// ).unwrap();
+/// )).unwrap().unwrap();
 /// let origin = tree.evaluate_point(&sites, &[0; 4]).unwrap().real();
 /// assert!((origin - 1.0).abs() < 1e-10);
 /// ```
+#[allow(clippy::too_many_arguments)] // `exec` joins the existing eight (tensor4all-rs#1379)
 pub fn interpolate_single_scale_sparse<T, F>(
+    exec: &mut dyn ExecutionEngine,
     f: F,
     a: f64,
     b: f64,
@@ -459,6 +523,7 @@ where
     F: Fn(f64) -> T,
 {
     interpolate_single_scale_sparse_nd(
+        exec,
         |coords| f(coords[0]),
         &[a],
         &[b],
@@ -483,7 +548,11 @@ where
 /// use tensor4all_interpolativeqtt::{
 ///     interpolate_single_scale_sparse_nd, InterpolativeQttOptions,
 /// };
-/// let (tree, sites) = interpolate_single_scale_sparse_nd(
+/// let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+///     tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+/// );
+/// let (tree, sites) = context
+///     .with_session(|exec| interpolate_single_scale_sparse_nd(exec,
 ///     |x| x[0] + x[1],
 ///     &[0.0, 0.0],
 ///     &[1.0, 1.0],
@@ -491,10 +560,12 @@ where
 ///     6,
 ///     2,
 ///     &InterpolativeQttOptions::default(),
-/// ).unwrap();
+/// )).unwrap().unwrap();
 /// assert!((tree.evaluate_point(&sites, &[1, 2, 0]).unwrap().real() - 0.75).abs() < 1e-10);
 /// ```
+#[allow(clippy::too_many_arguments)] // `exec` joins the existing eight (tensor4all-rs#1379)
 pub fn interpolate_single_scale_sparse_nd<T, F>(
+    exec: &mut dyn ExecutionEngine,
     f: F,
     lower: &[f64],
     upper: &[f64],
@@ -528,7 +599,7 @@ where
     let right_1d = right_core_1d(&basis)?;
     cores.push(lift(&direct_product_core_tensors(&vec![right_1d; ndims])?)?);
 
-    compress_train(cores, options)
+    compress_train(exec, cores, options)
 }
 
 /// Recover multiresolution Chebyshev-Lobatto values from a binary QTT.
@@ -591,14 +662,18 @@ where
 ///     get_chebyshev_grid, interpolate_single_scale, invert_qtt, InterpolativeQttOptions,
 /// };
 /// let basis = get_chebyshev_grid(6).unwrap();
-/// let (tree, sites) = interpolate_single_scale(
+/// let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+///     tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+/// );
+/// let (tree, sites) = context
+///     .with_session(|exec| interpolate_single_scale(exec,
 ///     |x| (-x * x).exp(),
 ///     0.0,
 ///     1.0,
 ///     5,
 ///     6,
 ///     &InterpolativeQttOptions::default().with_tolerance(0.0),
-/// ).unwrap();
+/// )).unwrap().unwrap();
 /// let values = invert_qtt::<f64>(&tree, &sites, &basis, 1).unwrap();
 /// assert_eq!(values.len(), 4);
 /// assert_eq!(values[3].ncols(), basis.len());
@@ -912,6 +987,7 @@ fn right_core_1d(basis: &LagrangePolynomials) -> Result<ColMajorArray<f64>> {
 }
 
 fn compress_train<T: InterpolativeScalar>(
+    exec: &mut dyn ExecutionEngine,
     cores: Vec<ColMajorArray<T>>,
     options: &InterpolativeQttOptions,
 ) -> Result<InterpolativeQtt> {
@@ -920,24 +996,11 @@ fn compress_train<T: InterpolativeScalar>(
         return Ok((tree, sites));
     }
 
-    // Legacy CPU-global boundary (design doc §3.4): the public QTT builders take
-    // no context yet, so without `tensor4all-core/global-defaults` compression
-    // refuses here instead of choosing an engine.
-    let context =
-        default_cpu_execution_context().map_err(|source| InterpolativeQttError::Execution {
-            source: Box::new(source),
-        })?;
-    let tree = context
-        .with_session(|engine| {
-            tree.compress_chain_on_session(
-                options.tolerance,
-                options.max_bond_dim,
-                &mut Session::new(engine),
-            )
-        })
-        .map_err(|source| InterpolativeQttError::Execution {
-            source: Box::new(source),
-        })??;
+    let tree = tree.compress_chain_on_session(
+        options.tolerance,
+        options.max_bond_dim,
+        &mut Session::new(exec),
+    )?;
     Ok((tree, sites))
 }
 
@@ -1045,6 +1108,7 @@ pub(crate) fn interval_points(interval: &NInterval, grid: &[f64]) -> Result<Vec<
 }
 
 fn build_refined_qtt<T, F, S>(
+    exec: &mut dyn ExecutionEngine,
     f: &F,
     domain: &NInterval,
     num_bits: usize,
@@ -1071,7 +1135,7 @@ where
         basis,
         is_safe,
     )?;
-    compress_train(cores, options)
+    compress_train(exec, cores, options)
 }
 
 // The multiscale assembly is shared by the pointwise constructors and the
@@ -1180,6 +1244,7 @@ where
 }
 
 fn build_adaptive_qtt<T, F>(
+    exec: &mut dyn ExecutionEngine,
     f: &F,
     domain: &NInterval,
     num_bits: usize,
@@ -1191,9 +1256,15 @@ where
     T: InterpolativeScalar,
     F: Fn(&[f64]) -> T,
 {
-    build_refined_qtt(f, domain, num_bits, basis, options, |interval, level| {
-        !is_dangerous(interval, &dangerous_at_level[level])
-    })
+    build_refined_qtt(
+        exec,
+        f,
+        domain,
+        num_bits,
+        basis,
+        options,
+        |interval, level| !is_dangerous(interval, &dangerous_at_level[level]),
+    )
 }
 
 fn copy_core<T: InterpolativeScalar>(

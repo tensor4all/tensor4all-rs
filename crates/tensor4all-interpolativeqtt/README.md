@@ -11,14 +11,22 @@ The TreeTN retains the sampled function's `f64` or `Complex64` dtype.
 ```rust
 use tensor4all_interpolativeqtt::prelude::*;
 
-let (tree, sites) = interpolate_single_scale(
+let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+
+    tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+
+);
+
+let (tree, sites) = context
+
+    .with_session(|exec| interpolate_single_scale(exec,
     |x| (-x * x).exp(),
     -2.0,
     2.0,
     5,
     12,
     &InterpolativeQttOptions::default(),
-).unwrap();
+)).unwrap().unwrap();
 
 let value = tree.evaluate_point(&sites, &[0, 0, 0, 0, 0]).unwrap().real();
 let expected = (-4.0_f64).exp();

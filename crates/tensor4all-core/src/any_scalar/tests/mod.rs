@@ -166,7 +166,8 @@ fn tracked_scalar_operation_failure_retains_error_and_graph_state() {
     let scalar = AnyScalar::new_real(2.0).enable_grad().unwrap();
     let result = with_forced_tensor_initialization_failure(|| scalar.powf(2.0));
 
-    assert!(result.tracks_grad());
+    // The failed operation severed the gradient path: no tracking is claimed.
+    assert!(!result.tracks_grad());
     assert_eq!(result.real(), 4.0);
 
     let error = result.as_tensor().unwrap_err();
@@ -198,9 +199,9 @@ fn tracked_backend_failure_preserves_typed_diagnostic_through_fallback() {
             tenferro_tensor::Error::backend_failure("forced_add", "forced tracked backend failure"),
         ))
     });
-    let result = AnyScalar::fallback_result(operation, "add", || ScalarValue::F64(5.0), true);
+    let result = AnyScalar::fallback_result(operation, "add", || ScalarValue::F64(5.0));
 
-    assert!(result.tracks_grad());
+    assert!(!result.tracks_grad());
     assert_eq!(result.real(), 5.0);
     let error = result.as_tensor().unwrap_err();
     assert!(error.downcast_ref::<AnyScalarTensorError>().is_some());
@@ -220,14 +221,13 @@ fn tracked_backend_failure_preserves_typed_diagnostic_through_fallback() {
 }
 
 #[test]
-fn every_infallible_scalar_fallback_retains_a_tracked_error() {
+fn every_infallible_scalar_fallback_retains_the_error_and_detaches() {
     let failed = AnyScalar {
         tensor: Err(AnyScalarTensorError::Operation {
             op: "seed",
             source: Arc::new(std::io::Error::other("forced tracked scalar failure")),
         }),
         value: ScalarValue::F64(2.0),
-        tracks_grad: true,
     };
     let one = AnyScalar::new_real(1.0);
 
@@ -244,7 +244,7 @@ fn every_infallible_scalar_fallback_retains_a_tracked_error() {
         failed.powi(2),
     ];
     for result in results {
-        assert!(result.tracks_grad());
+        assert!(!result.tracks_grad());
         let error = result.as_tensor().unwrap_err();
         assert!(error.downcast_ref::<AnyScalarTensorError>().is_some());
         assert!(error
@@ -309,4 +309,29 @@ fn backend_scalar_and_any_scalar_agree_on_every_dtype() {
     assert_wrappers_agree(Complex64::new(1.0, 1.0));
     assert_wrappers_agree(Complex64::new(0.0, 0.0));
     assert_wrappers_agree(Complex64::new(f64::INFINITY, f64::NAN));
+}
+
+#[test]
+fn failed_tracked_operation_is_detached_but_error_stays_retrievable() {
+    // Regression for #1384: a failed tracked operation used to keep
+    // `tracks_grad() == true` on a value with no graph behind it.
+    let x = AnyScalar::new_real(2.0).enable_grad().unwrap();
+    assert!(x.tracks_grad());
+    let failed = with_forced_tensor_initialization_failure(|| x.powf(2.0));
+    assert!(!failed.tracks_grad());
+    assert_eq!(failed.real(), 4.0);
+    assert!(failed.as_tensor().is_err());
+
+    // Every AD-relevant use returns the original error rather than a value.
+    assert!(failed.clone().enable_grad().is_err());
+    assert!(failed.backward().is_err());
+    assert!(failed.grad().is_err());
+    assert!(failed.try_add(&x).is_err());
+    assert!(failed.try_mul(&x).is_err());
+    assert!(failed.try_sqrt().is_err());
+
+    // Chaining infallible operations never revives tracking or drops the error.
+    let chained = (&failed + &x) * &x;
+    assert!(!chained.tracks_grad());
+    assert!(chained.as_tensor().is_err());
 }

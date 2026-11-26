@@ -208,7 +208,7 @@ Ports TreeTCI.jl. Cross interpolation on tree-structured graphs → TreeTN.
 
 Builds `TreeTN<IdxTensor, usize>` chains for real (`f64`) or complex (`Complex64`) functions.
 
-- `interpolate_single_scale(f, x_min, x_max, num_bits, polynomial_degree, &InterpolativeQttOptions::default())`, the multiscale constructors, and the adaptive constructors return `(tree, site_indices)`. Node names start at `0` and site indices run from the most-significant to least-significant bit level. At a fused level, axis zero varies fastest.
+- `interpolate_single_scale(exec, f, x_min, x_max, num_bits, polynomial_degree, &InterpolativeQttOptions::default())`, the multiscale constructors, and the adaptive constructors return `(tree, site_indices)`. Node names start at `0` and site indices run from the most-significant to least-significant bit level. At a fused level, axis zero varies fastest.
 - Evaluate at one point with `tree.evaluate_point(&site_indices, &bits)` or use `TreeTNCachedEvaluator` for batches.
 - `interpolate_patched_nd` takes a caller-owned CPU execution context. Each `InterpolativePatch` carries its `tree`, ordered `site_indices`, fixed dyadic `prefix`, and absolute per-value `error_estimate` from sampling.
 - Use `invert_qtt::<T>(&tree, &site_indices, &basis, q)` for one-dimensional inverse reconstruction.

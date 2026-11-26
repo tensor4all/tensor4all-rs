@@ -1527,3 +1527,66 @@ fn rook_batch_requests_follow_block_order_and_skip_cached_entries() {
     assert_eq!(calls.get(), 2);
     assert_eq!(evaluator.sampled_max(), 347.0);
 }
+
+/// #1482: a smooth chain target at `Full` pivoting with an absolute tolerance
+/// must either report `Converged` with a true error within the tolerance, or
+/// not report `Converged`. It must not exhaust the iteration budget while the
+/// true error sits just above the tolerance.
+#[test]
+fn test_tci2_full_verdict_matches_true_error_1482() {
+    let l = 12usize;
+    let n = 1usize << l;
+    type Target = (&'static str, fn(f64) -> f64);
+    let targets: [Target; 2] = [
+        ("gaussian_cos", |t| {
+            (-((t - 0.3) / 0.2).powi(2)).exp() * (2.0 * std::f64::consts::PI * 20.0 * t).cos()
+        }),
+        ("lorentz_sin", |t| {
+            (7.0 * t).sin() / (1.0 + 25.0 * (t - 0.6) * (t - 0.6))
+        }),
+    ];
+    for (name, g) in targets {
+        let target = move |i: usize| g((i as f64 + 0.5) / n as f64);
+        let i0 = (0..n)
+            .max_by(|&a, &b| target(a).abs().total_cmp(&target(b).abs()))
+            .unwrap();
+        let p0: Vec<usize> = (0..l).map(|k| (i0 >> (l - 1 - k)) & 1).collect();
+        for tolerance in [1e-6, 1e-8, 1e-10] {
+            for seed in [1463u64, 1, 2, 3, 4, 5] {
+                let r = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+                    |x: &MultiIndex| target(x.iter().fold(0, |a, &b| 2 * a + b)),
+                    None,
+                    vec![2; l],
+                    vec![p0.clone()],
+                    TCI2Options {
+                        tolerance,
+                        normalize_error: false,
+                        max_iter: 20,
+                        seed: Some(seed),
+                        ..TCI2Options::default()
+                    },
+                )
+                .unwrap();
+                let tt = r.tci.to_tensor_train().unwrap();
+                let true_error = (0..n)
+                    .map(|i| {
+                        let idx: Vec<usize> = (0..l).map(|s| (i >> (l - 1 - s)) & 1).collect();
+                        (tt.evaluate(&idx).unwrap() - target(i)).abs()
+                    })
+                    .fold(0.0, f64::max);
+                let ctx = format!(
+                    "{name} tol={tolerance:e} seed={seed}: {:?}, true error {true_error:e}, errors {:?}",
+                    r.termination, r.errors
+                );
+                if r.termination == TCI2Termination::Converged {
+                    assert!(true_error <= tolerance, "false Converged: {ctx}");
+                } else {
+                    assert!(
+                        true_error > 2.0 * tolerance,
+                        "stalled just above tolerance: {ctx}"
+                    );
+                }
+            }
+        }
+    }
+}
