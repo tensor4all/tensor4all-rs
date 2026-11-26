@@ -37,3 +37,9 @@
 - **Readout loops:** documented on `evaluate` as a choice: not the hot path yet, and the session `mat_mul` would tie readout cost to a backend step 0 does not otherwise touch; move to the session when it becomes hot.
 - **Split batches:** the callback may be called more than once for one logical batch; stated in the contract of both entry points. The split-equals-unsplit unit test stays.
 - **Layout bit-identity test:** at `rows = cols = 1` the matrix written through the callback layout and read through `evaluate` is compared bit for bit with the scalar path (see the PR for the chain it is compared with).
+
+## Merge onto upstream/main de053a07, rerun, docs guidance
+
+- Merged `upstream/main` (de053a07; includes #1485 LU truncation at 0.5*tolerance and #1484 Rook `Converged` only after an exact `Full` sweep) into the branch, no rebase. No test of ours needed a changed assumption; tensorci tests pass, parity stays exact.
+- Reran the joint-vs-separate experiment at the merged HEAD (`docs/experiments/issue-1463/`). The #1482 alternation is fixed upstream, so the numbers are after that fix. The record was compacted to a short README.
+- Added a `# When to use` section to the rustdoc of `crossinterpolate2_matrix` and `matrix.rs`, a "Matrix-valued functions" subsection in `docs/book/src/guides/tci.md`, and one line in `skills/use-tensor4all-rs/references/crates.md`: the joint fit is for genuine matrix-valued functions with shared structure; for unrelated entries use separate scalar fits.

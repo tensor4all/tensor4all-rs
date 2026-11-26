@@ -138,6 +138,14 @@ let val = tt.evaluate(&[1, 2]).unwrap();
 assert!((val - 4.0).abs() < 1e-10); // f(1,2) = 1+2+1 = 4
 ```
 
+### Matrix-valued functions
+
+For a function whose value is a `rows x cols` matrix, `crossinterpolate2_matrix` fits one tensor train on `[rows, x_1, .., x_L, cols]`: a row site in front, a column site at the end and shared middle cores. The callback receives a batch of points `x` and returns whole matrices, so each point is evaluated once for all entries.
+
+Use it for a **genuine matrix-valued function whose entries share structure**, for example `F(x) = sum_k a_k(x) U_k V_k^T` (a matrix-valued Green's function driven by a few modes). The shared middle cores carry the `a_k(x)` once for all entries. It is not meant for `rows * cols` unrelated scalar functions merely broadcast over a grid of `(i, j)`: nothing is shared then, and the row and column sites must carry all the independent information.
+
+Rule of thumb: the joint fit stores and reads out less than separate fits when its bond dimension grows more slowly than `sqrt(rows * cols)` times the bond dimension of a single entry. For unrelated entries, run one scalar `crossinterpolate2` fit per entry, each callback computing the whole matrix and keeping one entry, ideally behind one shared whole-matrix cache; this can be cheaper and smaller. The choice depends on the application; see the `crossinterpolate2_matrix` rustdoc for the callback contract and the cache-memory note.
+
 ### Continuous vs discrete
 
 `crossinterpolate2` works on discrete integer indices. For functions on continuous domains, use the quantics representation provided by `tensor4all-quanticstci` (see below), which maps floating-point coordinates to binary tensor-train indices.

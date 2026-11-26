@@ -13,6 +13,17 @@
 //! later request for an entry of the same point, so a point is not sampled
 //! again for another matrix entry while it stays retained.
 //!
+//! # When to use
+//!
+//! The joint fit targets genuine matrix-valued functions whose entries share
+//! structure, such as `F(x) = sum_k a_k(x) U_k V_k^T` with a few modes `k`; the
+//! shared middle cores then carry the `a_k(x)` once for all entries. For
+//! unrelated entries (independent scalar functions broadcast over `(i, j)`),
+//! separate scalar [`crossinterpolate2`](super::crossinterpolate2) fits, ideally
+//! sharing one whole-matrix cache, can be cheaper and smaller. Rule of thumb:
+//! the joint fit wins when its bond dimension grows more slowly than
+//! `sqrt(rows * cols)` times that of a single entry.
+//!
 //! # Cache memory
 //!
 //! The cache uses the default retained-byte limit
@@ -637,6 +648,22 @@ fn validate_matrix_problem(
 /// and `normalize_error` mean what they mean for [`crossinterpolate2`](super::crossinterpolate2)
 /// on that endpoint problem, and the fit reproduces its pivots, ranks and
 /// errors exactly.
+///
+/// # When to use
+///
+/// Use this for a genuine matrix-valued function whose entries share structure,
+/// for example `F(x) = sum_k a_k(x) U_k V_k^T` (a Green's function driven by a
+/// few modes), where one set of shared middle cores carries the `a_k(x)` for
+/// all entries. It is not a way to compress `rows * cols` unrelated scalar
+/// functions merely broadcast over a grid of `(i, j)`: nothing is shared then,
+/// and the two boundary sites must carry `rows * cols` independent pieces.
+///
+/// Rule of thumb: the joint fit stores and reads out less than separate fits
+/// when its bond dimension grows more slowly than `sqrt(rows * cols)` times the
+/// bond dimension of a single entry. For unrelated entries, run separate scalar
+/// [`crossinterpolate2`](super::crossinterpolate2) fits on `x` (each
+/// callback computing the whole matrix and keeping one entry, ideally behind one
+/// shared whole-matrix cache); they can be cheaper and smaller.
 ///
 /// # Arguments
 ///
