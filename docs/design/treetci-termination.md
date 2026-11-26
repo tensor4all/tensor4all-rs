@@ -219,6 +219,29 @@ is what a two-site update across the unit vertex would see.
 - Above the threshold, the plain product is used. High-rank junctions, such as
   the #1153 comb, therefore pay nothing extra after their first sweeps.
 
+The same lock can occur at a junction with local dimension greater than 1
+when its local site is constant on the observed support ([#1436](https://github.com/tensor4all/tensor4all-rs/issues/1436)).
+`DefaultProposer` also applies the expansion at a branching endpoint (degree
+at least 3) if at least two retained pivots on that edge side agree at the
+endpoint's local coordinate. It compares the product of incoming pivot counts
+with 2r before expanding the local index; nominal local dimension is not
+additional rank when that index behaves like a delta. The existing slack
+threshold and largest-rank-neighbor choice stay the same.
+
+Agreement is only a reason to explore farther, not proof that the local site
+is constant. Both the ordinary and expanded candidates retain **every** local
+value, including values absent from the current pivots. A single retained
+pivot does not establish agreement. Non-unit chain vertices keep their
+original candidates: the heuristic targets junction rank locking, not generic
+support detection or a global error guarantee.
+
+This restriction preserves the #1153 comb and #1433 box candidate paths:
+their branching junction has dimension 1 (the existing rule), and all other
+vertices have degree at most 2 (the unchanged ordinary rule). It avoids the
+extra chain expansions of the broader predicate measured in the #1436 issue
+while recovering the frozen rank-12 delta-junction table for all 11 real seeds
+under both stop rules.
+
 To let those bonds grow, each optimization call first enriches the pivots
 around vertices of local dimension 1, following xfac's
 `TensorTreeCI::addPivotsAllBonds(enrich_pivot1())`: it collects the vertices of

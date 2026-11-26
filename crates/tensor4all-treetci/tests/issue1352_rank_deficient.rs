@@ -21,15 +21,49 @@ fn axes(point: &[usize]) -> [usize; 3] {
     [0, 1, 2].map(|branch| (0..R).fold(0, |n, bit| 2 * n + point[3 * bit + branch]))
 }
 
-fn graph() -> Result<TreeTciGraph> {
+#[derive(Clone, Copy)]
+struct Plane {
+    coordinate: usize,
+    binary_junction: bool,
+}
+
+impl Plane {
+    fn unit(coordinate: usize) -> Self {
+        Self {
+            coordinate,
+            binary_junction: false,
+        }
+    }
+
+    fn junction(self) -> usize {
+        if self.binary_junction {
+            3 * (R - 1) + 1
+        } else {
+            CENTRE
+        }
+    }
+
+    fn nsites(self) -> usize {
+        if self.binary_junction {
+            CENTRE
+        } else {
+            CENTRE + 1
+        }
+    }
+}
+
+fn graph(plane: Plane) -> Result<TreeTciGraph> {
     let mut edges: Vec<_> = (0..3)
         .flat_map(|branch| {
             (0..R - 1)
                 .map(move |level| TreeTciEdge::new(3 * level + branch, 3 * (level + 1) + branch))
         })
         .collect();
-    edges.extend((0..3).map(|branch| TreeTciEdge::new(3 * (R - 1) + branch, CENTRE)));
-    Ok(TreeTciGraph::new(CENTRE + 1, &edges)?)
+    edges.extend((0..3).filter_map(|branch| {
+        let from = 3 * (R - 1) + branch;
+        (from != plane.junction()).then(|| TreeTciEdge::new(from, plane.junction()))
+    }));
+    Ok(TreeTciGraph::new(plane.nsites(), &edges)?)
 }
 
 fn check<T>(fixture: &str, seeds: &[u64], scale: T) -> Result<()>
@@ -40,7 +74,7 @@ where
         fixture,
         seeds,
         scale,
-        0,
+        Plane::unit(0),
         &[],
         TreeTciOptions::default().tolerance,
     )
@@ -56,7 +90,7 @@ fn check_plane<T>(
     fixture: &str,
     seeds: &[u64],
     scale: T,
-    plane: usize,
+    plane: Plane,
     starts: &[[usize; 3]],
     tolerance: f64,
 ) -> Result<()>
@@ -73,7 +107,7 @@ where
         .enumerate()
         .max_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
         .unwrap();
-    let default_start = [[largest % N, plane, largest / N]];
+    let default_start = [[largest % N, plane.coordinate, largest / N]];
     let normalize_by_maximum = starts.is_empty();
     let start_axes = if normalize_by_maximum {
         &default_start[..]
@@ -83,7 +117,7 @@ where
     let starts: Vec<Vec<_>> = start_axes
         .iter()
         .map(|axes| {
-            (0..=CENTRE)
+            (0..plane.nsites())
                 .map(|site| {
                     if site == CENTRE {
                         0
@@ -96,7 +130,7 @@ where
         .collect();
     let value = |point: &[usize]| {
         let [a, b, c] = axes(point);
-        if b == plane {
+        if b == plane.coordinate {
             scale * T::from_f64(matrix[a + N * c])
         } else {
             T::zero()
@@ -127,8 +161,10 @@ where
         .flat_map(|&seed| [StopRule::Sampled, StopRule::PerBond].map(|rule| (seed, rule)));
     for (seed, stop_rule) in runs {
         let mut dims = vec![2; CENTRE];
-        dims.push(1);
-        let mut state = TreeTCI2::<T>::new(dims, graph()?)?;
+        if !plane.binary_junction {
+            dims.push(1);
+        }
+        let mut state = TreeTCI2::<T>::new(dims, graph(plane)?)?;
         state.add_global_pivots(&starts)?;
         state.set_max_sample_value(initial_scale);
         let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<T>> {
@@ -145,8 +181,21 @@ where
             ..Default::default()
         };
         let run = optimize_default(&mut state, evaluate, &options)?;
+        if plane.binary_junction {
+            let ranks: Vec<_> = [3 * (R - 1), 3 * (R - 2) + 1, 3 * (R - 1) + 2]
+                .iter()
+                .map(|&from| {
+                    let (key, _) = state
+                        .graph()
+                        .subregion_vertices(TreeTciEdge::new(from, plane.junction()))
+                        .unwrap();
+                    state.pivot_set(&key).unwrap().shape()[1]
+                })
+                .collect();
+            assert_eq!(ranks, [12, 1, 12], "seed {seed}, {stop_rule:?}");
+        }
         let tn = to_treetn(&state, evaluate, Some(0))?;
-        let indices: Vec<_> = (0..=CENTRE)
+        let indices: Vec<_> = (0..plane.nsites())
             .map(|site| tn.site_space(&site).unwrap().iter().next().unwrap().clone())
             .collect();
         if reference.is_none() {
@@ -159,6 +208,12 @@ where
         let target = stored.replace_indices(stored.indices(), &indices)?;
         let difference = tn.to_dense()?.sub(&target)?;
         let error = difference.maxabs()? / target.maxabs()?;
+        if plane.binary_junction {
+            eprintln!(
+                "delta junction {} seed {seed}, {stop_rule:?}: dense residual {error:e}",
+                std::any::type_name::<T>()
+            );
+        }
         // Every listed seed converges, and the dense comparison confirms it.
         // Requiring `Converged` also catches a regression that gives up with
         // a bad approximation instead of reporting a false convergence.
@@ -216,7 +271,7 @@ where
         include_str!("fixtures/issue1352_reopened_bits.txt"),
         &[4, 6],
         scale,
-        N / 2,
+        Plane::unit(N / 2),
         &[[N / 2, N / 2, N / 2], [N / 2 - 1, N / 2, N / 2 - 1]],
         1e-10,
     )
@@ -230,4 +285,34 @@ fn locked_unit_junction_real() -> Result<()> {
 #[test]
 fn locked_unit_junction_complex() -> Result<()> {
     check_reopened(Complex64::new(1.0, 0.5))
+}
+
+// #1436: the junction carries y's least-significant bit. It has dimension 2,
+// but its retained pivots are constant at 0 on the support y = 16. Before
+// support-aware expansion, seed 5 converged at rank (8, 1, 8) and error 6.1e-6.
+fn check_delta_junction<T>(seeds: &[u64], scale: T) -> Result<()>
+where
+    T: MatrixLuciScalar + CommonScalar + FullPivLuScalar + TensorElement + ScalarParts,
+{
+    check_plane(
+        include_str!("fixtures/issue1352_reopened_bits.txt"),
+        seeds,
+        scale,
+        Plane {
+            coordinate: N / 2,
+            binary_junction: true,
+        },
+        &[[N / 2, N / 2, N / 2], [N / 2 - 1, N / 2, N / 2 - 1]],
+        1e-10,
+    )
+}
+
+#[test]
+fn locked_delta_junction_real() -> Result<()> {
+    check_delta_junction(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], 1.0_f64)
+}
+
+#[test]
+fn locked_delta_junction_complex() -> Result<()> {
+    check_delta_junction(&[5, 9], Complex64::new(1.0, 0.5))
 }
