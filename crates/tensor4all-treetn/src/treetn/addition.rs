@@ -537,7 +537,8 @@ where
     /// Compute a strict linear combination `a * self + b * other`.
     ///
     /// This scales two TreeTNs and adds them with [`add`](Self::add), so the two
-    /// operands must already have the same topology and the same site index IDs.
+    /// operands must already have the same topology and full site indices,
+    /// including prime levels and tags.
     /// No site reindexing or truncation is performed.
     ///
     /// # Arguments

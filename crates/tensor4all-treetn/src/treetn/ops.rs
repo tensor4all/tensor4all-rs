@@ -402,7 +402,8 @@ where
     ///
     /// Computes `<self | other>` = sum over all indices of `conj(self) * other`.
     ///
-    /// Both TreeTNs must have the same site indices (same IDs).
+    /// Both TreeTNs must have the same full site indices, including prime levels
+    /// and tags.
     /// Link indices may differ between the two TreeTNs.
     ///
     /// Two empty networks have inner product `1.0`, following the empty-product
@@ -546,9 +547,8 @@ where
             )));
         }
 
-        let scalar_one = T::scalar_one().context("inner: failed to create scalar_one")?;
-        scalar_one
-            .inner_product(&result_tensor)
+        result_tensor
+            .to_scalar()
             .context("inner: failed to extract scalar value")
             .map_err(TreeTNOperationError::from)
     }

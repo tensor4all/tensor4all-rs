@@ -1,6 +1,8 @@
-//! TensorIndex and TensorLike implementations for TreeTN.
+//! TensorIndex implementation and tensor capability boundaries for TreeTN.
 //!
-//! **Design Decision**: TreeTN implements TensorIndex but NOT TensorLike.
+//! TreeTN implements TensorIndex and TensorVectorSpace, but not TensorLike.
+//! The vector-space implementation lives in `vector_space`; its exact algebra
+//! supports the core Krylov solvers without requiring dense materialization.
 //!
 //! ## TensorIndex (Implemented)
 //!

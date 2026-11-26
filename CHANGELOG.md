@@ -4,6 +4,20 @@
 
 ### Behavior changes
 
+- Nonempty `TreeTN<T, V>` implements `TensorVectorSpace`, enabling the core's
+  `gmres_with_truncation` and `restart_gmres_with_truncation` on branched trees
+  (#1423). Sums remain exact until the explicit truncation callback; operands
+  retain strict full-site-index identity. Trait norms leave the input's gauge
+  unchanged; use `TreeTN::norm(&mut tree)` for in-place canonicalization.
+  Elementwise extrema remain unsupported without explicit dense materialization,
+  and existing single-precision QR/SVD restrictions still apply.
+- Core scalar multiplication, rank-zero extraction, and direct-sum publication
+  keep caller-owned CPU runtimes when used by TreeTN Krylov vectors (#1423).
+  `TensorConstructionLike::to_scalar` extracts rank-zero values without a
+  foreign scalar-one allocation; `IdxTensor` retains its scalar AD graph.
+  Untracked scalar coefficients may join the operand's runtime, while tracked
+  foreign coefficients and initialization failures remain errors. Direct sums
+  retain their existing non-differentiable host-copy semantics.
 - Native einsum tracing/profiling settings and core contraction/GMRES profiling
   settings are read once per crate on first use (#1387). Set the `T4A_PROFILE_*`,
   `T4A_TRACE_NATIVE_EINSUM_*`, and `T4A_GMRES_OP_PROFILE` environment variables

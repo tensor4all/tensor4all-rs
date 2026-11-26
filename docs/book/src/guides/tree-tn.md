@@ -309,3 +309,9 @@ large enough for the requested accuracy.
 For Hadamard products of existing compatible trees, see the
 [experimental RSI guide](tree-rsi.md). Validate actual output error separately
 from its local interpolation diagnostics.
+
+## Krylov solvers over tree vectors
+
+For global GMRES with a whole tree as each vector, see
+[Krylov solvers over TreeTN vectors](tree-krylov.md). That guide covers exact
+vector-space algebra, explicit truncation, and a checked branched-tree solve.

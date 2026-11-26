@@ -72,6 +72,9 @@ validated in CI. Longer runnable examples live in the
 
 TreeTN's default features do not pull in SimpleTT. Enable its optional
 `simplett-bridge` feature explicitly when migrating between the two types.
+Nonempty TreeTNs also implement `TensorVectorSpace` for the core's global GMRES
+solvers, with exact sums and explicit truncation callbacks; see
+[GMRES over TreeTN vectors](docs/book/src/guides/tree-krylov.md).
 
 ## Documentation
 

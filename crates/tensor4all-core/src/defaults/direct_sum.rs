@@ -11,6 +11,9 @@
 //! `f32 -> f64`, `f32 -> Complex32`, `f64 -> Complex64` and
 //! `Complex32 -> Complex64`.
 //!
+//! Host block copies are published in the first operand's owning runtime.
+//! This existing host-copy path does not record derivatives of the direct sum.
+//!
 //! This module works with concrete types (`DynIndex`, `IdxTensor`) only.
 
 use crate::defaults::DynIndex;
@@ -277,7 +280,8 @@ fn promoted_operand(operand: &IdxTensor, target: DenseKind) -> Result<Option<Idx
     }
     let indices = operand.indices().to_vec();
     let promoted = match (source, target) {
-        (DenseKind::F32, DenseKind::F64) => IdxTensor::from_dense(
+        (DenseKind::F32, DenseKind::F64) => IdxTensor::from_dense_like(
+            operand,
             indices,
             operand.with_dense_slice::<f32, _>(|values| {
                 values
@@ -286,7 +290,8 @@ fn promoted_operand(operand: &IdxTensor, target: DenseKind) -> Result<Option<Idx
                     .collect::<Vec<f64>>()
             })?,
         )?,
-        (DenseKind::F32, DenseKind::C32) => IdxTensor::from_dense(
+        (DenseKind::F32, DenseKind::C32) => IdxTensor::from_dense_like(
+            operand,
             indices,
             operand.with_dense_slice::<f32, _>(|values| {
                 values
@@ -295,7 +300,8 @@ fn promoted_operand(operand: &IdxTensor, target: DenseKind) -> Result<Option<Idx
                     .collect::<Vec<Complex32>>()
             })?,
         )?,
-        (DenseKind::F32, DenseKind::C64) => IdxTensor::from_dense(
+        (DenseKind::F32, DenseKind::C64) => IdxTensor::from_dense_like(
+            operand,
             indices,
             operand.with_dense_slice::<f32, _>(|values| {
                 values
@@ -304,7 +310,8 @@ fn promoted_operand(operand: &IdxTensor, target: DenseKind) -> Result<Option<Idx
                     .collect::<Vec<Complex64>>()
             })?,
         )?,
-        (DenseKind::F64, DenseKind::C64) => IdxTensor::from_dense(
+        (DenseKind::F64, DenseKind::C64) => IdxTensor::from_dense_like(
+            operand,
             indices,
             operand.with_dense_slice::<f64, _>(|values| {
                 values
@@ -313,7 +320,8 @@ fn promoted_operand(operand: &IdxTensor, target: DenseKind) -> Result<Option<Idx
                     .collect::<Vec<Complex64>>()
             })?,
         )?,
-        (DenseKind::C32, DenseKind::C64) => IdxTensor::from_dense(
+        (DenseKind::C32, DenseKind::C64) => IdxTensor::from_dense_like(
+            operand,
             indices,
             operand.with_dense_slice::<Complex32, _>(|values| {
                 values
@@ -629,7 +637,7 @@ fn direct_sum_typed<T: TensorElement + Zero>(
         }
     }
 
-    let result = IdxTensor::from_dense(setup.result_indices, result_data)?;
+    let result = IdxTensor::from_dense_like(operands[0], setup.result_indices, result_data)?;
     Ok((result, setup.new_indices))
 }
 

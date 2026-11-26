@@ -153,6 +153,12 @@ fn scalar_tensor_initialization_failure_is_retained_for_tensor_operations() {
         .source
         .chain()
         .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
+
+    let tensor = IdxTensor::from_dense(vec![crate::DynIndex::new_dyn(1)], vec![3.0_f64]).unwrap();
+    let error: anyhow::Error = tensor.scale(scalar).unwrap_err().into();
+    assert!(error
+        .chain()
+        .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
 }
 
 #[test]

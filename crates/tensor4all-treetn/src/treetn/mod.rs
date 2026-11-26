@@ -30,6 +30,7 @@ mod swap;
 mod tensor_like;
 mod transform;
 mod truncate;
+mod vector_space;
 
 use crate::error::TreeTNOperationError;
 use petgraph::stable_graph::{EdgeIndex, NodeIndex};
@@ -259,7 +260,25 @@ where
 /// - `V`: Node name type for named nodes (default: NodeIndex for backward compatibility)
 /// # Construction
 /// - `TreeTN::new()`: Create an empty network, then use `add_tensor()` and `connect()` to build.
-/// - `TreeTN::from_tensors(tensors, node_names)`: Create from tensors with auto-connection by matching index IDs.
+/// - `TreeTN::from_tensors(tensors, node_names)`: Create from tensors with auto-connection by matching full bond indices.
+///
+/// # Krylov vectors
+///
+/// Nonempty networks implement [`tensor4all_core::TensorVectorSpace`], so the
+/// core's `gmres_with_truncation` and `restart_gmres_with_truncation` accept
+/// branched trees directly. Linear combinations are exact; pass compression
+/// explicitly through the solver callback. Operands must share topology and
+/// full site indices, including prime levels and tags. Use
+/// [`Self::reindex_site_space_like`] explicitly when node-by-node matching is
+/// intended after an operator creates fresh site indices.
+///
+/// Trait norms, such as `TensorVectorSpace::norm(&tree)`, canonicalize a copy.
+/// Call `TreeTN::norm(&mut tree)` explicitly to canonicalize the input in place.
+/// The core's existing factorization restrictions apply: f64/Complex64 support
+/// unitary QR, while f32/Complex32 cores that need QR return an error.
+/// Elementwise `maxabs` and `min_nonzero_abs` return errors instead of silently
+/// materializing the full tensor; `is_all_finite` inspects stored core
+/// components and does not certify representability of contracted values.
 /// # Examples
 /// Build a 2-node chain manually and verify node count:
 /// ```

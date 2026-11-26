@@ -122,6 +122,15 @@ This skill is for *using* the library. If the working tree is the tensor4all-rs 
 
 ## Linear solves
 
+For a global Krylov solve over a whole tree, nonempty `TreeTN` implements
+`tensor4all_core::TensorVectorSpace`: use `gmres_with_truncation` or
+`restart_gmres_with_truncation` and supply an explicit TreeTN truncation callback.
+The vector-space algebra never truncates implicitly. Operator outputs must keep
+the full physical indices; call `reindex_site_space_like` explicitly when
+node-by-node matching is intended. Trait norms canonicalize a copy; elementwise
+extrema are unsupported, and the core's f32/Complex32 QR/SVD restrictions apply.
+See the [checked branched-tree example](../../crates/tensor4all-treetn/examples/gmres_tree.rs).
+
 `tensor4all_treetn::square_linsolve` and `tensor4all_itensorlike::linsolve`
 solve `(a0 I + a1 A)x = b`. Both `LinsolveOptions` types default to two-site
 MALS (`nsite=2`) with projected GMRES as the local solver.
