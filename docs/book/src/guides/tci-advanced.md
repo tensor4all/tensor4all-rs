@@ -229,3 +229,26 @@ let exact_integral = (1.0 - (-3.0_f64).exp()) / 3.0;
 // R=8 gives 256 grid points; Riemann sum error is O(h) ~ 1/256
 assert!((integral - exact_integral).abs() < 1e-2);
 ```
+
+
+## TreeTCI stopping diagnostics
+
+For tree interpolation (`tensor4all-treetci`), `TreeTciOptions::ncheck_history`
+sets the positive trailing history window, default 3. Convergence requires all
+recorded errors below `tolerance`, no global pivots found in that window, and
+`last_rank <= min(window) + rank_slack * max(window)`. The same window controls
+bond-cap saturation and the sampled local-threshold-floor stop.
+
+Keep the default `rank_slack = 0.0` for the existing exact rank test, which
+accepts shrinking ranks. Opting into `0.03` can avoid extra sweeps caused by
+small rank fluctuations near the tolerance. A larger slack can stop while
+new modes are still being discovered, so check the resulting network against
+independent samples before adopting a nonzero value. This option changes no
+error threshold and supplies no full-network error guarantee.
+
+Both `TreeTciOptimizationResult` and `TreeTciRunResult` expose `nglobal_pivots`
+alongside `ranks` and `errors`, with one count per completed iteration.
+Disabled or skipped searches contribute zero; a zero alone does not mean an
+independent residual check ran. `TreeTciInterpolator` requires
+`max_iter >= ncheck_history`; raw tree entry points permit a shorter budget
+and return `MaxIterations` without a complete window.

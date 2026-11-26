@@ -121,6 +121,7 @@ where
                 treetn: to_treetn(&state, evaluate, None).unwrap(),
                 ranks: result.ranks,
                 errors: result.errors,
+                nglobal_pivots: result.nglobal_pivots,
                 termination: result.termination,
                 local_threshold_factor: result.local_threshold_factor,
             }
@@ -271,4 +272,59 @@ fn zero_tolerance_requires_strictly_smaller_error() {
     );
     assert_eq!(result.errors, vec![0.0; 4]);
     assert_eq!(result.termination, TreeTciTermination::MaxIterations);
+}
+
+fn zero_slack_parity<T>(scale: T)
+where
+    T: MatrixLuciScalar + CommonScalar + FullPivLuScalar + TensorElement + ScalarParts,
+{
+    for entry in ENTRY_POINTS {
+        for stop_rule in [
+            tensor4all_treetci::StopRule::PerBond,
+            tensor4all_treetci::StopRule::Sampled,
+        ] {
+            let options = TreeTciOptions {
+                seed: Some(7),
+                stop_rule,
+                ..Default::default()
+            };
+            let baseline = run_identity(scale, options.clone(), entry);
+            let explicit = run_identity(
+                scale,
+                TreeTciOptions {
+                    rank_slack: 0.0,
+                    ncheck_history: 3,
+                    ..options
+                },
+                entry,
+            );
+            assert_eq!(baseline.ranks, explicit.ranks);
+            assert_eq!(baseline.errors, explicit.errors);
+            assert_eq!(baseline.nglobal_pivots, explicit.nglobal_pivots);
+            assert_eq!(baseline.termination, explicit.termination);
+            assert_eq!(baseline.nglobal_pivots, vec![0; baseline.ranks.len()]);
+            let expected_values = (0..18)
+                .map(|flat| {
+                    if flat % 3 == (flat / 3) % 3 {
+                        scale
+                    } else {
+                        T::zero()
+                    }
+                })
+                .collect();
+            let expected = dense_reference(&explicit, 3, expected_values);
+            let actual = explicit.treetn.contract_to_tensor().unwrap();
+            assert!(actual.sub(&expected).unwrap().maxabs().unwrap() < 1e-12);
+        }
+    }
+}
+
+#[test]
+fn zero_rank_slack_preserves_real_interpolation() {
+    zero_slack_parity(2.0);
+}
+
+#[test]
+fn zero_rank_slack_preserves_complex_interpolation() {
+    zero_slack_parity(Complex64::new(2.0, -1.0));
 }

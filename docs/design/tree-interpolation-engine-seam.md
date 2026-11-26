@@ -236,7 +236,7 @@ and reported as `InvalidProblem`.
    `LocalThresholdFloor` maps to `IterationLimit`, #1371). `crossinterpolate2` keeps its current signature. The other caller of
    `optimize_with_proposer`, `tensor4all-quanticstci`, is updated in the same
    M1 PR. The implementation runs with `scale_tolerance = false` and requires
-   `max_iter >= 3`, because convergence needs three sweeps of history.
+   `max_iter >= ncheck_history` (default 3), because convergence needs a complete history window.
 2. **Evaluator errors.** TreeTCI wraps callback errors into its own operation
    error. The implementation wraps each evaluator error in a private marker
    type before returning it to TreeTCI, and on failure searches the error
@@ -323,12 +323,13 @@ side adds `TreeTciInterpolator`, `TreeTciOptimizationResult`, and
 
 - **Report from both optimizers.** `optimize_default`, the thin wrapper of
   `optimize_with_proposer` with `DefaultProposer`, returns the same
-  `TreeTciOptimizationResult { ranks, errors, termination,
+  `TreeTciOptimizationResult { ranks, errors, nglobal_pivots, termination,
   local_threshold_factor, evaluation }`.
   `TreeTciTermination` is `#[non_exhaustive]`.
 - **Cap precedence in TreeTCI.** The saturation stop is checked before the
   convergence criterion, ranks never exceed the cap after a sweep, and
-  convergence requires the last rank to be the window minimum. A
+  convergence requires the last rank to be the window minimum by default
+  (or within the opt-in `rank_slack` allowance). A
   `TreeTciTermination::Converged` run with a cap therefore ends strictly below
   it, and an error criterion met at the cap surfaces as `MaxBondDimension`,
   mapped to `BondCapReached`. The engine keeps the "rank at the cap is
@@ -341,8 +342,7 @@ side adds `TreeTciInterpolator`, `TreeTciOptimizationResult`, and
   search settings and `evaluation_cache_bytes` come from the engine. The
   optional memo covers optimization; named materialization evaluates through
   the adapter separately. `new` validates the options and
-  requires `max_iter >= TreeTciInterpolator::MIN_MAX_ITER` (public constant,
-  3). `Default` uses `TreeTciOptions::default()`.
+  requires `max_iter >= options.ncheck_history` (default 3). `Default` uses `TreeTciOptions::default()`.
 - **Proposer.** The engine always uses `DefaultProposer`, which is
   deterministic. A seeded proposer could not have its own seed overridden
   generically, which the randomness rule requires.

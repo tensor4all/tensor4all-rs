@@ -13,6 +13,14 @@
 - Reverts #1484: `TCI2Termination::Converged` under `PivotSearchStrategy::Rook`
   is again not certified by an exact `Full` sweep. `Rook` is a fast, inexact
   heuristic by design; use `Full` when the tolerance must hold (#1257).
+- TreeTCI adds an opt-in `TreeTciOptions::rank_slack` (default `0.0`) and a
+  positive `ncheck_history` (default `3`) for its stopping windows (#1264).
+  Both result types now expose `nglobal_pivots` per iteration. Defaults preserve
+  the existing stopping behavior; a nonzero slack needs independent accuracy
+  validation. `TreeTciInterpolator::MIN_MAX_ITER` is removed: its constructor
+  requires `max_iter >= ncheck_history` instead. Quantics wrappers retain the
+  default window and zero slack.
+
 - Tree ACI also expands candidates across a non-unit branching vertex when
   at least two committed pivots agree at its local coordinate (#1435).
   The degree must be at least 3; the existing incoming-rank product slack
