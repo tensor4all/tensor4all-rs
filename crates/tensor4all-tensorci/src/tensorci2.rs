@@ -238,12 +238,12 @@ pub enum TCI2Termination {
     /// search), global-pivot history, and rank stability all converged.
     ///
     /// The bond errors are residual maxima over the sampled candidate rows and
-    /// columns, not over the full tensor, so this variant is a sampled
-    /// criterion and does not prove the tolerance on unsampled entries. Under
-    /// [`PivotSearchStrategy::Rook`] the search sweeps record last rook
-    /// pivots, but this variant is reported only after an exact `Full` sweep
-    /// found a bond error below tolerance, so it rests on the same sampled
-    /// bond errors as under `Full`.
+    /// columns, so this variant is a sampled criterion: for two sites those
+    /// cover the whole tensor, for more sites they do not prove the tolerance
+    /// on unsampled entries. Under [`PivotSearchStrategy::Rook`] the search
+    /// sweeps record last rook pivots, but this variant is reported only after
+    /// an exact `Full` sweep (one sweep, not the `ncheck_history` window) found
+    /// a bond error below tolerance, no global pivot and no rank growth.
     Converged,
     /// The recent rank history reached the configured maximum bond dimension.
     MaxBondDimension,
@@ -2096,7 +2096,20 @@ where
     // an exact `Full` sweep, and only it may report `Converged` (#1257).
     let mut certifying = false;
 
-    for iter in 0..options.max_iter {
+    // `max_iter` counts search sweeps; a certifying sweep after the last one
+    // is extra, so a `Rook` run that was already right is not turned into
+    // `MaxIterations` by the check.
+    let mut iter = 0usize;
+    let mut search_sweeps = 0usize;
+    loop {
+        if search_sweeps >= options.max_iter && !certifying {
+            break;
+        }
+        if !certifying {
+            search_sweeps += 1;
+        }
+        let this_iter = iter;
+        iter += 1;
         let (error_normalization, abs_tol) = options.sweep_tolerance(tci.max_sample_value)?;
         let sweep_options = if certifying {
             TCI2Options {
@@ -2111,7 +2124,7 @@ where
         let is_forward = match options.sweep_strategy {
             Sweep2Strategy::Forward => true,
             Sweep2Strategy::Backward => false,
-            Sweep2Strategy::BackAndForth => iter % 2 == 0,
+            Sweep2Strategy::BackAndForth => this_iter.is_multiple_of(2),
         };
 
         // Get extra index sets from history for non-strictly-nested mode
@@ -2206,7 +2219,7 @@ where
         if options.verbosity > 0 {
             println!(
                 "iteration = {}, rank = {}, error = {:.2e}, maxsamplevalue = {:.2e}, nglobalpivot = {}",
-                iter + 1,
+                this_iter + 1,
                 tci.rank(),
                 error_normalized,
                 tci.max_sample_value,

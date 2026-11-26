@@ -16,7 +16,8 @@
   `Full`'s sampled one: for two sites the candidate matrix is the whole tensor,
   up to the allowance for the final 1-site cleanup sweep; for more sites it is
   not a bound on the whole tensor. A caller that relied on early `Rook`
-  convergence now pays a `Full` sweep per attempt (about a `Full` sweep of
+  convergence now pays a `Full` sweep per attempt (not counted against
+  `max_iter`) (about a `Full` sweep of
   evaluations, with the dense candidate matrices in memory) and, where `Rook`
   was wrong, sees more sweeps, a larger rank or `MaxIterations` instead of a
   false `Converged`. No public type changed.

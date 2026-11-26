@@ -112,6 +112,30 @@ fn converged_implies_true_error_within_tolerance_for_both_strategies() {
 }
 
 #[test]
+fn the_certifying_sweep_does_not_spend_max_iter() {
+    // `Rook` meets the criterion on sweep 3 here; the exact sweep that
+    // follows must not turn a budget of 3 into `MaxIterations`.
+    let options = TCI2Options {
+        tolerance: TOL,
+        max_iter: 3,
+        pivot_search: PivotSearchStrategy::Rook,
+        max_nglobal_pivot: 0,
+        seed: Some(1),
+        ..TCI2Options::default()
+    };
+    let res = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+        |v: &Vec<usize>| ridge200(v[0], v[1]),
+        None,
+        vec![200, 200],
+        vec![vec![0, 0]],
+        options,
+    )
+    .unwrap();
+    assert_eq!(res.termination, TCI2Termination::Converged);
+    assert_eq!(res.errors.len(), 4, "3 search sweeps + 1 certifying sweep");
+}
+
+#[test]
 fn rook_still_converges_on_the_ridges() {
     // The verdict is stricter, not unreachable: on these smooth matrices the
     // exact sweep confirms the Rook pivots and the run converges.
