@@ -12,6 +12,14 @@
 //! the whole matrix. A fit-owned [`MultiIndexCache`] keyed by `x` serves every
 //! later request for an entry of the same point, so a point is not sampled
 //! again for another matrix entry while it stays retained.
+//!
+//! # Cache memory
+//!
+//! The cache uses the default retained-byte limit
+//! ([`tensor4all_core::DEFAULT_RETAINED_BYTE_LIMIT`]). That limit bounds the
+//! hash-table bytes only; it does not bound the `rows * cols` payload stored per
+//! point. Callers with wide matrices should watch
+//! [`MatrixSamplingStats::payload_bytes`] and bound their problem accordingly.
 
 use super::TciLinalg;
 use super::{crossinterpolate2_with_rng_linalg, seeded_rng, TCI2OptimizationResult, TCI2Options};
@@ -66,10 +74,16 @@ pub struct MatrixSamplingStats {
     pub cache_hits: usize,
     /// Hash-table bytes retained by the cache
     /// ([`MultiIndexCache::retained_bytes`]); excludes the matrix payloads.
+    /// The cache runs with the default retained-byte limit
+    /// ([`tensor4all_core::DEFAULT_RETAINED_BYTE_LIMIT`]), which bounds this
+    /// value only.
     pub table_bytes: usize,
     /// Matrix payload bytes held by the cache:
-    /// `cached points * rows * cols * size_of::<T>()`. The cache's own limit
-    /// does not bound this value.
+    /// `cached points * rows * cols * size_of::<T>()`. The default
+    /// retained-byte limit does **not** bound this value: it counts hash-table
+    /// bytes, not the `rows * cols` payload per point. Callers with wide
+    /// matrices should watch `payload_bytes` and bound their problem (number of
+    /// physical points, matrix size) accordingly.
     pub payload_bytes: usize,
 }
 
@@ -368,7 +382,9 @@ where
     ///
     /// Distinct points are resolved once per call: cached points are read from
     /// the cache, the remaining ones are passed to the callback in
-    /// first-occurrence order, and the results are inserted into the cache.
+    /// first-occurrence order in consecutive chunks of at most
+    /// `max_points_per_call` points (a deterministic split), and the results are
+    /// inserted into the cache.
     fn entries(&mut self, requests: &[(&[usize], usize, usize)]) -> Vec<T> {
         let mut slot_of: HashMap<&[usize], usize> = HashMap::new();
         let mut slots: Vec<PointSlot<T>> = Vec::new();
@@ -503,6 +519,17 @@ fn validate_matrix_problem(
 /// unwritten entries cannot be detected. The callback is infallible, like the
 /// scalar entry points, and is never asked for a point that is still cached.
 ///
+/// The points that one solver request needs and that are not cached are passed
+/// to the callback deterministically: in first-occurrence order, in consecutive
+/// chunks of at most `isize::MAX / (size_of::<T>() * rows * cols)` points. A
+/// request therefore costs one callback call unless that bound is exceeded.
+///
+/// The fit-owned cache uses the default retained-byte limit
+/// ([`tensor4all_core::DEFAULT_RETAINED_BYTE_LIMIT`]). That limit bounds
+/// hash-table bytes only, not the `rows * cols` payload stored per point, so
+/// callers with wide matrices should watch
+/// [`MatrixSamplingStats::payload_bytes`] and bound their problem accordingly.
+///
 /// Internally the problem is the chain `[rows, d_1, .., d_L, cols]` with
 /// `f(i, x, j) = F(x)[i, j]`, solved by the unchanged scalar TCI2 machinery.
 /// Only entries the solver requests enter the amplitude scale, so `tolerance`
@@ -585,9 +612,21 @@ where
 /// global pivot search, like
 /// [`crossinterpolate2_with_rng`](super::crossinterpolate2_with_rng).
 ///
+/// The callback contract, the deterministic batch split and the cache memory
+/// note of [`crossinterpolate2_matrix`] apply unchanged: the cache uses the
+/// default retained-byte limit
+/// ([`tensor4all_core::DEFAULT_RETAINED_BYTE_LIMIT`]), which bounds hash-table
+/// bytes only, not the `rows * cols` payload per point
+/// ([`MatrixSamplingStats::payload_bytes`]).
+///
 /// # Errors
 ///
-/// See [`crossinterpolate2_matrix`].
+/// Returns [`TCIError::InvalidConfiguration`] for a zero extent in `shape` or
+/// `local_dims`, invalid options, or physical dimensions the cache cannot key;
+/// [`TCIError::DimensionMismatch`] for `L == 0`, a pivot of the wrong length,
+/// or a matrix size that overflows; [`TCIError::IndexOutOfBounds`] for an
+/// out-of-range pivot; and [`TCIError::InvalidPivot`] when all initial pivots
+/// evaluate to zero.
 ///
 /// # Examples
 ///
