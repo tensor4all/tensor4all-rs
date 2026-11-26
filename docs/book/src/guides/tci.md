@@ -101,13 +101,12 @@ Within one two-site update the strategies differ. `PivotSearchStrategy::Full`
 as the bond error, a certified bound for that matrix. `PivotSearchStrategy::Rook`
 finds each pivot with an O(d) rook walk and stops when the current rook pivot
 and two more walks from other columns all find nothing above the threshold; its
-bond error during the sweeps is that last rook pivot, not a bound. Once the
-history criterion is met, TCI2 runs an exact `Full` sweep and reports
-`TCI2Termination::Converged` only if that sweep has bond error below the
-tolerance, no global pivot and no rank growth; otherwise it keeps sweeping with
-`Rook`. The verdict then has `Full`'s sampled meaning (the whole tensor for two
-sites), at the cost of a `Full` sweep and its dense candidate matrices in
-memory. This sweep does not count against `max_iter`.
+bond error is that last rook pivot, not a bound, so
+`TCI2Termination::Converged` under `Rook` does not prove the tolerance. `Rook`
+is a fast, inexact heuristic by design: the final error may exceed `tolerance`
+even after `Converged`, and it is not certified, because certification would
+cost the evaluation savings that are the reason to choose it. Use `Full` when
+the tolerance must hold.
 
 The `errors` vector tracks the normalized bond error after each half-sweep. The algorithm converges when:
 
