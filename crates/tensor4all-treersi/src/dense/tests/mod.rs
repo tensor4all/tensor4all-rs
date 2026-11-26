@@ -193,6 +193,11 @@ mod cuda {
     use super::*;
     use std::sync::Arc;
 
+    /// A private single-threaded CPU context for the host side of a CUDA `Exec`.
+    fn owned_cpu() -> CpuExecutionContext {
+        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap())
+    }
+
     /// A CUDA context, or a panic naming what failed.
     ///
     /// A missing device and a broken CUDA initialization both surface here as
@@ -200,10 +205,6 @@ mod cuda {
     /// report success while having run nothing, and an early return is invisible
     /// without `--nocapture`. `#[ignore]` is the only skip this file uses, and it
     /// is printed by libtest itself.
-    fn owned_cpu() -> CpuExecutionContext {
-        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap())
-    }
-
     fn cuda_execution() -> Arc<tensor4all_tensorbackend::CudaExecutionContext> {
         Arc::new(
             tensor4all_tensorbackend::CudaExecutionContext::new()

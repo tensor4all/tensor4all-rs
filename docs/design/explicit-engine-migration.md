@@ -208,13 +208,17 @@ stated reason, because converting them is an API change this crate set did not p
 | --- | --- |
 | `treetn` `contract`, `contract_src_with_rng` | context-free generic-`T` twins of `contract_in` / `contract_src_with_rng_in`; no engine in hand; removed with the implicit route in stage D2 |
 | `treersi` `hadamard_many` | `global-defaults`-gated wrapper over `hadamard_many_in`; an intended implicit twin |
-| `treersi` `row_interpolation` (CUDA arm) | needs a host CPU engine `Exec::Cuda` does not carry; the `_in` entry needs a companion host-context parameter (`tenferro-cuda` only) |
 | `itensorlike` `norm_squared_from_packed_sites` | fallback only for host-only chains with no CPU-owned site; `norm_squared` has no context parameter |
 | `aci` `default_context`, `elementwise_batched_erased` | the context-free entries' `ProcessGlobal` arm; each has an `*_in` twin |
 
 ### 3.5 F3c — the global context reached from inside an explicit path
 
-One site, and it is a removal blocker rather than an inventory row:
+One site, and it is a removal blocker rather than an inventory row. *Resolved in
+tensor4all-rs#1491 (Refs #1379): `Exec::Cuda` now carries a run-owned
+single-thread CPU context built by `run_in`, so the arm no longer reads the
+global. The library, not the caller, picks that context's thread count; a caller
+-supplied CPU context would need a companion parameter on the `_in` entries. The
+snippet below is the pre-fix code.*
 
 ```rust
 // crates/tensor4all-treersi/src/engine.rs:110-120
@@ -859,9 +863,9 @@ surface it changes.
   (today the graph runtime is "derived from the engine" and lives under its lock,
   `context.rs:1241-1246`). Also verify whether one runtime can serve CPU and CUDA
   (§6.7-2).
-- **A3 — `treersi/src/engine.rs:118`** (#1379). The CUDA LUCI arm uses
-  `default_cpu_execution_context()`. Take a CPU engine from the caller, or return a typed
-  refusal.
+- **A3 — `treersi/src/engine.rs:118`** (#1379). The CUDA LUCI arm used
+  `default_cpu_execution_context()`. Done in #1491: the arm uses a run-owned CPU context
+  from `run_in` (neither of the two options above; a caller-supplied engine stays open).
 
 ### Phase B — switch in place, small PRs, leaf-first
 

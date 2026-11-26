@@ -101,8 +101,9 @@ fn host_core_values<T: TreeRsiScalar>(
 /// `run_in` creates for that run: host dependency 1 of 2 of a CUDA run (the
 /// other is the input-core readback in [`host_core_values`]). See #1158 step 2
 /// for the device-resident sketch. This arm never reads a process-global
-/// context, so it works in a build without `tensor4all-core/global-defaults`
-/// and never contends with another thread holding the global backend.
+/// context for the rank decision, so it never contends with another thread
+/// holding the global backend. (A CUDA run as a whole still needs
+/// `global-defaults` for the readback in [`host_core_values`].)
 fn row_interpolation<T: TreeRsiScalar>(
     exec: &mut Exec<'_, '_>,
     matrix: Matrix<T>,
@@ -115,8 +116,7 @@ fn row_interpolation<T: TreeRsiScalar>(
         #[cfg(feature = "tenferro-cuda")]
         Exec::Cuda(_, cpu) => {
             // The CPU context was handed to this run by `run_in`; nothing is
-            // looked up from a process-global, so the arm behaves the same with
-            // and without `tensor4all-core/global-defaults`.
+            // looked up from a process-global here.
             tensor4all_core::matrix_luci_row_interpolation_owned_in(matrix, Some(options), cpu)
         }
     }
