@@ -86,6 +86,13 @@ pub struct TCI2Options {
     /// With `normalize_error = false`, this is an absolute threshold.
     /// Each half-sweep fixes its absolute threshold before updating any bond;
     /// local LU updates retain their separate numerical relative cutoff.
+    ///
+    /// The local LU updates and the final one-site sweep truncate at half of
+    /// this threshold, while the global search and the stop test use it as is.
+    /// If they shared one threshold, a bond whose residual sits just above
+    /// `tolerance` would be accepted by the search and cut again by the LU, so
+    /// the recorded error would alternate around `tolerance` and the run would
+    /// end in `MaxIterations` with the true error just above it (#1482).
     pub tolerance: f64,
     /// Maximum number of half-sweep iterations (default: `20`).
     ///
@@ -1672,6 +1679,10 @@ where
     max_sample
 }
 
+/// Fraction of the tolerance used as the LU truncation threshold of the local
+/// two-site updates and the final one-site sweep.
+const LOCAL_TOLERANCE_FRACTION: f64 = 0.5;
+
 /// Check convergence based on history of ranks, errors, and global pivots.
 ///
 /// Port of Julia's `convergencecriterion`.
@@ -2113,6 +2124,7 @@ where
         let this_iter = iter;
         iter += 1;
         let (error_normalization, abs_tol) = options.sweep_tolerance(tci.max_sample_value)?;
+        let lu_abs_tol = abs_tol * LOCAL_TOLERANCE_FRACTION;
         let sweep_options = if certifying {
             TCI2Options {
                 pivot_search: PivotSearchStrategy::Full,
@@ -2160,7 +2172,7 @@ where
                         batched_f: &batched_f,
                         left_orthogonal: true,
                         options: &sweep_options,
-                        abs_tol,
+                        abs_tol: lu_abs_tol,
                         extra_i_set: &extra_i_set[b + 1],
                         extra_j_set: &extra_j_set[b],
                     },
@@ -2177,7 +2189,7 @@ where
                         batched_f: &batched_f,
                         left_orthogonal: false,
                         options: &sweep_options,
-                        abs_tol,
+                        abs_tol: lu_abs_tol,
                         extra_i_set: &extra_i_set[b + 1],
                         extra_j_set: &extra_j_set[b],
                     },
@@ -2273,7 +2285,7 @@ where
         &f,
         true,
         1e-14,
-        abs_tol,
+        abs_tol * LOCAL_TOLERANCE_FRACTION,
         options.max_bond_dim.unwrap_or(usize::MAX),
         true,
         linalg,
