@@ -1,4 +1,4 @@
-//! Candidate expansion across vertices of local dimension 1 (#1352, #1435).
+//! Candidate expansion across unit vertices and locally fixed junctions (#1435).
 //!
 //! A commit of edge `a -> b` reads as rows the local coordinate of `a` times
 //! the candidate sets of `a`'s other incoming bonds, and as columns the same
@@ -9,7 +9,14 @@
 //! already offers, and every update records a residual of about zero on its
 //! own local matrix while the output is wrong (#1435, mechanism 1).
 //!
-//! The commit therefore makes the unit vertex transparent for one of its other
+//! A branching vertex with a local index can have the same lock when its
+//! retained pivots all use one local coordinate. It qualifies when its degree
+//! is at least 3 and at least two retained pivots agree at that coordinate,
+//! matching TreeTCI's junction-scoped rule (#1436). This is a heuristic, not
+//! proof that the site is a delta: every local value remains in the commit's
+//! row/column grid. Non-unit chain vertices keep their original candidates.
+//!
+//! The commit makes a qualifying vertex transparent for one of its other
 //! bonds, as TreeTCI's `DefaultProposer` does since #1434 (`side_candidates`
 //! in `tensor4all-treetci`):
 //!
@@ -31,10 +38,10 @@
 //!   of every incoming bond (`CandidateBasisProjection`), as for Guard
 //!   samples.
 //!
-//! Only the current candidate sets of the neighbouring bonds are read. No
-//! retained pivot is re-validated and no earlier local matrix or history is
-//! replayed (#1372). A tree whose unit vertices are all leaves, or that has
-//! none, never expands, and its runs are unchanged.
+//! The predicate reads only the retained component samples' local coordinates;
+//! expansion reads the current candidate sets of the neighbouring bonds. No
+//! retained pivot is evaluated again and no earlier local matrix or history
+//! is replayed (#1372).
 
 use crate::{
     frames::InputFrameStore,
@@ -45,7 +52,7 @@ use crate::{
     Result, TreeAciError, TreeAciNode, TreeAciOptions, TreeAciScalar,
 };
 
-/// A unit vertex is expanded while its other bonds offer fewer than this many
+/// A qualifying vertex is expanded while its other bonds offer fewer than this many
 /// times the edge's current rank.
 ///
 /// The value 2 is the slack a binary site would add. It is the untuned
@@ -57,22 +64,26 @@ pub(crate) const UNIT_VERTEX_EXPANSION_FACTOR: usize = 2;
 ///
 /// For each side of the edge (the source of `forward`, then the source of its
 /// reverse) whose vertex has local dimension 1 and at least one other bond,
-/// returns that side's largest-rank other bond `n -> a` when the product of
+/// or has degree at least 3 and satisfies `junction_agrees`, returns that
+/// side's largest-rank other bond `n -> a` when the product of
 /// the other bonds' ranks is below
 /// [`UNIT_VERTEX_EXPANSION_FACTOR`] times the edge's rank. Ties keep the first
 /// bond in `incoming_to_from` order. The result is empty for an edge with no
-/// such side, which is every edge of a tree without unit vertices.
+/// such side. `junction_agrees` checks whether at least two retained pivots
+/// agree at that side's local coordinate.
 ///
-/// The test reads only the tree's structure and `edge_ranks`.
+/// The test reads only the tree's structure, `edge_ranks` and pivot metadata.
 ///
 /// # Errors
 ///
 /// Returns [`TreeAciError::InternalInvariant`] when `forward`, a node or a
-/// bond rank is unknown to `problem` / `edge_ranks`.
+/// bond rank is unknown to `problem` / `edge_ranks`, and propagates errors
+/// from the junction predicate (unknown pivot edges or component samples).
 pub(crate) fn unit_vertex_expansion_targets<V: TreeAciNode>(
     problem: &PreparedTreeProblem<V>,
     edge_ranks: &[usize],
     forward: DirectedEdgeId,
+    mut junction_agrees: impl FnMut(DirectedEdgeId) -> Result<bool>,
 ) -> Result<Vec<DirectedEdgeId>> {
     let rank_of = |directed: DirectedEdgeId| {
         edge_ranks
@@ -114,7 +125,7 @@ pub(crate) fn unit_vertex_expansion_targets<V: TreeAciNode>(
                 message: "unit-vertex expansion source has no physical plan",
             })?
             .local_dim;
-        if local_dim != 1 {
+        if local_dim != 1 && (directed.incoming_to_from.len() < 2 || !junction_agrees(side)?) {
             continue;
         }
         // Saturating arithmetic only rules out overflow. A saturated product
@@ -138,6 +149,39 @@ pub(crate) fn unit_vertex_expansion_targets<V: TreeAciNode>(
         }
     }
     Ok(targets)
+}
+
+/// Whether at least two committed pivots agree at this endpoint's local
+/// coordinate (the combined local index for a multi-site node).
+fn retained_pivots_agree<T: TreeAciScalar, V: TreeAciNode>(
+    state: &TreeAciState<'_, T, V>,
+    side: DirectedEdgeId,
+) -> Result<bool> {
+    let pairs = state
+        .pivots
+        .per_edge
+        .get(side / 2)
+        .ok_or(TreeAciError::InternalInvariant {
+            message: "junction expansion references an unknown pivot edge",
+        })?;
+    if pairs.len() < 2 {
+        return Ok(false);
+    }
+    let mut first = None;
+    // INVARIANT: this O(rank) metadata scan is done at most once per branching
+    // endpoint per commit, with no allocation, tensor readout or target call.
+    for &(even, odd) in pairs {
+        // Pair entries belong to directed edges 2e and 2e + 1 respectively
+        // (transaction::pivot_pairs), independently of the commit direction.
+        let id = if side.is_multiple_of(2) { even } else { odd };
+        let coordinate = state.sample_arena.record(side, id)?.local_coordinate;
+        match first {
+            None => first = Some(coordinate),
+            Some(value) if value != coordinate => return Ok(false),
+            Some(_) => {}
+        }
+    }
+    Ok(true)
 }
 
 /// Candidate sets one commit expanded, and what restores the state.
@@ -219,7 +263,7 @@ impl<T: TreeAciScalar> UnitVertexExpansion<T> {
 }
 
 /// Expands the candidate sets the commit of `forward` reads across a unit
-/// vertex (see the module documentation).
+/// vertex or a locally fixed branching vertex (see the module documentation).
 ///
 /// Each target is charged against the shape limits of the commit it feeds:
 /// the side it enlarges (the rows for a target on the forward side, the
@@ -252,7 +296,10 @@ where
     T: TreeAciScalar,
     V: TreeAciNode,
 {
-    let targets = unit_vertex_expansion_targets(&state.problem, &state.edge_ranks, forward)?;
+    let targets =
+        unit_vertex_expansion_targets(&state.problem, &state.edge_ranks, forward, |side| {
+            retained_pivots_agree(state, side)
+        })?;
     if targets.is_empty() {
         return Ok(None);
     }

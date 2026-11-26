@@ -83,7 +83,7 @@ retained candidates of `c -> p`. The invariant is required on every returned
 tree. A unit-test helper checks it; the library does not, because the check
 evaluates every retained candidate.
 
-### Unit vertices (#1435)
+### Unit vertices and locally fixed junctions (#1435)
 
 A vertex of local dimension 1 (a node without sites, or with sites of
 dimension 1 only) contributes no local coordinate to a commit's rows or
@@ -98,7 +98,8 @@ Each commit therefore makes a unit vertex transparent for one of its other
 bonds, as TreeTCI's `DefaultProposer` does since #1434 (`crate::unit_vertex`):
 
 - **When.** A side of the edge whose vertex has local dimension 1 and at
-  least one other bond, while the product of those bonds' ranks is below
+  least one other bond, or a non-unit branching vertex satisfying the local
+  agreement predicate below, while the product of the other bonds' ranks is below
   `UNIT_VERTEX_EXPANSION_FACTOR = 2` times the edge's rank. The factor is the
   untuned #1434 constant; it was not tuned for tree ACI.
 - **Which bond.** The largest-rank other bond `n -> a` (ties keep the first).
@@ -121,10 +122,11 @@ bonds, as TreeTCI's `DefaultProposer` does since #1434 (`crate::unit_vertex`):
   not checked ahead: an expanded commit over one of them fails with
   `ResourceLimit`.
 
-The expansion reads only the current candidate sets of the neighbouring bonds:
-no retained pivot is re-validated and no earlier matrix or history is replayed
-(#1372). A tree with no unit vertex, or with unit vertices only at leaves,
-never expands. The cut-back means no later step sees the expanded entries, so:
+The junction predicate reads the committed component samples' local coordinates;
+the expansion reads the current candidate sets of the neighbouring bonds.
+No retained pivot is evaluated again and no earlier matrix or history is
+replayed (#1372). Without a qualifying unit vertex or locally fixed junction,
+no expansion runs. The cut-back means no later step sees the expanded entries, so:
 
 - the return pass's re-commit excursions (#1450) are planned exactly as
   without it, and a re-commit, being an ordinary commit, expands by the same
@@ -169,7 +171,38 @@ Measured on the #1435 table (tolerance 1e-10, 11 seeds): 8 seeds now stop
 zero output (mechanism 2 of #1435), which the third Guard stage below removes
 (#1466). The same table with the unit
 centre absorbed into a binary site (case B) and the G0 and star workloads
-(213 runs) have no unit vertex and are bit-identical to `main`.
+(213 runs) have no unit vertex and were bit-identical to that base before the
+junction extension below.
+
+#### Local agreement at non-unit branching vertices
+
+Case B absorbs the centre into a binary site whose local coordinate is
+constant on the support, so it has the same rank lock without a dimension-1
+vertex. A non-unit endpoint now also qualifies when its degree is at least 3
+and at least two of the edge's committed pivots agree at that endpoint's
+local coordinate. This is the junction-scoped TreeTCI rule (#1436 / #1470),
+with the predicate and slack accepted in #1435 unchanged from measurement.
+
+The pivots are `state.pivots.per_edge[side / 2]`: entry 0 of each pair belongs
+to directed edge `2e`, entry 1 to `2e + 1`. Agreement reads only the selected
+sample records' `local_coordinate`, the combined local index for a multi-site
+node. It needs no operator evaluation, tensor readout, allocation or history.
+The scan is O(rank) at each branching endpoint per commit. The rank-product
+slack, factor 2, largest-rank neighbour selection, shape limits, rollback and
+one-commit lifetime are the same as for unit vertices.
+
+Agreement is a reason to explore farther, not proof that a site is a delta.
+Every value of the junction's local index is still crossed with the enlarged
+incoming sets. Non-unit leaves and degree-2 chain sites never use this
+predicate. The broader chain-site `value2` prototype was rejected.
+
+In the [accepted measurement](https://github.com/tensor4all/tensor4all-rs/issues/1435#issuecomment-7181759972)
+(base `794d9856`, tolerance 1e-10, 11 seeds), case B reaches (12, 1, 12) on
+every seed, with dense relative error at most 6.1e-16 and 1.22 times the points
+(259,746 versus 213,415). Case A, the 213 G0 and star runs, and the 180 G0
+`min_sweeps = 1` runs were identical to the same base: the new predicate never
+fired there. Case A's remaining zero-output misses are handled separately by
+the third Guard stage below.
 
 ### Third Guard stage: small sides around the starts (#1466)
 

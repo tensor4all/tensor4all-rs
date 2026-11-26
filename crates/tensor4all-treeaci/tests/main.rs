@@ -11,6 +11,7 @@ mod unit_junction;
 mod audit_regressions;
 mod branch_degree;
 mod branch_diagnostics;
+mod delta_vertex_junction;
 mod f7_session_context;
 mod g0_convergence;
 mod heavy_audit_regressions;
