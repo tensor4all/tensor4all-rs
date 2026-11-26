@@ -1,3 +1,5 @@
+mod exact_local;
+
 use super::*;
 use num_complex::Complex64;
 use rand::{Rng, SeedableRng};

@@ -3,7 +3,7 @@ use std::cell::Cell;
 
 use crate::treetn::contraction::{
     zipup_control::{AbortAtRank, Complete, ZipupControl},
-    GlobalLeaves, IdentityNodes, LeafOps, ZipupTopologyMode,
+    ContractionTopology, GlobalLeaves, IdentityNodes, LeafOps,
 };
 use tensor4all_core::{FactorizeOptions, FactorizeResult, TensorIndex};
 
@@ -88,7 +88,7 @@ fn run<C: ZipupControl<IdxTensor, usize>>(
         crate::CanonicalForm::Unitary,
         options.svd_policy,
         options.max_bond_dim,
-        ZipupTopologyMode::PruneScalarSubtrees,
+        ContractionTopology::PruneScalarSubtrees,
         &IdentityNodes::new(),
         leaves,
         control,

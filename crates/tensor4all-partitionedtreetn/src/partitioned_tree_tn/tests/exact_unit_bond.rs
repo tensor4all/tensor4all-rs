@@ -345,3 +345,178 @@ fn exact_unit_bond_validates_method_specific_options_before_shortcuts() {
         }
     }
 }
+
+fn mixed_scalar_branch(
+    summed: bool,
+) -> (
+    PartitionedTreeTN,
+    PartitionedTreeTN,
+    Vec<(Projector, IdxTensor)>,
+) {
+    let mid = DynIndex::new_dyn(2);
+    let row = DynIndex::new_dyn(2);
+    let shared = DynIndex::new_dyn(2);
+    let shared_x = DynIndex::new_dyn(2);
+    let shared_y = DynIndex::new_dyn(2);
+    let x = DynIndex::new_dyn(2);
+    let y = DynIndex::new_dyn(2);
+    let build = |sites: Vec<Vec<DynIndex>>, rank: usize, offset: f64| {
+        let bonds: Vec<_> = (0..3).map(|_| DynIndex::new_dyn(rank)).collect();
+        let tensors = sites
+            .into_iter()
+            .enumerate()
+            .map(|(node, mut indices)| {
+                if node == 0 {
+                    indices.extend(bonds.iter().cloned());
+                } else {
+                    indices.push(bonds[node - 1].clone());
+                }
+                let len = indices.iter().map(|i| i.dim).product();
+                let values: Vec<_> = (0..len)
+                    .map(|i| (i as f64 + offset + node as f64).cos())
+                    .collect();
+                IdxTensor::from_dense(indices, values).unwrap()
+            })
+            .collect();
+        TreeTN::from_tensors(tensors, vec![0, 1, 2, 3]).unwrap()
+    };
+    let left_tree = build(
+        vec![
+            vec![mid.clone()],
+            vec![shared.clone()],
+            vec![x, shared_x.clone()],
+            vec![y, shared_y.clone()],
+        ],
+        2,
+        0.2,
+    );
+    let left_dense = left_tree.to_dense().unwrap();
+    let left = partition(left_tree);
+    let mut patches = Vec::new();
+    let mut reference = Vec::new();
+    for r in 0..2 {
+        let key = Projector::from_pairs([(row.clone(), r)]).unwrap();
+        let mut expected: Option<IdxTensor> = None;
+        for m in 0..2 {
+            if !summed && r != m {
+                continue;
+            }
+            let tree = build(
+                vec![
+                    vec![mid.clone(), row.clone()],
+                    vec![shared.clone()],
+                    vec![shared_x.clone()],
+                    vec![shared_y.clone()],
+                ],
+                m + 1,
+                0.4 + m as f64,
+            );
+            let patch = SubDomainTreeTN::new(
+                tree,
+                Projector::from_pairs([(row.clone(), r), (mid.clone(), m)]).unwrap(),
+            )
+            .unwrap();
+            let dense = left_dense
+                .contract_pair(&patch.data().to_dense().unwrap())
+                .unwrap();
+            expected = Some(match expected {
+                Some(previous) => previous.add(&dense).unwrap(),
+                None => dense,
+            });
+            patches.push(patch);
+        }
+        reference.push((key, expected.unwrap()));
+    }
+    (
+        left,
+        PartitionedTreeTN::from_subdomains(patches).unwrap(),
+        reference,
+    )
+}
+
+#[test]
+fn exact_unit_bond_mixed_pairs_reconcile_scalar_branches_in_every_output() {
+    for summed in [false, true] {
+        let (left, right, reference) = mixed_scalar_branch(summed);
+        let wanted: Vec<_> = reference.iter().map(|(key, _)| key.clone()).collect();
+        for method in [
+            ContractionMethod::Zipup,
+            ContractionMethod::Fit,
+            ContractionMethod::Src,
+        ] {
+            let options = ContractionOptions::new(method)
+                .with_max_bond_dim(8)
+                .with_svd_policy(SvdTruncationPolicy::new(0.0));
+            let pairs = left.contract_pairs(&right, &0, &options, None).unwrap();
+            assert_eq!(pairs.len(), if summed { 4 } else { 2 });
+            let mut exact_count = 0;
+            let mut compressed_count = 0;
+            for (a, b, c) in pairs {
+                if b.max_bond_dim() == 1 {
+                    exact_count += 1;
+                    assert!(c.data().link_dims().iter().all(|&dim| dim == 2));
+                    let reference = a
+                        .data()
+                        .to_dense()
+                        .unwrap()
+                        .contract_pair(&b.data().to_dense().unwrap())
+                        .unwrap();
+                    assert_dense(c.data(), &reference);
+                } else {
+                    compressed_count += 1;
+                    let reference =
+                        contraction::contract(a.data(), b.data(), &0, options.clone()).unwrap();
+                    assert_eq!(c.data().node_names(), reference.node_names());
+                    assert_dense(c.data(), &reference.to_dense().unwrap());
+                }
+            }
+            assert_eq!(exact_count, if summed { 2 } else { 1 });
+            assert_eq!(compressed_count, exact_count);
+            for selected in [false, true] {
+                let result = if selected {
+                    left.contract_selected(&right, &0, options.clone(), &wanted)
+                } else {
+                    left.contract(&right, &0, options.clone())
+                }
+                .unwrap();
+                assert_eq!(result.len(), 2);
+                for (key, expected) in &reference {
+                    let patch = result.get(key).unwrap();
+                    assert_eq!(
+                        patch.data().node_count(),
+                        if method == ContractionMethod::Zipup {
+                            3
+                        } else {
+                            4
+                        }
+                    );
+                    assert_eq!(
+                        patch.data().node_index(&1).is_none(),
+                        method == ContractionMethod::Zipup
+                    );
+                    assert_dense(patch.data(), expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn exact_unit_bond_valid_compatible_empty_selection_does_not_contract_a_pair() {
+    let site = DynIndex::new_dyn(2);
+    let single = partition(
+        TreeTN::from_tensors(
+            vec![IdxTensor::from_dense(vec![site], vec![1.0, 2.0]).unwrap()],
+            vec![0],
+        )
+        .unwrap(),
+    );
+    let (result, attempts) =
+        count_pairs(|| single.contract_selected(&single, &0, ContractionOptions::default(), &[]));
+    assert!(result.unwrap().is_empty());
+    assert_eq!(attempts, 0);
+    let (result, attempts) =
+        count_pairs(|| single.contract_selected(&single, &1, ContractionOptions::default(), &[]));
+    assert!(matches!(result, Err(PartitionedTreeTNError::InvalidCenter)));
+    assert_eq!(attempts, 0);
+}

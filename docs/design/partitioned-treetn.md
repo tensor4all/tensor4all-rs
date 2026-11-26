@@ -153,8 +153,8 @@ For each compatible projector pair, the ordinary partition operations
 
 1. contracts the already masked TreeTNs locally and exactly when every link
    of either operand has dimension one (including trees without links), using
-   `apply_linear_operator` with `ApplyOptions::naive()` and already-bound
-   indices; otherwise uses `tensor4all_treetn::contraction::contract` at the
+   `tensor4all_treetn::contraction::contract_local_exact`; otherwise uses
+   `tensor4all_treetn::contraction::contract` at the
    explicit center;
 2. keeps projector entries only for surviving external full indices; and
 3. combines duplicate output projectors with strict TreeTN addition and the
@@ -162,13 +162,28 @@ For each compatible projector pair, the ordinary partition operations
 
 The dimension-one rule depends only on links; local tensors may be arbitrary,
 including singular maps, phases and multi-leg copy tensors. The exact pair
-inherits the other operand's link dimensions and ignores the rank cap and
-truncation threshold. Options are still validated before this shortcut through
-the owning `ContractionOptions::validate` seam. Exact local apply establishes no
+inherits the other operand's dimensions on every retained link and ignores the
+rank cap and truncation threshold. Its topology follows the selected method:
+Zipup uses `ContractionTopology::PruneScalarSubtrees`; Fit and SRC use
+`PreserveInputTopology`. The exact and compressed Zipup paths share a metadata
+plan for rooted-tree pruning and chain final-block emission. Exact cleanup
+absorbs omitted leaf tensors with local contractions only, without changing
+surviving bonds. This keeps mixed exact/compressed pairs compatible both within
+one group sum and across distinct output groups. Scalar bridge nodes remain;
+the rooted schedule retains the requested center for fully scalar results.
+Chain-vs-rooted routing preserves Zipup's existing full site-space comparison,
+including directed bra/ket spaces whose sets differ but fully contract.
+
+Options are still validated before this shortcut through the owning
+`ContractionOptions::validate` seam. Exact local contraction establishes no
 orthogonal gauge, so it returns empty canonical metadata. An output with one
 contribution is returned unchanged; multiple contributions are summed exactly
 and truncated once under the call's policy. The adaptive probe/outcome adapter
 continues to use its requested contraction algorithm and stopping policy.
+Standalone `SubDomainTreeTN::contract` likewise retains its requested compressed
+pair policy. Invalid common partition options use `InvalidOptions`; owner
+initialization/RSVD/SRC validation errors retain their typed
+`TreeTNOperationError::InvalidConfiguration` source under `TreeTN`.
 
 ### Sum engine
 

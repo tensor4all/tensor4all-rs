@@ -36,7 +36,11 @@ use tensor4all_treetn::{
 /// trees without links. The site tensors are arbitrary: signs, phases, dense
 /// local matrices, singular projectors, and copy tensors need no identity,
 /// unitarity, or invertibility assumption. The pair inherits the other
-/// operand's link dimensions. Pairs where both operands have a link dimension
+/// operand's dimensions on every retained link. With Zipup, site-free subtrees
+/// are absorbed by exact local contractions following the same topology plan
+/// as compressed Zipup; Fit and SRC retain the input topology. Exact and
+/// compressed contributions therefore share one output tree in a mixed call.
+/// Pairs where both operands have a link dimension
 /// above one use the requested contraction method as usual.
 ///
 /// A single contribution is returned without further truncation. Multiple
@@ -1213,6 +1217,10 @@ where
     /// when the refinement grid has more than [`AUTOMATIC_REFINEMENT_LIMIT`]
     /// atoms, [`PartitionedTreeTNError::GroupSumLimit`] when an exact group sum
     /// would exceed the configured limit, or a typed TreeTN/backend error.
+    /// Method-specific initialization, RSVD, and SRC option failures are
+    /// [`PartitionedTreeTNError::TreeTN`] with a
+    /// `TreeTNOperationError::InvalidConfiguration` source; the other invalid
+    /// options listed above use [`PartitionedTreeTNError::InvalidOptions`].
     /// The operation returns a new partition, so failure cannot mutate either input.
     pub fn contract(
         &self,
@@ -1341,7 +1349,11 @@ where
     /// output layouts, [`PartitionedTreeTNError::GroupSumLimit`] when a wanted
     /// output's exact sum would exceed the configured limit, or a typed
     /// TreeTN/backend error. Operand validation runs even when no pair is
-    /// selected. Neither input is mutated.
+    /// selected. Method-specific invalid initialization, RSVD, or SRC options
+    /// use [`PartitionedTreeTNError::TreeTN`] with an
+    /// `TreeTNOperationError::InvalidConfiguration` source; other invalid
+    /// options use [`PartitionedTreeTNError::InvalidOptions`]. Neither input
+    /// is mutated.
     ///
     /// # Examples
     ///

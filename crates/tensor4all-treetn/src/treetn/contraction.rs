@@ -57,11 +57,8 @@ use tensor4all_tensorbackend::ExecutionContext;
 
 use super::TreeTN;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ZipupTopologyMode {
-    PruneScalarSubtrees,
-    PreserveInputTopology,
-}
+mod exact_local;
+pub use exact_local::{contract_local_exact, ContractionTopology};
 
 pub(super) mod randomized;
 pub use randomized::{contract_with_rng, contract_with_rng_in};
@@ -1030,7 +1027,7 @@ where
             form,
             svd_policy,
             max_bond_dim,
-            ZipupTopologyMode::PruneScalarSubtrees,
+            ContractionTopology::PruneScalarSubtrees,
             &IdentityNodes::new(),
             &GlobalLeaves,
         )
@@ -1079,7 +1076,7 @@ where
             CanonicalForm::Unitary,
             svd_policy,
             max_bond_dim,
-            ZipupTopologyMode::PruneScalarSubtrees,
+            ContractionTopology::PruneScalarSubtrees,
             identity_nodes,
             &GlobalLeaves,
         )
@@ -1132,7 +1129,7 @@ where
             form,
             svd_policy,
             max_bond_dim,
-            ZipupTopologyMode::PreserveInputTopology,
+            ContractionTopology::PreserveInputTopology,
             &IdentityNodes::new(),
             leaves,
         )
@@ -1251,7 +1248,7 @@ where
         chain: &[V],
         svd_policy: Option<SvdTruncationPolicy>,
         max_bond_dim: Option<usize>,
-        topology_mode: ZipupTopologyMode,
+        topology_mode: ContractionTopology,
         leaves: &dyn LeafOps<T>,
     ) -> Result<Self>
     where
@@ -1263,6 +1260,13 @@ where
         if node_count == 0 {
             return Err(anyhow::anyhow!("contract_zipup: empty chain"));
         }
+        let retained_nodes = exact_local::output_nodes(
+            self,
+            center,
+            topology_mode,
+            Some(chain),
+            exact_local::output_site_nodes(self, other),
+        )?;
 
         // Put both operands in exact QR form at the first sweep site before
         // changing their internal indices. This keeps the zip-up remainder
@@ -1366,7 +1370,7 @@ where
             let left_inds =
                 indices_except_exact(&contracted.external_indices(), &[right_a, right_b]);
 
-            if left_inds.is_empty() && topology_mode == ZipupTopologyMode::PruneScalarSubtrees {
+            if !retained_nodes.contains(node) {
                 remainder = Some(contracted);
                 continue;
             }
@@ -1448,13 +1452,9 @@ where
             .filter(|index| !last_sites.contains(*index))
             .cloned()
             .collect();
-        let right_inds_exist = final_indices.iter().any(|index| last_sites.contains(index));
-
-        if (left_inds.is_empty() || !right_inds_exist)
-            && topology_mode == ZipupTopologyMode::PruneScalarSubtrees
-        {
+        if !retained_nodes.contains(penultimate) || !retained_nodes.contains(last) {
             result_tensors.insert(
-                if left_inds.is_empty() {
+                if !retained_nodes.contains(penultimate) {
                     last.clone()
                 } else {
                     penultimate.clone()
@@ -1557,13 +1557,13 @@ where
 
         if result.node_index(center).is_some() {
             match topology_mode {
-                ZipupTopologyMode::PruneScalarSubtrees => result.truncate_impl(
+                ContractionTopology::PruneScalarSubtrees => result.truncate_impl(
                     [center.clone()],
                     svd_policy,
                     max_bond_dim,
                     "contract_zipup: final truncate",
                 )?,
-                ZipupTopologyMode::PreserveInputTopology => result.canonicalize_impl(
+                ContractionTopology::PreserveInputTopology => result.canonicalize_impl(
                     [center.clone()],
                     CanonicalForm::Unitary,
                     "contract_zipup: move center",
@@ -1582,7 +1582,7 @@ where
         form: CanonicalForm,
         svd_policy: Option<SvdTruncationPolicy>,
         max_bond_dim: Option<usize>,
-        topology_mode: ZipupTopologyMode,
+        topology_mode: ContractionTopology,
         identity_nodes: &IdentityNodes<T::Index, V>,
         leaves: &dyn LeafOps<T>,
     ) -> Result<Self>
@@ -1613,7 +1613,7 @@ where
         form: CanonicalForm,
         svd_policy: Option<SvdTruncationPolicy>,
         max_bond_dim: Option<usize>,
-        topology_mode: ZipupTopologyMode,
+        topology_mode: ContractionTopology,
         identity_nodes: &IdentityNodes<T::Index, V>,
         leaves: &dyn LeafOps<T>,
         control: C,
@@ -1638,35 +1638,31 @@ where
         }
 
         if form == CanonicalForm::Unitary {
-            let has_output_sites = self.node_names().into_iter().any(|node| {
-                let Some(a) = self.site_space(&node) else {
-                    return false;
-                };
-                let Some(b) = other.site_space(&node) else {
-                    return true;
-                };
-                a != b
-            });
-            if has_output_sites {
-                if let Some(chain) = self.chain_order(center) {
-                    // The chain schedule hands exactly one remainder per edge to
-                    // its successor, so it cannot emit a node without one and
-                    // does not take `identity_nodes` into account; a chain-shaped
-                    // first operand therefore keeps this schedule and factorizes
-                    // every node.
-                    let network = self.contract_zipup_chain(
-                        other,
-                        center,
-                        &chain,
-                        svd_policy,
-                        max_bond_dim,
-                        topology_mode,
-                        leaves,
-                    )?;
-                    return control.finish(network);
-                }
+            if let Some(chain) = exact_local::zipup_chain_order(self, other, center) {
+                // The chain schedule hands exactly one remainder per edge to
+                // its successor, so it cannot emit a node without one and
+                // does not take `identity_nodes` into account; a chain-shaped
+                // first operand therefore keeps this schedule and factorizes
+                // every node.
+                let network = self.contract_zipup_chain(
+                    other,
+                    center,
+                    &chain,
+                    svd_policy,
+                    max_bond_dim,
+                    topology_mode,
+                    leaves,
+                )?;
+                return control.finish(network);
             }
         }
+        let retained_nodes = exact_local::output_nodes(
+            self,
+            center,
+            topology_mode,
+            None,
+            exact_local::output_site_nodes(self, other),
+        )?;
 
         // 2. Replace internal indices with fresh IDs to avoid collision
         let tn_a = self.sim_internal_inds();
@@ -1855,7 +1851,7 @@ where
             let excluded_parent_bonds = [bond_to_dest_a, bond_to_dest_b];
             let left_inds = indices_except_exact(&c_temp_indices, &excluded_parent_bonds);
 
-            if left_inds.is_empty() && topology_mode == ZipupTopologyMode::PruneScalarSubtrees {
+            if !retained_nodes.contains(source_name) {
                 // If no left indices remain, pass the tensor directly to destination.
                 intermediate_tensors
                     .entry(destination_name.clone())
@@ -2325,7 +2321,7 @@ where
             form,
             svd_policy,
             max_bond_dim,
-            ZipupTopologyMode::PruneScalarSubtrees,
+            ContractionTopology::PruneScalarSubtrees,
             &IdentityNodes::new(),
             &SessionLeaves(context.clone()),
         )

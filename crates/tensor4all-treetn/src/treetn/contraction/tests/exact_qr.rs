@@ -20,7 +20,7 @@ use tensor4all_core::{
 use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext, ExecutionContext};
 
 use crate::treetn::contraction::{
-    GlobalLeaves, IdentityNodes, LeafOps, SessionLeaves, ZipupTopologyMode,
+    ContractionTopology, GlobalLeaves, IdentityNodes, LeafOps, SessionLeaves,
 };
 use crate::{CanonicalForm, TreeTN};
 
@@ -176,7 +176,7 @@ fn check<T: TensorElement>(
                     CanonicalForm::Unitary,
                     Some(policy),
                     None,
-                    ZipupTopologyMode::PruneScalarSubtrees,
+                    ContractionTopology::PruneScalarSubtrees,
                     &IdentityNodes::new(),
                     &leaves,
                 )

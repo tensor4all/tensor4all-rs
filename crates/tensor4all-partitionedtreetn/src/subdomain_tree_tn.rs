@@ -11,9 +11,8 @@ use tensor4all_core::{
     TagSetLike, TensorElement,
 };
 use tensor4all_treetn::{
-    apply_linear_operator,
-    contraction::{self, ContractionMethod, ContractionOptions},
-    ApplyOptions, LinearOperator, SiteIndexNetwork, SumEngine, TreeTN, TruncationOptions,
+    contraction::{self, ContractionMethod, ContractionOptions, ContractionTopology},
+    SiteIndexNetwork, SumEngine, TreeTN, TruncationOptions,
 };
 
 /// A TreeTN together with the projector defining its subdomain.
@@ -722,6 +721,10 @@ where
     /// Compatible projectors are merged, then entries for site indices absent
     /// from the contracted output are removed. The returned subdomain retains
     /// the left budget metadata and never stores `center`.
+    /// This standalone operation always uses the requested contraction method
+    /// and truncation policy, including dimension-one operands. By contrast,
+    /// [`crate::PartitionedTreeTN::contract`] and `contract_selected` contract
+    /// dimension-one patch pairs exactly before any output-group truncation.
     ///
     /// # Errors
     ///
@@ -732,6 +735,8 @@ where
     /// [`PartitionedTreeTNError::InvalidCenter`] for an absent center,
     /// [`PartitionedTreeTNError::InvalidOptions`] for forbidden dense/reference
     /// options, or [`PartitionedTreeTNError::TreeTN`] for contraction failures.
+    /// The latter wraps `TreeTNOperationError::InvalidConfiguration` for invalid
+    /// initialization, RSVD, or SRC options, preserving the typed source.
     /// Returns `Ok(None)` when the projector regions conflict.
     ///
     /// # Examples
@@ -786,22 +791,12 @@ where
             return Ok(None);
         };
         let data = if exact_unit_bonds && (self.max_bond_dim() == 1 || other.max_bond_dim() == 1) {
-            // The site indices are already bound by full identity. Empty maps
-            // request no relabeling; naive apply contracts local tensors and
-            // fuses link pairs, whose dimensions are 1 * the other link's.
-            let operator = LinearOperator::new_multi(
-                other.data.clone(),
-                std::collections::HashMap::new(),
-                std::collections::HashMap::new(),
-            );
-            apply_linear_operator(
-                &operator,
-                &self.data,
-                ApplyOptions {
-                    center: Some(center.clone()),
-                    ..ApplyOptions::naive()
-                },
-            )?
+            let topology = if options.method == ContractionMethod::Zipup {
+                ContractionTopology::PruneScalarSubtrees
+            } else {
+                ContractionTopology::PreserveInputTopology
+            };
+            contraction::contract_local_exact(&self.data, &other.data, center, topology)?
         } else {
             contraction::contract(&self.data, &other.data, center, options)?
         };

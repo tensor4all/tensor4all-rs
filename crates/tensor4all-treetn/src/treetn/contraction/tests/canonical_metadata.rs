@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::treetn::contraction::{
-    GlobalLeaves, IdentityNodes, LeafOps, SessionLeaves, ZipupTopologyMode,
+    ContractionTopology, GlobalLeaves, IdentityNodes, LeafOps, SessionLeaves,
 };
 
 /// A four-node GHZ state with amplitudes 1 and 8, and a bond-one local
@@ -81,7 +81,7 @@ fn truncating_svd_tree_zipup_certifies_every_center_on_both_leaf_routes() {
                     CanonicalForm::Unitary,
                     Some(SvdTruncationPolicy::new(1e-12)),
                     Some(1),
-                    ZipupTopologyMode::PruneScalarSubtrees,
+                    ContractionTopology::PruneScalarSubtrees,
                     &IdentityNodes::new(),
                     leaves,
                 )
@@ -151,8 +151,8 @@ fn tree_zipup_certifies_only_surviving_edges_or_preserves_scalar_nodes() {
             let session = SessionLeaves(context.clone());
             let leaves: &dyn LeafOps<IdxTensor> = if scoped { &session } else { &GlobalLeaves };
             for mode in [
-                ZipupTopologyMode::PruneScalarSubtrees,
-                ZipupTopologyMode::PreserveInputTopology,
+                ContractionTopology::PruneScalarSubtrees,
+                ContractionTopology::PreserveInputTopology,
             ] {
                 let result = operator
                     .contract_zipup_impl(
@@ -167,7 +167,7 @@ fn tree_zipup_certifies_only_surviving_edges_or_preserves_scalar_nodes() {
                     )
                     .unwrap();
                 assert_certificate(&result, 0, CanonicalForm::Unitary);
-                if mode == ZipupTopologyMode::PruneScalarSubtrees {
+                if mode == ContractionTopology::PruneScalarSubtrees {
                     assert_eq!(result.node_count(), if outputs.is_empty() { 1 } else { 3 });
                     assert!(result.node_index(&1).is_none());
                 } else {
