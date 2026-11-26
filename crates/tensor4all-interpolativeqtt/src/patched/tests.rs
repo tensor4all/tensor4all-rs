@@ -336,16 +336,22 @@ fn shared_multiscale_values_are_unchanged() {
     let f = |p: &[f64]| (p[0] + 2.0 * p[1]).exp();
     let patches = serial(|p, _| batch(p, f), &[0.0; 2], &[1.0; 2], 4, 7, &options).unwrap();
     assert_eq!(patches.len(), 1);
-    let expected = crate::interpolate_multi_scale_nd(
-        f,
-        &[0.0; 2],
-        &[1.0; 2],
-        4,
-        7,
-        &[],
-        &crate::InterpolativeQttOptions::default(),
-    )
-    .unwrap();
+    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
+    let expected = context
+        .with_session(|engine| {
+            crate::interpolate_multi_scale_nd(
+                engine,
+                f,
+                &[0.0; 2],
+                &[1.0; 2],
+                4,
+                7,
+                &[],
+                &crate::InterpolativeQttOptions::default(),
+            )
+        })
+        .unwrap()
+        .unwrap();
     assert_eq!(
         patch_cores::<f64>(&patches[0]),
         expected.0.chain_cores::<f64>(&expected.1).unwrap()
