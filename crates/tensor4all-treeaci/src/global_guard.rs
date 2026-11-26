@@ -14,6 +14,10 @@ use crate::{
     TreeElementwiseBatch,
 };
 
+mod side_enumeration;
+
+use side_enumeration::SideEnumeration;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobalSearchReport {
     pub(crate) pivots: Vec<Vec<usize>>,
@@ -219,34 +223,18 @@ where
                     })?;
                 input_evaluators
                     .enforce_guard_batch_budget_with_retained::<T>(points.len(), retained_bytes)?;
-                let coordinates = input_evaluators.expand_points(points)?;
                 // The walk declares which site it is scanning, so the hint no
                 // longer has to be inferred from the batch -- which a batch of
                 // one point cannot support at all.
-                let hint = input_evaluators.hint_for_scan_site(scan_site);
-                let input_values = input_evaluators.evaluate_expanded::<T>(
-                    points,
-                    &coordinates,
-                    hint.clone(),
-                    exec,
-                )?;
-                let batch =
-                    TreeElementwiseBatch::new(&input_values, state.inputs.len(), points.len())?;
-                let mut target = vec![T::default(); points.len()];
-                operator(batch, &mut target)?;
-                crate::scalar::ensure_finite_values(&target, "guard target")?;
-                let approximation = output_evaluator.evaluate_expanded(
+                guard_residuals(
+                    state,
                     input_evaluators,
+                    &mut output_evaluator,
+                    operator,
                     points,
-                    &coordinates,
-                    hint,
+                    scan_site,
                     exec,
-                )?;
-                target
-                    .into_iter()
-                    .zip(approximation)
-                    .map(|(target, approximation)| guard_residual(target, approximation))
-                    .collect()
+                )
             },
         )
         .map_err(|error| match error {
@@ -275,6 +263,50 @@ where
             candidates.push((error, pivot));
         }
     }
+    // Third stage (#1466): only when the retained pivots and every walk found
+    // nothing, and only on a tree with a vertex of local dimension 1.
+    if candidates.is_empty() && side_enumeration::has_unit_vertex(&site_dims) {
+        let enumeration = SideEnumeration::new(
+            &state.problem,
+            &site_dims,
+            &starts[..nsearch],
+            side_enumeration::SIDE_ENUMERATION_BUDGET,
+        )?;
+        let chunk_points = side_enumeration::enumeration_chunk_points(site_dims.len());
+        // Checked ahead, once: no chunk is larger than this one, and nothing
+        // retained grows past the kept found points.
+        let found_storage_bytes =
+            max_pivots
+                .checked_mul(candidate_entry_bytes)
+                .ok_or(TreeAciError::SizeOverflow {
+                    context: "guard side enumeration bytes",
+                })?;
+        let bookkeeping_bytes = enumeration.bookkeeping_bytes()?;
+        let retained_bytes = retained_start_bytes
+            .checked_add(start_storage_bytes)
+            .and_then(|bytes| bytes.checked_add(found_storage_bytes))
+            .and_then(|bytes| bytes.checked_add(bookkeeping_bytes))
+            .ok_or(TreeAciError::SizeOverflow {
+                context: "guard side enumeration bytes",
+            })?;
+        input_evaluators.enforce_guard_batch_budget_with_retained::<T>(
+            enumeration.largest_chunk(chunk_points)?,
+            retained_bytes,
+        )?;
+        let report = enumeration.run(chunk_points, threshold, max_pivots, |points| {
+            guard_residuals(
+                state,
+                input_evaluators,
+                &mut output_evaluator,
+                operator,
+                points,
+                None,
+                exec,
+            )
+        })?;
+        evaluated_points = checked_add_points(evaluated_points, report.evaluated_points)?;
+        candidates.extend(report.found);
+    }
     drop(starts);
     drop(site_dims);
     // Previously returned failures keep their slots until a fresh evaluation
@@ -300,6 +332,42 @@ where
             }
         })?,
     })
+}
+
+/// Guard residuals `|f - output|` of a batch of points, one per point.
+///
+/// `scan_site` is the site a floating-zone scan varies, used as the
+/// evaluation hint; `None` for a batch without scan structure. The caller
+/// charges the batch against the working budget first.
+fn guard_residuals<'a, T, V, F>(
+    state: &TreeAciState<'a, T, V>,
+    input_evaluators: &mut InputEvaluators<'a, V>,
+    output_evaluator: &mut GuardOutputEvaluator<'_, V>,
+    operator: &mut F,
+    points: &[Vec<usize>],
+    scan_site: Option<usize>,
+    exec: &mut crate::exec::Exec<'_, '_>,
+) -> Result<Vec<f64>>
+where
+    T: TreeAciScalar,
+    V: TreeAciNode,
+    F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
+{
+    let coordinates = input_evaluators.expand_points(points)?;
+    let hint = input_evaluators.hint_for_scan_site(scan_site);
+    let input_values =
+        input_evaluators.evaluate_expanded::<T>(points, &coordinates, hint.clone(), exec)?;
+    let batch = TreeElementwiseBatch::new(&input_values, state.inputs.len(), points.len())?;
+    let mut target = vec![T::default(); points.len()];
+    operator(batch, &mut target)?;
+    crate::scalar::ensure_finite_values(&target, "guard target")?;
+    let approximation =
+        output_evaluator.evaluate_expanded(input_evaluators, points, &coordinates, hint, exec)?;
+    target
+        .into_iter()
+        .zip(approximation)
+        .map(|(target, approximation)| guard_residual(target, approximation))
+        .collect()
 }
 
 fn guard_residual<T: TreeAciScalar>(target: T, approximation: T) -> Result<f64> {

@@ -4,6 +4,11 @@
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
 
+/// The #1435 three-branch table with a dimension-1 centre, shared with the
+/// integration tests (`tests/support/unit_junction.rs`).
+#[path = "../tests/support/unit_junction.rs"]
+pub(crate) mod unit_junction;
+
 /// Explicit splitmix64 stream, so the fixture does not depend on `rand`.
 pub(crate) struct SplitMix(pub(crate) u64);
 

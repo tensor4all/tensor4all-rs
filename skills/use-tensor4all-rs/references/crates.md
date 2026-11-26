@@ -110,6 +110,11 @@ Shared interpolation plumbing includes `CachedFunction`, `MultiIndex`, packed as
   retained points; unresolved points keep their slots before new discoveries.
   `global_pivots_found` includes still-failing retained points and does not count
   actual injections. Revalidation contributes to `diagnostics.evaluated_points`.
+- On a tree with a vertex of local dimension 1, a guard search whose
+  revalidation and walks found nothing also enumerates every configuration of
+  each small edge side (at most 32 configurations) around its own random starts
+  (#1466); those points count in `diagnostics.evaluated_points` too. The guard
+  stays a randomized search: `Converged` is not a dense-error certificate.
 - Local errors use the configured peak-relative or absolute policy. They are
   sampled estimates, not independent full-network Frobenius error bounds.
 

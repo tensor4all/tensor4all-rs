@@ -165,6 +165,48 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// Run global-pivot validation before convergence. Default: `true`.
     /// Previously found points are rechecked against the current output;
     /// random misses cannot erase a still-significant known residual.
+    ///
+    /// One Guard search has up to three stages. A point qualifies when its
+    /// residual `|f - output|` exceeds the threshold described under
+    /// [`scale_tolerance`](Self::scale_tolerance), times
+    /// [`global_tolerance_margin`](Self::global_tolerance_margin).
+    ///
+    /// 1. The points the previous search returned are evaluated again.
+    /// 2. A floating-zone walk runs from each of
+    ///    [`nsearch_global_pivots`](Self::nsearch_global_pivots) uniform random
+    ///    starts, moving one node at a time to a strictly larger residual.
+    /// 3. Only when stages 1 and 2 found nothing, and only on a tree with a
+    ///    vertex of local dimension 1 (a node without sites, or whose sites
+    ///    all have dimension 1), every configuration of each maximal edge side
+    ///    with 2 to 32 local configurations is evaluated around each of the
+    ///    same starts, with every other node held at the start (#1466). The
+    ///    bound 32 is TreeTCI's (#1440). The stage draws no new random
+    ///    numbers, reads no retained point, and evaluates at most
+    ///    `nsearch_global_pivots * 2 (n - 1) * 32` points on a tree of `n`
+    ///    nodes, in chunks of at most 2^20 coordinates. Its largest chunk is
+    ///    charged against [`max_working_bytes`](Self::max_working_bytes)
+    ///    before it evaluates anything, and a stage that does not fit fails
+    ///    with [`TreeAciError::ResourceLimit`](crate::TreeAciError::ResourceLimit).
+    ///
+    /// At most [`max_nglobal_pivots`](Self::max_nglobal_pivots) points are
+    /// returned, strongest first; every evaluated point counts in
+    /// [`TreeAciDiagnostics::evaluated_points`](crate::TreeAciDiagnostics::evaluated_points).
+    ///
+    /// Stage 3 exists because a walk cannot leave an output that is exactly
+    /// zero: every residual off the support is then exactly zero, so a walk
+    /// whose start is two or more node changes away from the support never
+    /// moves. Stage 3 reaches a support that meets a small side around one of
+    /// the starts, but it depends on the starts drawn: the Guard stays a
+    /// randomized search, and a run can still stop `Converged` with an output
+    /// that misses part of the target. On the #1435 table (three branches of
+    /// 5 binary sites joined at a centre of local dimension 1, target
+    /// `M[x, z]` on the plane `y = 16`, tolerance `1e-10`, default options), a
+    /// start is missed by both its walk and stage 3 when `M` is zero or below
+    /// the threshold at the start's `(x, z)` and its walk misses as well:
+    /// 8,496 of the 2^15 starts. The first two searches, which see the zero
+    /// output, then all miss with probability `(8496 / 2^15)^10 = 1.4e-6`
+    /// (exact over all starts), against `(1 - 4824 / 2^15)^10 = 0.20` without
+    /// stage 3.
     pub enable_global_guard: bool,
     /// Maximum logical bytes retained by all guard evaluators' persistent
     /// message caches combined. Default: 256 MiB.
@@ -180,11 +222,18 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// disable message retention without disabling the guard itself.
     pub message_cache_max_bytes: usize,
     /// Random starts per global search. Default: `5`.
+    ///
+    /// Each start is walked, and the same starts anchor the third Guard stage
+    /// on trees with a vertex of local dimension 1 (see
+    /// [`enable_global_guard`](Self::enable_global_guard)), so the stage's
+    /// cost grows linearly with this value. Zero disables the search.
     pub nsearch_global_pivots: usize,
     /// Maximum distinct pivots returned and retained by a global search. Default: `5`.
     /// Still-significant retained points keep their slots until revalidation
     /// resolves them; new discoveries fill the remaining slots. Injection
-    /// also depends on each cut's available capacity.
+    /// also depends on each cut's available capacity. The third Guard stage
+    /// keeps at most this many of its points, strongest first. Zero disables
+    /// the search.
     pub max_nglobal_pivots: usize,
     /// Coordinate sweeps allowed per global-search walk. Default: `100`.
     pub nsweeps_global_search: usize,

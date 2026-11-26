@@ -165,10 +165,104 @@ passes and none after.
 
 Measured on the #1435 table (tolerance 1e-10, 11 seeds): 8 seeds now stop
 `Converged` at (12, 1, 12) with a dense relative error of at most 6.1e-16, for
-1.22 times the oracle points of `main`. Seeds 2, 3 and 7 still return the zero
-output (mechanism 2 of #1435, a separate issue). The same table with the unit
+1.22 times the oracle points of `main`. Seeds 2, 3 and 7 still returned the
+zero output (mechanism 2 of #1435), which the third Guard stage below removes
+(#1466). The same table with the unit
 centre absorbed into a binary site (case B) and the G0 and star workloads
 (213 runs) have no unit vertex and are bit-identical to `main`.
+
+### Third Guard stage: small sides around the starts (#1466)
+
+A Guard search has two stages: the points the previous search returned are
+evaluated again, and a floating-zone walk runs from each of `nsearch` uniform
+random starts. A walk moves one node at a time and only to a strictly larger
+residual. From an output that is exactly zero, every residual off the target's
+support is exactly zero, so a walk whose start is two or more node changes
+away from the support never moves. On the #1435 table the target is `M[x, z]`
+on the plane `y = 16` and 0 elsewhere; seeds 2, 3 and 7 drew no start of the
+first two searches within one `y` bit of the plane, every residual of both
+searches was exactly 0, and the run stopped `Converged` after 2 passes with
+the zero output (dense relative error 1).
+
+A third stage (`global_guard::side_enumeration`) runs when the first two
+found nothing:
+
+- **Trigger.** Only in a search whose revalidated retained points and walks
+  all found nothing, and only on a tree with a vertex of local dimension 1, as
+  #1440 restricts TreeTCI's stage. A tree without one never runs it and its
+  runs are unchanged. The search is skipped as before when the Guard is off,
+  when `nsearch_global_pivots` or `max_nglobal_pivots` is 0, and on a
+  rank-limited pass.
+- **What.** Around each of the search's own `nsearch` starts (no new random
+  draw, no retained pivot read), every configuration of each maximal edge side
+  whose product of local dimensions lies in 2..=N, with every other node held
+  at the start. N = 32 (`SIDE_ENUMERATION_BUDGET`) is the #1440 bound,
+  carried over untuned. A side is maximal when no other such side strictly
+  contains it, as in TreeTCI's `maximal_enumeration_sides`. On the #1435 table
+  the sides are the three 5-site branches, so enumerating the `y` branch puts
+  each start's `(x, z)` on the plane.
+- **Acceptance.** A point qualifies above the Guard's own threshold. At most
+  `max_nglobal_pivots` points are kept, strongest first (equal residuals in
+  evaluation order), and they are returned and injected like any Guard pivot.
+- **Cost bound.** At most A · Σ_s c(s) ≤ nsearch · 2(n − 1) · N points per
+  search, where A ≤ `nsearch` is the number of distinct starts, the sum runs
+  over the maximal sides (at most two per edge of an `n`-node tree), and
+  c(s) ≤ N is the number of configurations of side `s`. On the #1435 table
+  (n = 16, three sides of 32) that is at most 480 generated points, of which
+  up to 470 were evaluated (the rest are repeats); a search whose walks all
+  miss costs 80 points there without the stage.
+- **Streaming.** Points are generated in a fixed order (anchor, then side,
+  then configuration with the side's first node fastest) and evaluated in
+  chunks of at most ⌊2^20 / n⌋ points. A point is evaluated only from the
+  first (anchor, side) pair that generates it; whether an earlier pair does
+  is decided from the anchors and the sides alone, so the set of evaluated
+  points is never stored (the concern of #1441 for TreeTCI). Chunking changes
+  neither the points, their order nor the result.
+- **Budgets.** The stage's largest chunk, with the search's retained starts,
+  the kept points and the stage's own bookkeeping, is charged against
+  `max_working_bytes` once, before the stage evaluates anything; a stage that
+  does not fit fails with `ResourceLimit { resource: "working bytes" }`. The
+  stage interns no sample and builds no frame, so the sample-arena and frame
+  budgets apply only to the injection of what it returns, as for any Guard
+  pivot. The evaluators' message caches stay within `message_cache_max_bytes`.
+- **No history (#1372).** The stage reads no retained pivot and replays
+  nothing.
+
+**The guarantee is probabilistic.** The stage reuses the search's random
+starts, so it covers only the sides around the starts drawn. On the #1435
+table in the zero-output state (exact over all 2^15 starts, threshold the
+absolute 1e-10 · 10), a start misses with its walk with probability
+1 − 4,824 / 2^15 = 0.853, and misses with both its walk and the stage with
+probability 8,496 / 2^15 = 0.259. Every walk from a start on the plane hits;
+from a start off the plane the stage misses exactly when `M` is zero or at
+most 1e-9 at the start's `(x, z)` (276 of the 1,024 pairs, 256 of them in the
+eight zero rows), so a start is missed when that holds and its walk misses as
+well. The first two searches draw 10 independent starts, so a run stays at the
+zero output with probability 0.853^10 = 0.20 without the stage and
+0.259^10 = 1.4e-6 with it. A miss is not detected: the run stops `Converged`.
+
+Measured (#1466, base `794d9856`, points are `evaluated_points`):
+
+- The #1435 table, tolerance 1e-10, seeds 1-11: 11 of 11 seeds stop
+  `Converged` at (12, 1, 12) with a dense relative error of at most 6.1e-16
+  (8 of 11 before), for 1.39 times the points (232,778 instead of 167,501).
+  Seeds 2, 3 and 7 now take 5 or 6 passes; the other 8 seeds take 1.077 times
+  their points and 52 passes instead of 58. Seed 4 now stops after 6 passes
+  instead of 8, with the same exact tree.
+- The 32 × 32 XOR-mask variants of that table with the plane at `y = 16`
+  (11,264 runs): 0 wrong results instead of 768, at 1.166 times the points.
+  With the plane at `y = 0`, where nothing was wrong before, every result is
+  unchanged except the points, which grow 1.080 times: the stage runs in the
+  converging searches and finds nothing.
+- No dimension-1 vertex, bit-identical: the same table with the centre
+  absorbed into a binary site, the G0 and star workload sweep (213 runs), and
+  G0 r = 5 at tolerance 1e-3 with `min_sweeps = 1`, seeds 1-60, three layouts
+  (180 runs). On such trees the stage costs one scan of the local dimensions
+  per search that found nothing, and no point.
+- One search where the stage runs costs up to 6.9 times the same search
+  without it on the #1435 table (80 + 470 points against 80). On a tree with a
+  dimension-1 vertex every `Converged` run has at least `min_sweeps` such
+  searches.
 
 Discontinuous minimum path covers and parallel paths remain mathematically
 possible, but require sample-aware gauge transport or snapshot/merge semantics.

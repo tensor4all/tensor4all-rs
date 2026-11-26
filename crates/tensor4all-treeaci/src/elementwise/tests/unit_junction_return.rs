@@ -5,15 +5,15 @@
 //! (`CandidateBasisProjection`). This checks the returned tree of the case
 //! the expansion fixes with [`crate::test_support::pivot_basis_deviation`].
 
-#[path = "../../../tests/support/unit_junction.rs"]
-mod unit_junction;
-
 use rand::SeedableRng;
 
 use super::super::run_sweeps_and_cleanup;
 use crate::{
-    exec::Exec, state::TreeAciState, test_support::pivot_basis_deviation,
-    unit_vertex::expansion_debug_log, TreeAciOptions, TreeAciTermination,
+    exec::Exec,
+    state::TreeAciState,
+    test_support::{pivot_basis_deviation, unit_junction},
+    unit_vertex::expansion_debug_log,
+    TreeAciOptions, TreeAciTermination,
 };
 
 fn identity(batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]) -> crate::Result<()> {
