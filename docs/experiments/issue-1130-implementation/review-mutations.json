@@ -1,0 +1,77 @@
+{
+  "source_sha256": "5d6050dddd0939b8e890179dc9afcbd98e6523f51458cede3ec951c09fdd32cb",
+  "restored_regression_passed": true,
+  "mutations": [
+    {
+      "name": "skip_splits",
+      "before": "if split_pays(unsplit_parameters, probe.parameters) {",
+      "after": "if false {",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "tensor4all-quanticstransform",
+        "--features",
+        "partitioned",
+        "--test",
+        "qft_reconstruction",
+        "tolerance_schedule_selects_the_cheaper_axis_and_stops_the_other"
+      ],
+      "exit_code": 101,
+      "failure": ""
+    },
+    {
+      "name": "prefer_larger_storage",
+      "before": "(probe_parameters, probe.priority()) < (incumbent_parameters, incumbent.priority())",
+      "after": "(probe_parameters, probe.priority()) > (incumbent_parameters, incumbent.priority())",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "tensor4all-quanticstransform",
+        "--features",
+        "partitioned",
+        "--test",
+        "qft_reconstruction",
+        "tolerance_schedule_selects_the_cheaper_axis_and_stops_the_other"
+      ],
+      "exit_code": 101,
+      "failure": ""
+    },
+    {
+      "name": "reserve_terms_before_restriction",
+      "before": "Ok((context.options.max_work_items, \"max_work_items\"))",
+      "after": "Ok(((context.options.max_terms / shape.parents).min(context.options.max_work_items), \"max_terms\"))",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "tensor4all-partitionedtreetn",
+        "--lib",
+        "candidate_counts_only_children_retained_after_restriction"
+      ],
+      "exit_code": 101,
+      "failure": ""
+    },
+    {
+      "name": "omit_coordinate_capacity_guard",
+      "source_sha256": "7095e3f497c88978f8d689368246629da112330c033e1c2e833f5225089a9a85",
+      "before": "            if axis.inputs.len() > usize::BITS as usize {\n                return Err(invalid(\n                    \"a coordinate group exceeds usize coordinate capacity; use at most usize::BITS indices per group\",\n                ));\n            }\n",
+      "after": "",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "tensor4all-partitionedtreetn",
+        "--lib",
+        "coordinate_groups_validate_packed_prefix_capacity_before_use"
+      ],
+      "exit_code": 101,
+      "failure": ""
+    }
+  ]
+}

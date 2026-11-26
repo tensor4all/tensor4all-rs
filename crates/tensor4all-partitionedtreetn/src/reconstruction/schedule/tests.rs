@@ -30,6 +30,29 @@ fn axis_lengths_geometry(lengths: &[usize]) -> ScheduleGeometry {
     ScheduleGeometry::new(&bits, Some(&axes)).expect("geometry")
 }
 
+#[test]
+fn coordinate_groups_validate_packed_prefix_capacity_before_use() {
+    let capacity = usize::BITS as usize;
+    let sites: Vec<_> = (0..capacity + 1).map(|_| DynIndex::new_dyn(2)).collect();
+    for groups in [None, Some(vec![CoordinateGroup::new(sites.clone())])] {
+        let error = ScheduleGeometry::new(&sites, groups.as_deref())
+            .err()
+            .expect("oversized axis");
+        assert!(error.to_string().contains("usize coordinate capacity"));
+    }
+    let geometry = ScheduleGeometry::new(&sites[..capacity], None).expect("full-width axis");
+    let projector =
+        Projector::from_pairs(sites[..capacity].iter().cloned().map(|site| (site, 1))).unwrap();
+    let expected = vec![(capacity, usize::MAX)];
+    assert_eq!(geometry.input_prefix(&projector), Some(expected.clone()));
+    assert_eq!(geometry.output_prefix(&projector).unwrap(), expected);
+    let groups = [
+        CoordinateGroup::new(sites[..capacity].to_vec()),
+        CoordinateGroup::new(sites[capacity..].to_vec()),
+    ];
+    assert!(ScheduleGeometry::new(&sites, Some(&groups)).is_ok());
+}
+
 /// A region stops an axis by keeping that axis' prefix shorter, so the axes that
 /// still refine are exactly those whose prefix is one bit short of the level. The
 /// stop is one-way, and an exhausted axis is skipped rather than revived or

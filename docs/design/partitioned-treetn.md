@@ -714,8 +714,15 @@ identifiers and scalar scores for other passing singles, so the joint probe is r
 region inputs without retaining all single-axis tensors. Once superseded, the
 unsplit tensors are released; its scalar count suffices for `split_pays`.
 The same incumbent-versus-probe comparison selects the joint candidate. Assemble
-one probe's children sequentially, and check its full metadata-derived live-item
-and term bounds before allocation. For `a` eligible axes, execute at most one
+one probe's children sequentially. Bound its planned output-key metadata by
+`max_work_items` before tensor work, then remove empty input items and check
+actual retained items and terms after each child's restriction and merge,
+including the previously selected regions of that level. Planned parent counts
+are upper bounds, so they must not reserve terms for children that become empty.
+The metadata cap can still reject an oversized key expansion before discovering
+empty children; its resource error reports the planned key count, while retained
+budget errors report the actual accumulated count. Empty input-parent shapes are
+invalid candidates. For `a` eligible axes, execute at most one
 unsplit candidate, `a` single-axis probes, and one joint probe, not all subsets.
 
 This is a limit of two transient candidate partitions for the current region,
@@ -840,6 +847,11 @@ cost, which may exceed retained `error_bound`, and `remaining_after` subtracts
 that cost. Its `unused_allocation` is therefore not a promise that all retained
 error slack is reusable. `merging_levels_left` is absent for the other policies,
 which do not compute the tolerance-only forecast.
+
+`refined_regions` counts selected split decisions, including selections whose
+children are all empty after cancellation or output pruning. It is not a count
+of nonempty retained output regions. `stopped_regions` counts decisions per
+region and axis; the returned representation is described by `region_count`.
 
 The implementation PR must demonstrate the original six-qubit reproducer under
 5 GiB, within its reported error bound, with peak RSS comparable to goal mode

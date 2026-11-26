@@ -107,6 +107,43 @@ where
     regions: Vec<ChildRegion<V>>,
     parameters: usize,
     kind: Kind,
+    retained: RetainedWork,
+}
+
+/// Actual nonempty items and terms, including earlier selected regions.
+#[derive(Clone, Copy, Default)]
+struct RetainedWork {
+    items: usize,
+    terms: usize,
+}
+
+impl RetainedWork {
+    fn include<V>(
+        &mut self,
+        items: &BTreeMap<InputKey, Item<V>>,
+        options: &MergeRefineOptions<V>,
+    ) -> Result<()>
+    where
+        V: Clone + Hash + Eq + Send + Sync + Debug,
+    {
+        self.items = checked_add(self.items, items.len())?;
+        self.terms = items.values().try_fold(self.terms, |total, item| {
+            checked_add(total, item.terms.len())
+        })?;
+        for (value, maximum, limit) in [
+            (self.items, options.max_work_items, "max_work_items"),
+            (self.terms, options.max_terms, "max_terms"),
+        ] {
+            if value > maximum {
+                return Err(PartitionedTreeTNError::ResourceLimit {
+                    operation: "tolerance merge-refine retained candidate",
+                    limit,
+                    value,
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 fn prefers(
@@ -118,40 +155,19 @@ fn prefers(
     (probe_parameters, probe.priority()) < (incumbent_parameters, incumbent.priority())
 }
 
-/// Check conservative metadata bounds before constructing any candidate tensors.
-fn child_limit<V>(
-    context: &ProbeContext<'_, V>,
-    shape: MergeShape,
-    used_work: usize,
-    used_terms: usize,
-) -> Result<(usize, &'static str)>
+/// Bound key metadata before tensor work; retained budgets are checked afterward.
+fn child_limit<V>(context: &ProbeContext<'_, V>, shape: MergeShape) -> Result<(usize, &'static str)>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
-    let work_left = context.options.max_work_items.saturating_sub(used_work);
-    let terms_left = context.options.max_terms.saturating_sub(used_terms);
     if shape.parents == 0 {
-        return Ok((0, "max_work_items"));
+        return Err(invalid(
+            "a tolerance candidate needs at least one input parent",
+        ));
     }
-    if shape.parents > work_left {
-        return Err(PartitionedTreeTNError::ResourceLimit {
-            operation: "tolerance merge-refine candidate planning",
-            limit: "max_work_items",
-            value: checked_add(used_work, shape.parents)?,
-        });
-    }
-    if shape.parents > terms_left {
-        return Err(PartitionedTreeTNError::ResourceLimit {
-            operation: "tolerance merge-refine candidate planning",
-            limit: "max_terms",
-            value: checked_add(used_terms, shape.parents)?,
-        });
-    }
-    if terms_left < work_left {
-        Ok((terms_left / shape.parents, "max_terms"))
-    } else {
-        Ok((work_left / shape.parents, "max_work_items"))
-    }
+    // Key metadata has its own bounded planning cost. Parent counts are upper
+    // bounds before restriction, not actual retained items or terms.
+    Ok((context.options.max_work_items, "max_work_items"))
 }
 
 /// Immutable inputs and allocation shared by alternative probes of one region.
@@ -166,6 +182,7 @@ where
     budget: f64,
     shape: MergeShape,
     max_children: (usize, &'static str),
+    retained: RetainedWork,
 }
 
 impl<V> RegionTrial<'_, '_, V>
@@ -198,11 +215,14 @@ where
         let child_context = ProbeContext { share, ..*context };
         let mut regions = Vec::with_capacity(keys.len());
         let mut parameters = 0usize;
+        let mut retained = self.retained;
         for key in keys {
             let projector = context.geometry.output_projector(&key)?;
             let mut incurred = 0.0;
-            let merged =
+            let mut merged =
                 restrict_and_merge(&child_context, items, &projector, counters, &mut incurred)?;
+            merged.retain(|_, item| !item.terms.is_empty());
+            retained.include(&merged, context.options)?;
             parameters = checked_add(parameters, region_parameters(&merged)?)?;
             regions.push((key, merged, incurred));
         }
@@ -210,6 +230,7 @@ where
             regions,
             parameters,
             kind,
+            retained,
         })
     }
 
@@ -284,8 +305,7 @@ where
         .try_fold(0usize, |total, shape| checked_add(total, shape.pairs))?;
     let mut next = BTreeMap::new();
     let mut components = BTreeMap::new();
-    let mut used_work = 0usize;
-    let mut used_terms = 0usize;
+    let mut retained = RetainedWork::default();
     // INVARIANT: shapes and level entries use the same deterministic BTree order.
     for ((region, items), shape) in level.into_iter().zip(shapes) {
         let budget = if total_pairs == 0 {
@@ -300,19 +320,17 @@ where
             wanted,
             budget,
             shape,
-            max_children: child_limit(context, shape, used_work, used_terms)?,
+            max_children: child_limit(context, shape)?,
+            retained,
         };
         let chosen = trial.choose(level_index, counters)?;
+        retained = chosen.retained;
         for (key, items, incurred) in chosen.regions {
             if incurred > 0.0 {
                 components.insert(key.clone(), incurred);
             }
             if items.values().all(|item| item.terms.is_empty()) {
                 continue;
-            }
-            used_work = checked_add(used_work, items.len())?;
-            for item in items.values() {
-                used_terms = checked_add(used_terms, item.terms.len())?;
             }
             next.insert(key, items);
         }

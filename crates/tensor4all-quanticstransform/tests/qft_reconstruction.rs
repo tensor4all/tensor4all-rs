@@ -1079,8 +1079,7 @@ fn merge_refine_schedule_rejects_invalid_geometry() {
     .expect_err("work limit below the leaf count");
     assert!(error.to_string().contains("max_work_items"));
 
-    // MergePolicy::RankGoal cannot represent a zero rank.
-    assert!(std::num::NonZeroUsize::new(0).is_none());
+    assert_eq!(MergePolicy::default(), MergePolicy::Exact);
 
     // A preimage that misses one dyadic leaf is not a coverage contract.
     let full = SubDomainTreeTN::from_treetn(tree.clone()).expect("subdomain");
@@ -2495,6 +2494,108 @@ fn axis_depths(result: &MergeRefineResult<usize>, groups: &[CoordinateGroup]) ->
 /// `sites[2..4]`.
 fn two_axis_fourier_operator(sites: &[DynIndex]) -> LinearOperator<IdxTensor, usize> {
     chain_axis_fourier_operator(&[2, 2], sites)
+}
+
+/// A compact identity MPO with unit links, preserving every logical site.
+fn chain_identity_operator(sites: &[DynIndex]) -> LinearOperator<IdxTensor, usize> {
+    let links: Vec<_> = (1..sites.len()).map(|_| DynIndex::new_dyn(1)).collect();
+    let mut inputs = HashMap::new();
+    let mut outputs = HashMap::new();
+    let tensors = sites
+        .iter()
+        .enumerate()
+        .map(|(node, site)| {
+            let input = DynIndex::new_dyn(2);
+            let output = DynIndex::new_dyn(2);
+            let mut tensor =
+                IdxTensor::from_diag(vec![input.clone(), output.clone()], vec![1.0; 2]).unwrap();
+            for link in node
+                .checked_sub(1)
+                .and_then(|previous| links.get(previous))
+                .into_iter()
+                .chain(links.get(node))
+            {
+                let one = IdxTensor::from_dense(vec![link.clone()], vec![1.0]).unwrap();
+                tensor = tensor4all_core::outer_product(&tensor, &one).unwrap();
+            }
+            inputs.insert(
+                node,
+                IndexMapping {
+                    true_index: site.clone(),
+                    internal_index: input,
+                },
+            );
+            outputs.insert(
+                node,
+                IndexMapping {
+                    true_index: site.clone(),
+                    internal_index: output,
+                },
+            );
+            tensor
+        })
+        .collect();
+    LinearOperator::new(
+        TreeTN::from_tensors(tensors, (0..sites.len()).collect()).unwrap(),
+        inputs,
+        outputs,
+    )
+}
+
+#[test]
+fn tolerance_schedule_selects_the_cheaper_axis_and_stops_the_other() {
+    let sites: Vec<_> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    // Given site 2 the first two sites form a rank-one product. Given site 1,
+    // sites 0 and 2 remain coupled: only the site-2 split reduces total storage.
+    let a = [1.0, 1.0, 1.0, 2.0];
+    let b = [1.0, 1.0, 1.0, 3.0];
+    let values: Vec<_> = (0..8)
+        .map(|m| {
+            let (x, y, z) = ((m >> 2) & 1, (m >> 1) & 1, m & 1);
+            Complex64::new(a[x + 2 * z] * b[y + 2 * z], 0.0)
+        })
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = partitioned_target(&tree, &sites[0]);
+    let groups = axis_groups(&[2, 1], &sites);
+    let result = schedule_merge_refine(
+        &preimage,
+        &0,
+        &chain_identity_operator(&sites),
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance {
+            rtol: 1e-10,
+            atol: 0.0,
+        },
+        &MergeRefineOptions {
+            merge_policy: MergePolicy::Tolerance,
+            coordinate_groups: Some(groups.clone()),
+            output_depth: Some(1),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(axis_depths(&result, &groups), vec![vec![0, 1]; 2]);
+    assert_eq!(result.report().refined_regions, 1);
+    assert_eq!(result.report().stopped_regions, 1);
+    let mut fixed = Vec::new();
+    for (projector, _) in result.regions() {
+        assert_eq!(projector.get(&sites[0]), None);
+        assert_eq!(projector.get(&sites[1]), None);
+        fixed.push(projector.get(&sites[2]).unwrap());
+    }
+    fixed.sort_unstable();
+    assert_eq!(fixed, vec![0, 1]);
+    let expected = tree.to_dense().unwrap();
+    let actual = result
+        .into_partition()
+        .unwrap()
+        .to_treetn()
+        .unwrap()
+        .to_dense()
+        .unwrap();
+    assert!(actual.sub(&expected).unwrap().maxabs().unwrap() < TOL);
 }
 
 #[test]

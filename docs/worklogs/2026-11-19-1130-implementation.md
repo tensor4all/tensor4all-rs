@@ -38,6 +38,40 @@ changes no public API, example or guide snippet. The mdBook executable suite
 was not repeated locally. Hosted checks and implementation review must run on
 the published rebased head.
 
+## Implementation review follow-up (2026-11-26)
+
+The six findings in the [implementation review](https://github.com/tensor4all/tensor4all-rs/pull/1407#issuecomment-7201649508)
+are addressed without changing approximation tolerances or candidate tie order.
+The branch now includes `main` through `de053a07`.
+
+Candidate key metadata stays bounded before tensor work. Work/term admission now
+uses the actual nonempty input items and terms after restriction and merging,
+including earlier selected regions, rather than multiplying a parent upper
+bound by every planned child. The resource error distinguishes planned key
+expansion from retained work and reports the count that actually exceeded the
+relevant bound. A missing input-parent shape is rejected directly.
+
+Coordinate-group width is validated against `usize::BITS` before operator work,
+so input decoding, requested output decoding and child expansion share the same
+packed-prefix contract. Full-width prefixes remain valid, and several shorter
+axes may together exceed one machine word. The API migration is recorded under
+Breaking Rust API changes, including report literals. Refinement statistics
+explicitly count selected decisions even when their children cancel or are
+pruned; they do not claim to count retained nonempty regions.
+
+A public three-site, two-axis identity-operator fixture fixes the actual output
+projectors: one axis stops while the cheaper axis refines. It checks the dense
+represented value as well as the structural decision. The resource regression
+keeps a one-term result under a one-term budget even though two child keys were
+planned. The reviewed standard-library-only zero-goal assertion is removed.
+Mutation evidence is retained in
+[`review-mutations.json`](../experiments/issue-1130-implementation/review-mutations.json).
+
+Historical runtime/RSS results remain pinned to their original source, binary
+and dependency revisions. These boundary, accounting and regression fixes are
+not a new timing or peak-memory measurement, nor a claim about the unverified
+64-by-64 consumer workload.
+
 ## Decisions
 
 - Implement the design merged in #1394: mutually exclusive `MergePolicy`
@@ -61,8 +95,9 @@ the published rebased head.
   probes every eligible axis even at zero allowance, selects the smallest
   retained partition with the specified tie order, and carries only its ledger.
   Metadata child expansion prunes requested regions incrementally and checks
-  resource bounds and packed-prefix overflow before creating tensors. Resource
-  errors identify whether work items or terms were the limiting budget.
+  planned-key bounds and packed-prefix overflow before creating tensors. Actual
+  work-item and term limits are checked after restriction, with the exceeding
+  retained count in the error.
 - The original six-qubit SplitMix64 case and the two interleaved three-bit axes
   pass independent product-DFT checks in both policies, with a 5 GiB process
   address-space limit. Tolerance returns one strict region/term in each case.
@@ -117,7 +152,7 @@ thresholds were relaxed.
 
 - Coverage impact of removed paths was reviewed. The obsolete runtime
   zero-rank-goal error is now unrepresentable through `NonZeroUsize`; the
-  corresponding test checks that invariant. No shared numerical helper was
+  scheduler policy tests cover its stored goal and default behavior. No shared numerical helper was
   removed. Existing exact/rank-goal tests and new tolerance tests exercise the
   shared merge, restriction, cancellation, and truncation helpers.
 - The tolerance planner/selector and its unit tests live in a separate module.

@@ -92,7 +92,7 @@ fn child_planning_bounds_allocation_and_prunes_before_expansion() {
         .child_keys(&root, &[], None, (0, "max_work_items"))
         .is_err());
     // The private key planner rejects packed-coordinate overflow rather than wrapping.
-    let geom = geometry(&[65]);
+    let geom = geometry(&[usize::BITS as usize]);
     let mut key = geom.root_output(0);
     key.prefix[0] = (64, usize::MAX);
     assert!(geom
@@ -103,81 +103,174 @@ fn child_planning_bounds_allocation_and_prunes_before_expansion() {
 }
 
 #[test]
-fn candidate_limits_cover_work_terms_and_empty_shapes() {
+fn candidate_limits_distinguish_planned_keys_from_retained_work() {
     let geom = geometry(&[2]);
     let mut options = MergeRefineOptions::<usize> {
         merge_policy: MergePolicy::Tolerance,
-        max_work_items: 1,
-        max_terms: 4,
+        max_work_items: 8,
+        max_terms: 1,
         ..Default::default()
     };
-    let run = |opts: &MergeRefineOptions<usize>, shape, work, terms| {
-        child_limit(
-            &ProbeContext {
-                geometry: &geom,
-                center: &0,
-                options: opts,
-                share: 0.0,
-            },
-            shape,
-            work,
-            terms,
-        )
+    let context = |options| ProbeContext {
+        geometry: &geom,
+        center: &0,
+        options,
+        share: 0.0,
     };
     let shape = MergeShape {
         parents: 2,
         pairs: 1,
     };
-    assert!(matches!(
-        run(&options, shape, 0, 0),
-        Err(PartitionedTreeTNError::ResourceLimit {
-            limit: "max_work_items",
-            ..
-        })
-    ));
-    options.max_work_items = 8;
-    options.max_terms = 1;
-    assert!(matches!(
-        run(&options, shape, 0, 0),
-        Err(PartitionedTreeTNError::ResourceLimit {
-            limit: "max_terms",
-            ..
-        })
-    ));
-    options.max_terms = 8;
-    assert_eq!(run(&options, shape, 2, 1).unwrap(), (3, "max_work_items"));
     assert_eq!(
-        run(
-            &options,
-            MergeShape {
-                parents: 0,
-                pairs: 0
-            },
-            0,
-            0
+        child_limit(&context(&options), shape).unwrap(),
+        (8, "max_work_items")
+    );
+    assert!(child_limit(
+        &context(&options),
+        MergeShape {
+            parents: 0,
+            pairs: 0
+        }
+    )
+    .is_err());
+
+    let site = DynIndex::new_dyn(2);
+    let term = SubDomainTreeTN::from_treetn(
+        TreeTN::from_tensors(
+            vec![IdxTensor::from_dense(vec![site], vec![1.0, 2.0]).unwrap()],
+            vec![0usize],
         )
         .unwrap(),
-        (0, "max_work_items")
-    );
-    options.max_terms = 1;
-    let limit = run(
-        &options,
-        MergeShape {
-            parents: 1,
-            pairs: 0,
-        },
-        0,
-        0,
     )
     .unwrap();
+    let items = BTreeMap::from([
+        (
+            vec![(1, 0)],
+            Item {
+                terms: vec![term.clone()],
+            },
+        ),
+        (
+            vec![(1, 1)],
+            Item {
+                terms: vec![term.clone()],
+            },
+        ),
+    ]);
+    let multiple_terms = BTreeMap::from([(
+        vec![(0, 0)],
+        Item {
+            terms: vec![term.clone(), term],
+        },
+    )]);
+    let error = RetainedWork::default()
+        .include(&multiple_terms, &options)
+        .unwrap_err();
     assert!(matches!(
-        geom.child_keys(&geom.root_output(0), &[0], None, limit),
-        Err(PartitionedTreeTNError::ResourceLimit {
+        error,
+        PartitionedTreeTNError::ResourceLimit {
             limit: "max_terms",
             value: 2,
             ..
-        })
+        }
     ));
+    let error = RetainedWork::default()
+        .include(&items, &options)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        PartitionedTreeTNError::ResourceLimit {
+            limit: "max_terms",
+            value: 2,
+            ..
+        }
+    ));
+    options.max_terms = 8;
+    options.max_work_items = 1;
+    let error = RetainedWork::default()
+        .include(&items, &options)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        PartitionedTreeTNError::ResourceLimit {
+            limit: "max_work_items",
+            value: 2,
+            ..
+        }
+    ));
+    options.max_work_items = 3;
+    options.max_terms = 3;
+    let mut used = RetainedWork { items: 1, terms: 1 };
+    used.include(&items, &options).unwrap();
+    assert_eq!((used.items, used.terms), (3, 3));
+    let error = used.include(&items, &options).unwrap_err();
+    assert!(matches!(
+        error,
+        PartitionedTreeTNError::ResourceLimit {
+            limit: "max_work_items",
+            value: 5,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn candidate_counts_only_children_retained_after_restriction() {
+    let geom = geometry(&[1]);
+    let site = geom.axes[0].inputs[0].clone();
+    let tensor = IdxTensor::from_dense(vec![site.clone()], vec![2.0, 3.0]).unwrap();
+    let term = SubDomainTreeTN::new(
+        TreeTN::from_tensors(vec![tensor], vec![0usize]).unwrap(),
+        Projector::from_pairs([(site, 0)]).unwrap(),
+    )
+    .unwrap();
+    let items = BTreeMap::from([(vec![(0, 0)], Item { terms: vec![term] })]);
+    let options = MergeRefineOptions {
+        merge_policy: MergePolicy::Tolerance,
+        max_terms: 1,
+        ..Default::default()
+    };
+    let context = ProbeContext {
+        geometry: &geom,
+        center: &0,
+        options: &options,
+        share: 0.0,
+    };
+    let root = geom.root_output(0);
+    let shape = merge_shape(&items).unwrap();
+    let trial = RegionTrial {
+        context: &context,
+        region: &root,
+        items: &items,
+        wanted: None,
+        budget: 0.0,
+        shape,
+        max_children: child_limit(&context, shape).unwrap(),
+        retained: RetainedWork::default(),
+    };
+    let chosen = trial.choose(1, &mut MergeCounters::default()).unwrap();
+    assert_eq!(chosen.kind, Kind::Single(0));
+    assert_eq!((chosen.retained.items, chosen.retained.terms), (1, 1));
+    assert_eq!(chosen.regions.len(), 2);
+    assert_eq!(
+        chosen
+            .regions
+            .iter()
+            .filter(|(_, items, _)| !items.is_empty())
+            .count(),
+        1
+    );
+    let value = &chosen
+        .regions
+        .iter()
+        .find(|(_, items, _)| !items.is_empty())
+        .unwrap()
+        .1;
+    let dense = value.values().next().unwrap().terms[0]
+        .data()
+        .to_dense()
+        .unwrap();
+    assert_eq!(dense.to_vec::<f64>().unwrap(), vec![2.0, 0.0]);
 }
 
 #[test]
@@ -213,6 +306,7 @@ fn serial_joint_probes_keep_the_chosen_partition_and_its_ledger() {
         budget: 1.0,
         shape,
         max_children: (4096, "max_work_items"),
+        retained: RetainedWork::default(),
     };
     let selected = trial.choose(1, &mut counters).unwrap();
     assert_eq!(selected.kind, Kind::Joint);

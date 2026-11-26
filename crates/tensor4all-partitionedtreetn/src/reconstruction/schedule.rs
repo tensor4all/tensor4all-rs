@@ -101,7 +101,6 @@ use crate::{
 /// let goal = MergePolicy::RankGoal(8_usize.try_into()?);
 /// assert_ne!(goal, MergePolicy::Exact);
 /// assert_eq!(MergePolicy::default(), MergePolicy::Exact);
-/// assert!(std::num::NonZeroUsize::new(0).is_none());
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -161,6 +160,9 @@ pub struct MergeRefineOptions<V> {
     /// count grow with the number of refined regions. Differing spectator
     /// constraints are refined into disjoint cells before tensor operations; both
     /// the varying-coordinate grid and the refined leaf count obey this limit.
+    /// In tolerance mode this also bounds the output-key metadata of any one
+    /// candidate before tensor work. Its retained work-item count is checked
+    /// after restriction, so empty input contributions consume no retained slots.
     pub max_work_items: usize,
     /// Pair compression and output refinement, default [`MergePolicy::Exact`].
     ///
@@ -174,6 +176,8 @@ pub struct MergeRefineOptions<V> {
     /// Maximum retained terms across live regions, default `1 << 20`. The
     /// adaptive merge policy can keep operands separate, so this bounds that
     /// growth and returns a resource-limit error instead of exceeding the budget.
+    /// Tolerance candidates count actual terms after restriction and merging;
+    /// empty children do not reserve terms merely because their keys were planned.
     pub max_terms: usize,
     /// Explicit coordinate axes, default `None`.
     ///
@@ -481,7 +485,9 @@ pub struct MergeRefineReport {
     pub work_items_per_level: Vec<usize>,
     /// Largest number of live work items.
     pub peak_work_items: usize,
-    /// Output regions refined into child prefix regions. Counted once per region
+    /// Output-region refinement decisions, including decisions whose selected
+    /// children all cancel or are pruned. This counts selected split decisions,
+    /// rather than nonempty regions retained in the result. Counted once per region
     /// and level in which at least one axis refined, because refining is a decision
     /// made per axis at one level.
     pub refined_regions: usize,
@@ -916,7 +922,8 @@ where
 #[derive(Debug, Clone)]
 pub struct CoordinateGroup {
     /// This axis' selected indices in input significance order, most significant
-    /// first.
+    /// first. The scheduler requires between one and `usize::BITS` indices per
+    /// group so every input and output prefix fits its packed coordinate.
     pub inputs: Vec<DynIndex>,
     /// This axis' selected indices in output significance order: `outputs[0]`
     /// carries this axis' most significant frequency bit.
@@ -1034,6 +1041,11 @@ impl ScheduleGeometry {
             if axis.inputs.is_empty() {
                 return Err(invalid(
                     "every coordinate group needs at least one selected index",
+                ));
+            }
+            if axis.inputs.len() > usize::BITS as usize {
+                return Err(invalid(
+                    "a coordinate group exceeds usize coordinate capacity; use at most usize::BITS indices per group",
                 ));
             }
             if axis.inputs.len() != axis.outputs.len() {
@@ -1468,6 +1480,7 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// # Errors
 /// Returns [`PartitionedTreeTNError::InvalidOptions`] for a non-binary or empty
 /// selection, an `output_depth` above the selection depth, an empty
+/// coordinate group or one wider than `usize::BITS`, an empty
 /// [`MergeRefineOptions::output_regions`], an output region that does not fix a
 /// contiguous prefix of output indices on every coordinate group or that names an
 /// index outside the selection, a `max_work_items`
