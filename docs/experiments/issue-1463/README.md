@@ -78,7 +78,7 @@ Rook pivoting:
 - **Joint fit (D to A).** Ranks are higher (12 vs 8 for corr, 25 / 78 vs 9 for
   unrel). For correlated entries it still wins: 8x8 storage 22x smaller, fit
   time 4.8-20x (Full) and 5.9-22x (Rook) faster than D; 2x3 storage 1.9x smaller,
-  fit time 1.8-3.2x. For unrelated entries it loses on storage (0.7-0.8x), but
+  fit time 1.8-3.2x. For unrelated entries it loses on storage (about 1.3-1.4x more bytes), but
   not on time except Rook 8x8 (D/A 0.45-0.53): it is 1.3-1.6x faster in the other
   six cases, where the separate fits need many more sweeps in total.
 - **Native entry point (A vs B).** A is not slower than the hand-written adapter
