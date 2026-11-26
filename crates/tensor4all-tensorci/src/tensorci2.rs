@@ -347,6 +347,13 @@ pub enum PivotSearchStrategy {
     Full,
     /// Heuristic lazy block-rook pivoting over partial matrix blocks.
     ///
+    /// `Rook` is a fast, inexact option by design: the final interpolation
+    /// error may exceed `tolerance` even when the run reports
+    /// [`TCI2Termination::Converged`]. It is not certified, and no
+    /// certification is planned, since that would cost the evaluation savings
+    /// that are the reason to choose it. Use [`Full`](Self::Full) when the
+    /// tolerance must hold.
+    ///
     /// Each pivot is found by an O(d)-sized rook walk that alternates residual
     /// column and row maxima until they agree, so the full candidate matrix is
     /// never materialized. A rook pivot is the largest entry of its own
@@ -356,8 +363,8 @@ pub enum PivotSearchStrategy {
     /// two more walks start from columns spread over the remaining block, and
     /// the bond update stops only if neither finds a pivot above tolerance.
     /// This catches a walk that stopped on one small local maximum, but it
-    /// does **not** certify that the remaining residual is below tolerance. The bond error recorded in `pivot_errors`
-    /// and the sweep `errors` is that last rook pivot, not an upper bound, and
+    /// does **not** certify that the remaining residual is below tolerance.
+    /// The bond error recorded in `pivot_errors` and the sweep `errors` is that last rook pivot, not an upper bound, and
     /// [`TCI2Termination::Converged`] under `Rook` is not a proof that the
     /// tolerance holds. Use [`Full`](Self::Full) when a certified bound is
     /// required.

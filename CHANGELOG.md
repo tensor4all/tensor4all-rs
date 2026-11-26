@@ -4,6 +4,9 @@
 
 ### Behavior changes
 
+- Reverts #1484: `TCI2Termination::Converged` under `PivotSearchStrategy::Rook`
+  is again not certified by an exact `Full` sweep. `Rook` is a fast, inexact
+  heuristic by design; use `Full` when the tolerance must hold (#1257).
 - Tree ACI also expands candidates across a non-unit branching vertex when
   at least two committed pivots agree at its local coordinate (#1435).
   The degree must be at least 3; the existing incoming-rank product slack

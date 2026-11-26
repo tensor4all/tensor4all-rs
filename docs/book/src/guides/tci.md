@@ -102,8 +102,11 @@ as the bond error, a certified bound for that matrix. `PivotSearchStrategy::Rook
 finds each pivot with an O(d) rook walk and stops when the current rook pivot
 and two more walks from other columns all find nothing above the threshold; its
 bond error is that last rook pivot, not a bound, so
-`TCI2Termination::Converged` under `Rook` does not prove the tolerance. Use
-`Full` when a certified bound is required.
+`TCI2Termination::Converged` under `Rook` does not prove the tolerance. `Rook`
+is a fast, inexact heuristic by design: the final error may exceed `tolerance`
+even after `Converged`, and it is not certified, because certification would
+cost the evaluation savings that are the reason to choose it. Use `Full` when
+the tolerance must hold.
 
 The `errors` vector tracks the normalized bond error after each half-sweep. The algorithm converges when:
 
