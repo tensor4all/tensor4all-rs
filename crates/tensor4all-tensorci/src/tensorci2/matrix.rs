@@ -29,8 +29,8 @@
 use super::TciLinalg;
 use super::{crossinterpolate2_with_rng_linalg, seeded_rng, TCI2OptimizationResult, TCI2Options};
 use crate::error::{Result, TCIError};
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tensor4all_core::{MatrixLuciScalar, MultiIndex, MultiIndexCache, Scalar};
 use tensor4all_simplett::{SimpleTensorTrain, TTScalar, Tensor3Ops};
@@ -361,6 +361,47 @@ where
     block_len: usize,
     max_points_per_call: usize,
     stats: MatrixSamplingStats,
+    scratch: Scratch<T>,
+}
+
+/// Buffers reused by every [`SourceState::entries`] call, so a request costs no
+/// fresh vectors beyond the cached payloads themselves. They are cleared at the
+/// start of each call and hold no state between calls.
+struct Scratch<T> {
+    /// Slot (distinct point) of each request.
+    request_slots: Vec<usize>,
+    /// One entry per distinct point of the call.
+    slots: Vec<PointSlot<T>>,
+    /// Pooled coordinate vectors of the missing points; only the first
+    /// `n_misses` of the current call are meaningful.
+    miss_points: Vec<MultiIndex>,
+    /// Payloads of the missing points, in first-occurrence order.
+    miss_blocks: Vec<Arc<[T]>>,
+    /// Output buffer handed to the callback.
+    out: Vec<T>,
+}
+
+impl<T> Scratch<T> {
+    fn new() -> Self {
+        Self {
+            request_slots: Vec::new(),
+            slots: Vec::new(),
+            miss_points: Vec::new(),
+            miss_blocks: Vec::new(),
+            out: Vec::new(),
+        }
+    }
+
+    /// Records `x` as the next missing point, reusing a pooled vector.
+    fn push_miss(&mut self, n_misses: usize, x: &[usize]) {
+        match self.miss_points.get_mut(n_misses) {
+            Some(point) => {
+                point.clear();
+                point.extend_from_slice(x);
+            }
+            None => self.miss_points.push(x.to_vec()),
+        }
+    }
 }
 
 /// How a distinct point of one request batch is obtained.
@@ -392,6 +433,7 @@ where
             block_len,
             max_points_per_call,
             stats: MatrixSamplingStats::default(),
+            scratch: Scratch::new(),
         })
     }
 
@@ -403,53 +445,71 @@ where
     /// `max_points_per_call` points (a deterministic split), and the results are
     /// inserted into the cache.
     fn entries(&mut self, requests: &[(&[usize], usize, usize)]) -> Vec<T> {
-        let mut slot_of: HashMap<&[usize], usize> = HashMap::new();
-        let mut slots: Vec<PointSlot<T>> = Vec::new();
-        let mut miss_points: Vec<MultiIndex> = Vec::new();
-        let mut request_slots = Vec::with_capacity(requests.len());
-        for &(x, _, _) in requests {
-            let slot = *slot_of.entry(x).or_insert_with(|| {
-                // The solver only requests in-range points, so a cache key
-                // error cannot occur; it would be treated as a miss.
-                match self.cache.get(x).ok().flatten() {
-                    Some(block) => {
-                        slots.push(PointSlot::Ready(block));
-                        slots.len() - 1
-                    }
+        let scratch = &mut self.scratch;
+        scratch.request_slots.clear();
+        scratch.slots.clear();
+        scratch.miss_blocks.clear();
+        let mut n_misses = 0;
+        // The solver only requests in-range points, so a cache key error cannot
+        // occur; it would be treated as a miss.
+        let mut resolve =
+            |scratch: &mut Scratch<T>, cache: &mut MultiIndexCache<Arc<[T]>>, x: &[usize]| {
+                let slot = scratch.slots.len();
+                match cache.get(x).ok().flatten() {
+                    Some(block) => scratch.slots.push(PointSlot::Ready(block)),
                     None => {
-                        miss_points.push(x.to_vec());
-                        slots.push(PointSlot::Missing(miss_points.len() - 1));
-                        slots.len() - 1
+                        scratch.push_miss(n_misses, x);
+                        scratch.slots.push(PointSlot::Missing(n_misses));
+                        n_misses += 1;
                     }
                 }
-            });
-            request_slots.push(slot);
+                slot
+            };
+        if let [(x, _, _)] = requests {
+            // A single request has nothing to deduplicate.
+            let slot = resolve(scratch, &mut self.cache, x);
+            scratch.request_slots.push(slot);
+        } else {
+            let mut slot_of: FxHashMap<&[usize], usize> =
+                FxHashMap::with_capacity_and_hasher(requests.len(), Default::default());
+            for &(x, _, _) in requests {
+                let slot = *slot_of
+                    .entry(x)
+                    .or_insert_with(|| resolve(scratch, &mut self.cache, x));
+                scratch.request_slots.push(slot);
+            }
         }
 
-        let mut miss_blocks: Vec<Arc<[T]>> = Vec::with_capacity(miss_points.len());
-        for chunk in miss_points.chunks(self.max_points_per_call) {
-            let mut out = vec![T::default(); chunk.len() * self.block_len];
-            (self.source)(chunk, &mut out);
+        let mut start = 0;
+        while start < n_misses {
+            let end = start.saturating_add(self.max_points_per_call).min(n_misses);
+            let chunk = &scratch.miss_points[start..end];
+            scratch.out.clear();
+            scratch
+                .out
+                .resize(chunk.len() * self.block_len, T::default());
+            (self.source)(chunk, &mut scratch.out);
             self.stats.source_points += chunk.len();
-            for (point, block) in chunk.iter().zip(out.chunks_exact(self.block_len)) {
+            for (point, block) in chunk.iter().zip(scratch.out.chunks_exact(self.block_len)) {
                 let block: Arc<[T]> = block.into();
                 // An insert fails only for an invalid key, which cannot
                 // happen for a point the callback was just asked about.
                 let _ = self.cache.insert(point, block.clone());
-                miss_blocks.push(block);
+                scratch.miss_blocks.push(block);
             }
+            start = end;
         }
 
         let mut values = Vec::with_capacity(requests.len());
-        for (&(_, i, j), &slot) in requests.iter().zip(&request_slots) {
-            let block = match &slots[slot] {
+        for (&(_, i, j), &slot) in requests.iter().zip(&scratch.request_slots) {
+            let block = match &scratch.slots[slot] {
                 PointSlot::Ready(block) => block,
-                PointSlot::Missing(m) => &miss_blocks[*m],
+                PointSlot::Missing(m) => &scratch.miss_blocks[*m],
             };
             values.push(block[i + self.rows * j]);
         }
         self.stats.entry_requests += requests.len();
-        self.stats.cache_hits += requests.len() - miss_points.len();
+        self.stats.cache_hits += requests.len() - n_misses;
         values
     }
 
