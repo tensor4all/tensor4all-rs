@@ -15,13 +15,18 @@ the remaining code:
     a literal ``None`` argument to ``with_eager_session``,
     ``with_eager_session_typed``, ``with_engine`` or ``with_execution_engine``.
     Arguments are split with a balanced-delimiter scan, so a call that
-    ``rustfmt`` wrapped over several lines is still found.
+    ``rustfmt`` wrapped over several lines is still found. Since #1378 core's
+    eager entries take an ``EngineRoute`` instead of an ``Option``, and an
+    implicit caller spells the bridge ``EngineRoute::Legacy``: like
+    ``legacy::mat_mul`` that is a bridge operation, not a site, and the bridge
+    itself stays counted where it enters ``with_runtime_engine_or_global(``.
 ``global-accessor``
     a call of ``default_context()``, ``default_eager_ctx()``,
     ``default_cpu_execution_context()``, ``with_default_session(``,
     ``with_default_backend(``, ``with_default_graph_compiler(``, the
-    ``None``-route fallback ``with_runtime_engine(`` (their ``fn``
-    definitions are not sites), and every naming of the global
+    owner-resolving implicit entry ``with_runtime_engine(`` and its
+    process-global fallback bridge ``with_runtime_engine_or_global(`` (#1378;
+    their ``fn`` definitions are not sites), and every naming of the global
     ``implicit_route::eager_runtime`` / ``legacy::eager_runtime`` path (the
     ``context.eager_runtime()`` method is explicit and not a site). A
     renaming import (``use ..::default_context as ctx;``) is a site too.
@@ -106,7 +111,7 @@ NONE_ROUTE_RE = re.compile(
 GLOBAL_ACCESSOR_RE = re.compile(
     r"\b(default_context|default_eager_ctx|default_cpu_execution_context"
     r"|with_default_session|with_default_backend|with_default_graph_compiler"
-    r"|with_runtime_engine)"
+    r"|with_runtime_engine_or_global|with_runtime_engine)"
     r"\s*(?:::\s*<[^;{}]*?>\s*)?\("
 )
 CONTEXT_TYPE = r"(?:[A-Za-z_]\w*\s*::\s*)*(?:Cpu|Cuda)?ExecutionContext\b"
@@ -127,7 +132,7 @@ GLOBAL_EAGER_RUNTIME_RE = re.compile(
 ACCESSOR_ALIAS_RE = re.compile(
     r"\b(default_context|default_eager_ctx|default_cpu_execution_context"
     r"|with_default_session|with_default_backend|with_default_graph_compiler"
-    r"|with_runtime_engine)\s+as\s+([A-Za-z_]\w*)"
+    r"|with_runtime_engine_or_global|with_runtime_engine)\s+as\s+([A-Za-z_]\w*)"
 )
 BRACE_RE = re.compile(r"[{};]")
 ITEM_RE = re.compile(r"\b(fn|struct|enum|trait)\s+([A-Za-z_]\w*)")

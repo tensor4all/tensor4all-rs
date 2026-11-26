@@ -87,6 +87,24 @@ class PatternTests(unittest.TestCase):
         )
         self.assertEqual(patterns(explicit), [])
 
+    def test_legacy_runtime_engine_bridge_is_a_site_but_its_route_is_not(self) -> None:
+        # #1378: the process-global fallback is a named bridge entry and stays
+        # counted; the `EngineRoute::Legacy` argument that reaches it is not.
+        bridge = (
+            "fn f(rt: &R) { crate::implicit_route::with_runtime_engine_or_global(rt, |e| g(e)); }\n"
+        )
+        [site] = MODULE.scan_source(CORE, bridge)
+        self.assertEqual(
+            (site.pattern, site.text),
+            ("global-accessor", "with_runtime_engine_or_global()"),
+        )
+        definition = "pub fn with_runtime_engine_or_global<R>(rt: &R) -> R { todo() }\n"
+        self.assertEqual(patterns(definition), [])
+        renamed = "use tensor4all_tensorbackend::with_runtime_engine_or_global as eng;\n"
+        self.assertEqual(patterns(renamed), ["global-accessor"])
+        route = "fn f() { with_eager_session(&rt, EngineRoute::Legacy, |s| s.run()); }\n"
+        self.assertEqual(patterns(route), [])
+
     def test_renaming_import_of_an_accessor_is_a_site(self) -> None:
         source = "use tensor4all_core::legacy::default_cpu_execution_context as cpu;\n"
         [site] = MODULE.scan_source(CORE, source)
