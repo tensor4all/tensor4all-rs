@@ -325,6 +325,10 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
     /// the arena is rolled back and the state is unchanged. Bond ranks,
     /// selected pivots and the output are never touched.
     ///
+    /// Returns `grow`'s value with the input frames the published ones
+    /// replaced, for a caller that may undo the growth later (the unit-vertex
+    /// expansion); `None` when nothing grew.
+    ///
     /// Guard injection (`inject_global_pivots`) and the unit-vertex expansion
     /// (`crate::unit_vertex`) both grow candidate sets this way.
     ///
@@ -332,7 +336,8 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
     ///
     /// Propagates the errors of `grow` and of the frame extension, and returns
     /// [`crate::TreeAciError::InternalInvariant`] when the arena cannot be
-    /// rolled back.
+    /// rolled back; a rollback that fails after an error is attached to that
+    /// error as [`crate::TreeAciError::RollbackFailed`].
     pub(crate) fn grow_candidate_sets<R>(
         &mut self,
         exec: &mut crate::exec::Exec<'_, '_>,
@@ -341,23 +346,20 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
             &PreparedTreeProblem<V>,
             &CandidateSets,
         ) -> Result<Option<(CandidateSets, R)>>,
-    ) -> Result<Option<R>> {
+    ) -> Result<Option<(R, InputFrameStore<T>)>> {
         let checkpoint = self.sample_arena.checkpoint();
         match self.stage_candidate_growth(exec, grow) {
             Ok(Some((candidates, frames, value))) => {
                 self.candidates = candidates;
-                self.input_frames = frames;
+                let replaced = std::mem::replace(&mut self.input_frames, frames);
                 self.generation = self.candidates.generation;
-                Ok(Some(value))
+                Ok(Some((value, replaced)))
             }
             Ok(None) => {
                 self.sample_arena.rollback(checkpoint)?;
                 Ok(None)
             }
-            Err(error) => {
-                self.sample_arena.rollback(checkpoint)?;
-                Err(error)
-            }
+            Err(error) => Err(error.after_rollback(self.sample_arena.rollback(checkpoint))),
         }
     }
 

@@ -414,6 +414,36 @@ struct CandidateCacheKey {
     incoming: CandidateIncomingKey,
 }
 
+impl CandidateCacheKey {
+    /// Whether every incoming sample the key names lies below `kept[edge]`
+    /// on its edge; `false` for an edge unknown to `problem`.
+    fn names_only_kept<V: TreeAciNode>(
+        &self,
+        problem: &PreparedTreeProblem<V>,
+        kept: &[usize],
+    ) -> bool {
+        let Some(directed) = problem.directed_edges.get(self.directed_edge) else {
+            return false;
+        };
+        let named = match self.incoming {
+            CandidateIncomingKey::None => [None, None],
+            CandidateIncomingKey::One(sample) => [Some(sample), None],
+            CandidateIncomingKey::Two(first, second) => [Some(first), Some(second)],
+        };
+        named
+            .iter()
+            .zip([0, 1])
+            .all(|(sample, position)| match sample {
+                None => true,
+                Some(sample) => directed
+                    .incoming_to_from
+                    .get(position)
+                    .and_then(|incoming| kept.get(*incoming))
+                    .is_some_and(|kept| sample < kept),
+            })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PackedCandidateFrameLayout {
     BondByCandidate,
@@ -1188,6 +1218,50 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     .set(candidate_bytes + entry_bytes);
             }
         }
+    }
+
+    /// Drops every memoized candidate frame that names an incoming sample at
+    /// or past `kept[edge]` on its edge, and its charge.
+    ///
+    /// The memo is keyed by sample ids, and a sample-arena rollback to `kept`
+    /// (see [`crate::samples::SampleArenaCheckpoint::record_counts`]) hands
+    /// those ids out again for other samples. Call it with the counts of every
+    /// rollback after which frames over the removed samples may have been
+    /// memoized. An entry on an unknown edge is dropped as well.
+    pub(crate) fn forget_candidates_past<V: TreeAciNode>(
+        &self,
+        problem: &PreparedTreeProblem<V>,
+        kept: &[usize],
+    ) {
+        let mut freed = 0usize;
+        self.candidate_cache.borrow_mut().retain(|key, values| {
+            let keep = key.names_only_kept(problem, kept);
+            if !keep {
+                freed = freed.saturating_add(
+                    values
+                        .len()
+                        .saturating_mul(size_of::<T>())
+                        .saturating_add(size_of::<CandidateCacheKey>()),
+                );
+            }
+            keep
+        });
+        self.candidate_cache_bytes
+            .set(self.candidate_cache_bytes.get().saturating_sub(freed));
+    }
+
+    /// Whether every memoized candidate frame names only incoming samples
+    /// below `kept[edge]` on their edges.
+    #[cfg(test)]
+    pub(crate) fn candidate_cache_names_only_kept(
+        &self,
+        problem: &PreparedTreeProblem<impl TreeAciNode>,
+        kept: &[usize],
+    ) -> bool {
+        self.candidate_cache
+            .borrow()
+            .keys()
+            .all(|key| key.names_only_kept(problem, kept))
     }
 
     fn cached_candidate(&self, key: &CandidateCacheKey) -> Option<Rc<[T]>> {

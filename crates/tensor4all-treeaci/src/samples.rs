@@ -178,6 +178,14 @@ impl ComponentProjectionScratch {
     }
 }
 
+impl SampleArenaCheckpoint {
+    /// Records per directed edge at the checkpoint: a rollback keeps the ids
+    /// below `record_counts()[edge]` and frees every id from there on.
+    pub(crate) fn record_counts(&self) -> &[usize] {
+        &self.record_counts
+    }
+}
+
 impl SampleArena {
     pub(crate) fn checkpoint(&self) -> SampleArenaCheckpoint {
         SampleArenaCheckpoint {
@@ -384,10 +392,7 @@ impl SampleArena {
         let projected = self.project_components(problem, point, &requested);
         let projected = match projected {
             Ok(projected) => projected,
-            Err(error) => {
-                self.rollback(checkpoint)?;
-                return Err(error);
-            }
+            Err(error) => return Err(error.after_rollback(self.rollback(checkpoint))),
         };
         let activation = match budget {
             Some(budget) => CandidateActivation::plan(problem, candidates, &projected, budget),
@@ -415,10 +420,7 @@ impl SampleArena {
                     });
             let next_generation = match next_generation {
                 Ok(generation) => generation,
-                Err(error) => {
-                    self.rollback(checkpoint)?;
-                    return Err(error);
-                }
+                Err(error) => return Err(error.after_rollback(self.rollback(checkpoint))),
             };
             for (edge, id) in activation.additions.into_iter().enumerate() {
                 if let Some(id) = id {

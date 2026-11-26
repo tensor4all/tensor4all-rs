@@ -199,4 +199,38 @@ pub enum TreeAciError {
         /// Description intended for bug reports.
         message: &'static str,
     },
+
+    /// A step of the run failed, and undoing what it had already changed
+    /// failed as well.
+    ///
+    /// `error` is the step's own failure and the one to act on; `rollback`
+    /// says why the state could not be restored, normally an
+    /// [`Self::InternalInvariant`] to include in a bug report. Neither error
+    /// replaces the other.
+    #[error("{error}; restoring the state afterwards also failed: {rollback}")]
+    RollbackFailed {
+        /// The failure of the step itself.
+        error: Box<TreeAciError>,
+        /// The failure of the rollback that followed it.
+        rollback: Box<TreeAciError>,
+    },
 }
+
+impl TreeAciError {
+    /// This error, raised by a step whose partial changes were then undone
+    /// with the outcome `rollback`: unchanged when the rollback succeeded,
+    /// otherwise wrapped with the rollback's error in
+    /// [`Self::RollbackFailed`], so the step's error is never replaced.
+    pub(crate) fn after_rollback(self, rollback: Result<()>) -> Self {
+        match rollback {
+            Ok(()) => self,
+            Err(rollback) => Self::RollbackFailed {
+                error: Box::new(self),
+                rollback: Box::new(rollback),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

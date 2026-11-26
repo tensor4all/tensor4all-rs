@@ -308,7 +308,8 @@ fn a_failed_proposal_abandons_the_expansion() {
     let records = state.sample_arena.record_count();
     let bytes = state.sample_arena.retained_bytes();
     // Directed frames only: the candidate-frame memo is shared by every
-    // clone of the store and keeps what the failed evaluation computed.
+    // clone of the store and keeps what the failed evaluation computed over
+    // retained samples (see the next test for the rolled-back ones).
     let frame_records = state.input_frames.records();
     let generation = state.generation;
     expansion_debug_log::take();
@@ -345,6 +346,112 @@ fn a_failed_proposal_abandons_the_expansion() {
         );
     }
     assert_eq!(state.generation, generation);
+}
+
+/// A failed proposal memoizes candidate frames over the expanded samples;
+/// `abandon` must forget them, because the rollback hands their ids out
+/// again. Otherwise a later sample with a reused id would get the frame of
+/// the sample it replaced (#1464).
+#[test]
+fn a_reused_sample_id_does_not_return_a_stale_memoized_frame() {
+    // Node 1 is the unit vertex; node 0 has a leaf child 5, so the expanded
+    // bond out of node 0 or 3 has samples outside what the expansion reads.
+    let edges = [(0, 1), (1, 2), (1, 3), (3, 4), (0, 5)];
+    let (inputs, options) = unit_fixture(&edges, 6, &[1]);
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let forward = directed(&state, 1, 2);
+    let [target, other] = state.problem.directed_edges[forward].incoming_to_from[..] else {
+        panic!("node 1 has two other bonds");
+    };
+    let [child] = state.problem.directed_edges[target].incoming_to_from[..] else {
+        panic!("the expanded bond's source has one other bond");
+    };
+    let freed = state.sample_arena.directed_record_count(target).unwrap();
+    let mut failing = |_: crate::TreeElementwiseBatch<'_, f64>, _: &mut [f64]| {
+        Err(TreeAciError::Callback {
+            message: "stop".into(),
+        })
+    };
+    expansion_debug_log::take();
+    let result = update_edge_transaction(
+        &mut state,
+        forward,
+        &options,
+        true,
+        false,
+        &mut failing,
+        &mut crate::exec::Exec::Global,
+    );
+    assert!(matches!(result, Err(TreeAciError::Callback { .. })));
+    assert_eq!(
+        expansion_debug_log::take(),
+        vec![(forward, vec![(target, 1)])]
+    );
+    assert_eq!(
+        state.sample_arena.directed_record_count(target).unwrap(),
+        freed
+    );
+    let kept = (0..state.problem.directed_edges.len())
+        .map(|edge| state.sample_arena.directed_record_count(edge).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        state
+            .input_frames
+            .candidate_cache_names_only_kept(&state.problem, &kept),
+        "the memo still names a rolled-back sample"
+    );
+
+    // A sample the expansion never offered: the child's coordinate that is
+    // not among its candidates. It takes the first freed id.
+    let unused = enumerate_candidates(&state.problem, &state.candidates, child, "test", 2)
+        .unwrap()
+        .into_iter()
+        .map(|sample| {
+            state
+                .sample_arena
+                .intern_component(&state.problem, child, sample)
+                .unwrap()
+        })
+        .find(|id| !state.candidates.ids[child].contains(id))
+        .unwrap();
+    let sample = crate::samples::ComponentSample {
+        local_coordinate: 0,
+        incoming: vec![(child, unused)],
+    };
+    let reused = state
+        .sample_arena
+        .intern_component(&state.problem, target, sample)
+        .unwrap();
+    assert_eq!(reused, freed, "the rollback hands the id out again");
+    state.input_frames = state
+        .input_frames
+        .extend(
+            &inputs,
+            &state.problem,
+            &state.sample_arena,
+            &mut crate::exec::Exec::Global,
+        )
+        .unwrap();
+
+    // The row of the commit that names the reused id.
+    let row = crate::samples::ComponentSample {
+        local_coordinate: 0,
+        incoming: vec![(target, reused), (other, state.candidates.ids[other][0])],
+    };
+    let memoized = state
+        .input_frames
+        .candidate_frame(&inputs, &state.problem, 0, forward, &row, &mut None)
+        .unwrap();
+    let fresh = crate::frames::InputFrameStore::<f64>::from_samples(
+        &inputs,
+        &state.problem,
+        &state.sample_arena,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap()
+    .candidate_frame(&inputs, &state.problem, 0, forward, &row, &mut None)
+    .unwrap();
+    assert_eq!(memoized, fresh);
 }
 
 /// An expansion that cannot be staged fails before any operator call and
@@ -390,35 +497,192 @@ fn a_failed_expansion_leaves_the_state_unchanged() {
     assert_eq!(state.sample_arena.retained_bytes(), bytes);
 }
 
-/// An expanded side is charged against the candidate limit of the side it
-/// feeds, before anything is interned.
+/// Runs one transaction on `forward` with the identity operator and returns
+/// its report together with the expansions it made.
+fn commit(
+    state: &mut TreeAciState<'_, f64, usize>,
+    forward: DirectedEdgeId,
+    options: &TreeAciOptions<usize>,
+) -> (
+    crate::transaction::EdgeCommitReport,
+    Vec<expansion_debug_log::Entry>,
+) {
+    expansion_debug_log::take();
+    let report = update_edge_transaction(
+        state,
+        forward,
+        options,
+        true,
+        false,
+        &mut identity,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
+    (report, expansion_debug_log::take())
+}
+
+/// Appends every side sample of `edge` to its candidate set, with frames.
+fn widen(state: &mut TreeAciState<'_, f64, usize>, edge: DirectedEdgeId) {
+    state
+        .grow_candidate_sets(
+            &mut crate::exec::Exec::Global,
+            |arena, problem, candidates| {
+                let mut grown = candidates.clone();
+                for sample in enumerate_candidates(problem, candidates, edge, "test", usize::MAX)? {
+                    let id = arena.intern_component(problem, edge, sample)?;
+                    grown.push_unique(edge, id);
+                }
+                Ok(Some((grown, ())))
+            },
+        )
+        .unwrap()
+        .unwrap();
+}
+
+/// An expansion whose enumeration alone exceeds the candidate limit of the
+/// side it feeds is skipped before anything is interned, and the commit runs
+/// on the plain sets instead of failing (#1464).
 #[test]
-fn an_expanded_side_respects_the_candidate_limit_of_its_side() {
+fn an_enumeration_over_the_candidate_limit_of_its_side_is_skipped() {
     let (inputs, base) = unit_fixture(&EDGES, 5, &[1]);
-    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &base).unwrap();
-    let records = state.sample_arena.record_count();
-    // 1 -> 2 reads the unit side as rows, 2 -> 1 as columns.
-    for (from, to, resource) in [(1, 2, "candidate rows"), (2, 1, "candidate columns")] {
+    // 1 -> 2 reads the unit side as rows, 2 -> 1 as columns. The plain unit
+    // side has one candidate; the expanded bond enumerates two.
+    for (from, to) in [(1, 2), (2, 1)] {
+        let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &base).unwrap();
+        let records = state.sample_arena.record_count();
+        let candidates = state.candidates.clone();
         let options = TreeAciOptions {
             max_candidate_rows: if from == 1 { 1 } else { 1 << 20 },
             max_candidate_cols: if from == 1 { 1 << 20 } else { 1 },
             ..base.clone()
         };
         let forward = directed(&state, from, to);
-        let result = expand_unit_vertices(
+        assert_eq!(
+            unit_vertex_expansion_targets(&state.problem, &state.edge_ranks, forward)
+                .unwrap()
+                .len(),
+            1,
+            "{from} -> {to} qualifies for an expansion"
+        );
+        let expansion = expand_unit_vertices(
             &mut state,
             forward,
             &options,
             &mut crate::exec::Exec::Global,
+        )
+        .unwrap();
+        assert!(
+            expansion.is_none(),
+            "{from} -> {to} expanded past its limit"
         );
-        match result {
-            Err(TreeAciError::ResourceLimit {
-                resource: actual, ..
-            }) => assert_eq!(actual, resource),
-            Err(other) => panic!("unexpected error {other:?}"),
-            Ok(_) => panic!("{from} -> {to} expanded past its limit"),
-        }
         assert_eq!(state.sample_arena.record_count(), records);
+        assert_eq!(state.candidates, candidates);
+
+        // The commit sees the 1 x 2 (or 2 x 1) plain matrix.
+        let (report, expansions) = commit(&mut state, forward, &options);
+        assert_eq!(report.evaluated_points, 2);
+        assert!(expansions.is_empty());
+    }
+}
+
+/// An expansion that fits its enumeration but leaves the enlarged side over
+/// the limit is rolled back and skipped; one exactly at the limit stays.
+#[test]
+fn an_enlarged_side_over_the_candidate_limit_is_rolled_back() {
+    let (inputs, base) = unit_fixture(&EDGES, 5, &[1]);
+    let fresh = || {
+        let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &base).unwrap();
+        let forward = directed(&state, 1, 2);
+        let target = state.problem.directed_edges[forward].incoming_to_from[0];
+        let other = state.problem.directed_edges[forward].incoming_to_from[1];
+        // Two candidates on the other bond: the rows are 1 x 2 plain and
+        // 2 x 2 expanded, while the expanded bond enumerates only two.
+        widen(&mut state, other);
+        assert_eq!(state.candidates.ids[other].len(), 2);
+        (state, forward, target)
+    };
+    let (mut state, forward, _) = fresh();
+    let records = state.sample_arena.record_count();
+    let candidates = state.candidates.clone();
+    let tight = TreeAciOptions {
+        max_candidate_rows: 3,
+        ..base.clone()
+    };
+    let expansion =
+        expand_unit_vertices(&mut state, forward, &tight, &mut crate::exec::Exec::Global).unwrap();
+    assert!(expansion.is_none(), "4 rows exceed the limit of 3");
+    assert_eq!(state.sample_arena.record_count(), records);
+    assert_eq!(state.candidates, candidates);
+    let (report, expansions) = commit(&mut state, forward, &tight);
+    assert_eq!(report.evaluated_points, 2 * 2, "plain rows times leaf 2");
+    assert!(expansions.is_empty());
+
+    let (mut state, forward, target) = fresh();
+    let at_limit = TreeAciOptions {
+        max_candidate_rows: 4,
+        ..base.clone()
+    };
+    let (report, expansions) = commit(&mut state, forward, &at_limit);
+    assert_eq!(report.evaluated_points, 4 * 2);
+    assert_eq!(expansions, vec![(forward, vec![(target, 1)])]);
+}
+
+/// An expansion that would push the local matrix past the element ceiling is
+/// skipped, and the commit runs on the plain matrix.
+#[test]
+fn an_expansion_over_the_local_matrix_ceiling_is_skipped() {
+    let (inputs, options) = unit_fixture(&EDGES, 5, &[1]);
+    for (ceiling, expected_points, expands) in [(2, 2, false), (4, 4, true)] {
+        let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+        let forward = directed(&state, 1, 2);
+        let target = state.problem.directed_edges[forward].incoming_to_from[0];
+        // Plain 1 x 2, expanded 2 x 2.
+        state.problem.max_local_matrix_elements = ceiling;
+        let (report, expansions) = commit(&mut state, forward, &options);
+        assert_eq!(
+            report.evaluated_points, expected_points,
+            "ceiling {ceiling}"
+        );
+        if expands {
+            assert_eq!(expansions, vec![(forward, vec![(target, 1)])]);
+        } else {
+            assert!(expansions.is_empty(), "ceiling {ceiling}");
+        }
+    }
+}
+
+/// Each target is charged on its own: a column target over its limit is
+/// skipped while the row target of the same commit still expands.
+#[test]
+fn a_skipped_target_leaves_the_other_side_expanded() {
+    // Nodes 1 and 3 are unit vertices of degree 3; every leaf is binary.
+    let edges = [(0, 1), (1, 2), (1, 3), (3, 4), (3, 5)];
+    let (inputs, base) = unit_fixture(&edges, 6, &[1, 3]);
+    let state = TreeAciState::<f64, usize>::initialize(&inputs, &base).unwrap();
+    let forward = directed(&state, 1, 3);
+    let reverse = state.problem.directed_edges[forward].reverse;
+    let row_target = state.problem.directed_edges[forward].incoming_to_from[0];
+    let col_target = state.problem.directed_edges[reverse].incoming_to_from[0];
+    drop(state);
+    for (max_candidate_cols, expected) in [
+        (1 << 20, vec![(row_target, 1), (col_target, 1)]),
+        (1, vec![(row_target, 1)]),
+    ] {
+        let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &base).unwrap();
+        let options = TreeAciOptions {
+            max_candidate_cols,
+            ..base.clone()
+        };
+        let expansion = expand_unit_vertices(
+            &mut state,
+            forward,
+            &options,
+            &mut crate::exec::Exec::Global,
+        )
+        .unwrap()
+        .expect("the row side expands");
+        assert_eq!(expansion.restore(), expected.as_slice());
+        expansion.finish(&mut state);
     }
 }
 

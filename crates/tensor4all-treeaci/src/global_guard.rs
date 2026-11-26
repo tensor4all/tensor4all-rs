@@ -395,7 +395,7 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
         });
         Ok((injected > 0).then_some((proposed_active, injected)))
     })?;
-    Ok(injected.unwrap_or(0))
+    Ok(injected.map_or(0, |(injected, _)| injected))
 }
 
 pub(crate) struct InputEvaluators<'a, V: TreeAciNode> {
