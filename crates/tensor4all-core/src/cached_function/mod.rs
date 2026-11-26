@@ -238,7 +238,18 @@ impl<V: Clone + Send + Sync> InnerCache<V> {
         }
     }
 
-    /// Bytes of the tables (see [`MemoTable::bytes`]).
+    /// Declare the per-value payload bytes (see [`MemoTable::set_payload`]).
+    fn set_payload(&self, payload: usize) {
+        match self {
+            Self::U64 { cache, .. } => write_lock(cache).set_payload(payload),
+            Self::U128 { cache, .. } => write_lock(cache).set_payload(payload),
+            Self::U256 { cache, .. } => write_lock(cache).set_payload(payload),
+            Self::U512 { cache, .. } => write_lock(cache).set_payload(payload),
+            Self::U1024 { cache, .. } => write_lock(cache).set_payload(payload),
+        }
+    }
+
+    /// Bytes of the tables and declared payload (see [`MemoTable::bytes`]).
     fn bytes(&self) -> usize {
         match self {
             Self::U64 { cache, .. } => read_lock(cache).bytes(),

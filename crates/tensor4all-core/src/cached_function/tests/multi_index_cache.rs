@@ -739,3 +739,111 @@ fn keyed_inserts_respect_the_payload_limit() {
     assert_eq!(cache.hits(), 0);
     assert_eq!(cache.misses(), 3);
 }
+
+fn table_bytes_f64(buckets: usize) -> usize {
+    crate::cached_function::memo_table::table_bytes::<u64, f64>(buckets)
+}
+
+#[test]
+fn the_declared_payload_is_part_of_retained_bytes() {
+    let mut cache: MultiIndexCache<f64> = MultiIndexCache::new(&[8])
+        .unwrap()
+        .with_value_payload_bytes(100);
+    assert_eq!(cache.retained_bytes(), 0);
+    for i in 0..3 {
+        cache.insert(&[i], i as f64).unwrap();
+        // One 4-bucket table holds 3 entries; payload grows with `len`.
+        assert_eq!(
+            cache.retained_bytes(),
+            table_bytes_f64(4) + (i + 1) * 100,
+            "{i}"
+        );
+    }
+    // An overwrite adds no payload.
+    cache.insert(&[2], 9.0).unwrap();
+    assert_eq!(cache.retained_bytes(), table_bytes_f64(4) + 300);
+    // `clear` empties the payload but keeps the declaration.
+    cache.clear();
+    assert_eq!(cache.retained_bytes(), 0);
+    cache.insert(&[0], 1.0).unwrap();
+    assert_eq!(cache.retained_bytes(), table_bytes_f64(4) + 100);
+}
+
+#[test]
+fn payload_alone_triggers_generation_eviction() {
+    // The 4-bucket table has room for 3 entries by itself, but the limit only
+    // pays for two payloads next to it.
+    let limit = table_bytes_f64(4) + 2 * 100;
+    let mut cache: MultiIndexCache<f64> = MultiIndexCache::with_retained_byte_limit(&[8], limit)
+        .unwrap()
+        .with_value_payload_bytes(100);
+    cache.insert(&[0], 0.0).unwrap();
+    cache.insert(&[1], 1.0).unwrap();
+    assert_eq!((cache.len(), cache.evicted_entries()), (2, 0));
+    cache.insert(&[2], 2.0).unwrap();
+    assert_eq!(
+        cache.evicted_entries(),
+        2,
+        "the older generation was evicted"
+    );
+    assert_eq!((cache.len(), cache.dropped_inserts()), (1, 0));
+    assert!(cache.retained_bytes() <= limit);
+    assert_eq!(cache.get(&[2]).unwrap(), Some(2.0));
+    assert_eq!(cache.get(&[0]).unwrap(), None);
+    for i in 3..8 {
+        cache.insert(&[i], i as f64).unwrap();
+        assert!(cache.retained_bytes() <= limit, "{i}");
+        assert_eq!(cache.get(&[i]).unwrap(), Some(i as f64));
+    }
+}
+
+#[test]
+fn a_value_larger_than_the_limit_is_a_dropped_insert() {
+    let limit = table_bytes_f64(4) + 99;
+    let mut cache: MultiIndexCache<f64> = MultiIndexCache::with_retained_byte_limit(&[8], limit)
+        .unwrap()
+        .with_value_payload_bytes(100);
+    cache.insert(&[1], 1.0).unwrap();
+    assert_eq!((cache.len(), cache.dropped_inserts()), (0, 1));
+    assert_eq!(cache.retained_bytes(), 0);
+    // The batch route counts the drop and still returns the value.
+    let values = cache
+        .evaluate_batched(
+            crate::ColMajorArrayRef::new(&[2usize, 3], &[1, 2]).unwrap(),
+            |points| -> Result<Vec<f64>, std::convert::Infallible> {
+                Ok(vec![5.0; points.shape()[1]])
+            },
+        )
+        .unwrap();
+    assert_eq!(values, vec![5.0, 5.0]);
+    assert_eq!((cache.len(), cache.dropped_inserts()), (0, 3));
+}
+
+#[test]
+fn zero_payload_is_the_previous_accounting() {
+    let limit = table_bytes_f64(4);
+    let run = |payload: Option<usize>| {
+        let base: MultiIndexCache<f64> =
+            MultiIndexCache::with_retained_byte_limit(&[8], limit).unwrap();
+        let mut cache = match payload {
+            Some(p) => base.with_value_payload_bytes(p),
+            None => base,
+        };
+        for i in 0..8 {
+            cache.insert(&[i], i as f64).unwrap();
+        }
+        (
+            cache.len(),
+            cache.retained_bytes(),
+            cache.evicted_entries(),
+            cache.dropped_inserts(),
+        )
+    };
+    assert_eq!(run(None), run(Some(0)));
+    assert_eq!(
+        MultiIndexCache::<f64>::new(&[2])
+            .unwrap()
+            .value_payload_bytes(),
+        0
+    );
+}
