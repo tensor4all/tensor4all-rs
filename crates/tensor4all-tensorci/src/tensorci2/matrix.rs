@@ -1,0 +1,669 @@
+//! Matrix-valued chain TCI2.
+//!
+//! [`crossinterpolate2_matrix`] interpolates a function `x -> F(x)` whose value
+//! is a `rows x cols` matrix. The matrix indices become the two boundary sites
+//! of an ordinary chain: the internal problem has local dimensions
+//! `[rows, d_1, .., d_L, cols]` and `f(i, x, j) = F(x)[i, j]`.
+//! The solver therefore sees scalar callbacks only; pivot kernels, random
+//! number use, convergence and normalization are those of
+//! [`crossinterpolate2`](super::crossinterpolate2).
+//!
+//! The caller's callback is evaluated once per physical point `x` and returns
+//! the whole matrix. A fit-owned [`MultiIndexCache`] keyed by `x` serves every
+//! later request for an entry of the same point, so a point is not sampled
+//! again for another matrix entry while it stays retained.
+
+use super::TciLinalg;
+use super::{crossinterpolate2_with_rng_linalg, seeded_rng, TCI2OptimizationResult, TCI2Options};
+use crate::error::{Result, TCIError};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use tensor4all_core::{MatrixLuciScalar, MultiIndex, MultiIndexCache, Scalar};
+use tensor4all_simplett::{SimpleTensorTrain, TTScalar, Tensor3Ops};
+use tensor4all_tensorbackend::Matrix;
+
+/// Shape of the matrix returned by the callback at every point.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::MatrixShape;
+///
+/// let shape = MatrixShape { rows: 2, cols: 3 };
+/// assert_eq!(shape.rows * shape.cols, 6);
+/// assert_ne!(shape, MatrixShape { rows: 3, cols: 2 });
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MatrixShape {
+    /// Number of matrix rows; the dimension of the leading boundary site.
+    pub rows: usize,
+    /// Number of matrix columns; the dimension of the trailing boundary site.
+    pub cols: usize,
+}
+
+/// Source-work counters of one matrix-valued fit.
+///
+/// All counters are taken at the end of the fit. They count the work the
+/// solver asked for, not wall-clock time.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::MatrixSamplingStats;
+///
+/// let stats = MatrixSamplingStats::default();
+/// assert_eq!(stats.source_points, 0);
+/// assert_eq!(stats.payload_bytes, 0);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MatrixSamplingStats {
+    /// Points passed to the caller's callback (one whole matrix each).
+    pub source_points: usize,
+    /// Scalar entries `(i, x, j)` the solver requested.
+    pub entry_requests: usize,
+    /// Entry requests answered without a new callback evaluation, either from
+    /// the cache or from another request for the same point in the same batch.
+    pub cache_hits: usize,
+    /// Hash-table bytes retained by the cache
+    /// ([`MultiIndexCache::retained_bytes`]); excludes the matrix payloads.
+    pub table_bytes: usize,
+    /// Matrix payload bytes held by the cache:
+    /// `cached points * rows * cols * size_of::<T>()`. The cache's own limit
+    /// does not bound this value.
+    pub payload_bytes: usize,
+}
+
+/// Result of [`crossinterpolate2_matrix`].
+///
+/// Wraps the unchanged scalar result on the internal chain
+/// `[rows, d_1, .., d_L, cols]` together with the matrix shape and the
+/// source-work counters. The scalar tensor train keeps its invariants (unit
+/// boundary bonds, `L + 2` cores); [`MatrixTCI2Result::evaluate`] reads out a
+/// whole matrix at once.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::AbstractTensorTrain;
+/// use tensor4all_tensorci::{crossinterpolate2_matrix, MatrixShape, TCI2Options, TCI2Termination};
+///
+/// // F(x)[i, j] = (1 + i + 2 j) * (1 + x0 + x1), a non-symmetric 2 x 3 matrix.
+/// let source = |points: &[Vec<usize>], out: &mut [f64]| {
+///     for (p, x) in points.iter().enumerate() {
+///         for j in 0..3 {
+///             for i in 0..2 {
+///                 out[p * 6 + i + 2 * j] = ((1 + i + 2 * j) * (1 + x[0] + x[1])) as f64;
+///             }
+///         }
+///     }
+/// };
+/// let fit = crossinterpolate2_matrix::<f64, _>(
+///     source,
+///     MatrixShape { rows: 2, cols: 3 },
+///     vec![3, 3],
+///     vec![vec![1, 1, 1, 1]],
+///     TCI2Options { tolerance: 1e-12, seed: Some(7), ..TCI2Options::default() },
+/// )
+/// .unwrap();
+/// assert_eq!(fit.result.termination, TCI2Termination::Converged);
+/// assert_eq!(fit.shape(), MatrixShape { rows: 2, cols: 3 });
+///
+/// let m = fit.evaluate(&[2, 1]).unwrap();
+/// assert_eq!((m.nrows(), m.ncols()), (2, 3));
+/// for j in 0..3 {
+///     for i in 0..2 {
+///         assert!((m[[i, j]] - ((1 + i + 2 * j) * 4) as f64).abs() < 1e-9);
+///     }
+/// }
+/// assert_eq!(fit.to_tensor_train().unwrap().len(), 4);
+/// ```
+#[derive(Debug, Clone)]
+pub struct MatrixTCI2Result<T: Scalar + TTScalar> {
+    /// The scalar result on the internal chain `[rows, d_1, .., d_L, cols]`.
+    pub result: TCI2OptimizationResult<T>,
+    shape: MatrixShape,
+    stats: MatrixSamplingStats,
+}
+
+impl<T: Scalar + TTScalar + Default + MatrixLuciScalar> MatrixTCI2Result<T> {
+    /// Matrix shape of the fitted function.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorci::{crossinterpolate2_matrix, MatrixShape, TCI2Options};
+    ///
+    /// let fit = crossinterpolate2_matrix::<f64, _>(
+    ///     |points: &[Vec<usize>], out: &mut [f64]| {
+    ///         for (p, x) in points.iter().enumerate() {
+    ///             out[p * 2] = 1.0 + x[0] as f64;
+    ///             out[p * 2 + 1] = 2.0;
+    ///         }
+    ///     },
+    ///     MatrixShape { rows: 2, cols: 1 },
+    ///     vec![3],
+    ///     vec![],
+    ///     TCI2Options { seed: Some(1), ..TCI2Options::default() },
+    /// )
+    /// .unwrap();
+    /// assert_eq!(fit.shape(), MatrixShape { rows: 2, cols: 1 });
+    /// ```
+    pub fn shape(&self) -> MatrixShape {
+        self.shape
+    }
+
+    /// Source-work counters of the fit.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorci::{crossinterpolate2_matrix, MatrixShape, TCI2Options};
+    ///
+    /// let fit = crossinterpolate2_matrix::<f64, _>(
+    ///     |points: &[Vec<usize>], out: &mut [f64]| {
+    ///         for (p, x) in points.iter().enumerate() {
+    ///             out[p * 2] = 1.0 + x[0] as f64;
+    ///             out[p * 2 + 1] = 2.0;
+    ///         }
+    ///     },
+    ///     MatrixShape { rows: 2, cols: 1 },
+    ///     vec![3],
+    ///     vec![],
+    ///     TCI2Options { seed: Some(1), ..TCI2Options::default() },
+    /// )
+    /// .unwrap();
+    /// let stats = fit.sampling_stats();
+    /// assert!(stats.source_points >= 1);
+    /// assert!(stats.source_points <= 3); // only three distinct points exist
+    /// assert_eq!(stats.payload_bytes % (2 * std::mem::size_of::<f64>()), 0);
+    /// ```
+    pub fn sampling_stats(&self) -> &MatrixSamplingStats {
+        &self.stats
+    }
+
+    /// Converts the fit to the scalar tensor train on `[rows, d_1, .., d_L, cols]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TCIError::SimpleTensorTrain`] when the site tensors do not
+    /// form a valid tensor train.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::AbstractTensorTrain;
+    /// use tensor4all_tensorci::{crossinterpolate2_matrix, MatrixShape, TCI2Options};
+    ///
+    /// let fit = crossinterpolate2_matrix::<f64, _>(
+    ///     |points: &[Vec<usize>], out: &mut [f64]| {
+    ///         for (p, x) in points.iter().enumerate() {
+    ///             out[p * 2] = 1.0 + x[0] as f64;
+    ///             out[p * 2 + 1] = 2.0;
+    ///         }
+    ///     },
+    ///     MatrixShape { rows: 2, cols: 1 },
+    ///     vec![3],
+    ///     vec![],
+    ///     TCI2Options { seed: Some(1), ..TCI2Options::default() },
+    /// )
+    /// .unwrap();
+    /// let tt = fit.to_tensor_train().unwrap();
+    /// assert_eq!(tt.len(), 3);
+    /// // Entry (i = 1, x = 2, j = 0) of the matrix function is 2.
+    /// assert!((tt.evaluate(&[1, 2, 0]).unwrap() - 2.0).abs() < 1e-9);
+    /// ```
+    pub fn to_tensor_train(&self) -> Result<SimpleTensorTrain<T>> {
+        self.result.tci.to_tensor_train()
+    }
+
+    /// Evaluates the interpolated `rows x cols` matrix at the physical point `x`.
+    ///
+    /// One whole-matrix pass: the row core slab (`rows x r_1`), the middle
+    /// cores sliced at `x`, and the column core slab (`r_L x cols`) are
+    /// multiplied once. The result is column-major.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TCIError::DimensionMismatch`] when `x.len()` differs from the
+    /// number of physical sites `L`, [`TCIError::IndexOutOfBounds`] when a
+    /// coordinate is outside its local dimension, and
+    /// [`TCIError::InvalidOperation`] when the site tensors are unavailable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorci::{crossinterpolate2_matrix, MatrixShape, TCI2Options, TCIError};
+    ///
+    /// let fit = crossinterpolate2_matrix::<f64, _>(
+    ///     |points: &[Vec<usize>], out: &mut [f64]| {
+    ///         for (p, x) in points.iter().enumerate() {
+    ///             out[p * 2] = 1.0 + x[0] as f64;
+    ///             out[p * 2 + 1] = 2.0;
+    ///         }
+    ///     },
+    ///     MatrixShape { rows: 2, cols: 1 },
+    ///     vec![3],
+    ///     vec![],
+    ///     TCI2Options { seed: Some(1), ..TCI2Options::default() },
+    /// )
+    /// .unwrap();
+    /// let m = fit.evaluate(&[2]).unwrap();
+    /// assert!((m[[0, 0]] - 3.0).abs() < 1e-9);
+    /// assert!((m[[1, 0]] - 2.0).abs() < 1e-9);
+    /// assert!(matches!(fit.evaluate(&[3]), Err(TCIError::IndexOutOfBounds { .. })));
+    /// assert!(matches!(fit.evaluate(&[0, 0]), Err(TCIError::DimensionMismatch { .. })));
+    /// ```
+    pub fn evaluate(&self, x: &[usize]) -> Result<Matrix<T>> {
+        let tci = &self.result.tci;
+        let local_dims = tci.local_dims();
+        let n_physical = local_dims.len().saturating_sub(2);
+        if x.len() != n_physical {
+            return Err(TCIError::DimensionMismatch {
+                message: format!(
+                    "expected {n_physical} physical coordinates, got {}",
+                    x.len()
+                ),
+            });
+        }
+        for (k, (&xk, &dk)) in x.iter().zip(&local_dims[1..=n_physical]).enumerate() {
+            if xk >= dk {
+                return Err(TCIError::IndexOutOfBounds {
+                    message: format!("coordinate {k} is {xk}, local dimension is {dk}"),
+                });
+            }
+        }
+        if !tci.is_site_tensors_available() {
+            return Err(TCIError::InvalidOperation {
+                message: "site tensors are not available".to_string(),
+            });
+        }
+        let MatrixShape { rows, cols } = self.shape;
+
+        let first = tci.site_tensor(0);
+        let mut width = first.right_dim();
+        let mut current = vec![T::zero(); rows * width];
+        for a in 0..width {
+            for i in 0..rows {
+                current[i + rows * a] = *first.get3(0, i, a);
+            }
+        }
+        for (k, &xk) in x.iter().enumerate() {
+            let core = tci.site_tensor(k + 1);
+            let slab = core.slice_site(xk);
+            current = col_major_gemm(&current, rows, width, &slab, core.right_dim());
+            width = core.right_dim();
+        }
+        let last = tci.site_tensor(n_physical + 1);
+        let mut tail = vec![T::zero(); width * cols];
+        for j in 0..cols {
+            for a in 0..width {
+                tail[a + width * j] = *last.get3(a, j, 0);
+            }
+        }
+        let out = col_major_gemm(&current, rows, width, &tail, cols);
+        Ok(Matrix::from_col_major_vec(rows, cols, out))
+    }
+}
+
+/// Column-major `(m x k) * (k x n)` product in plain loops.
+fn col_major_gemm<T: Scalar>(a: &[T], m: usize, k: usize, b: &[T], n: usize) -> Vec<T> {
+    let mut out = vec![T::zero(); m * n];
+    for j in 0..n {
+        for l in 0..k {
+            let blj = b[l + k * j];
+            for i in 0..m {
+                out[i + m * j] = out[i + m * j] + a[i + m * l] * blj;
+            }
+        }
+    }
+    out
+}
+
+/// Caller callback plus the fit-owned cache and counters.
+struct SourceState<T, F>
+where
+    T: Scalar,
+{
+    source: F,
+    cache: MultiIndexCache<Box<[T]>>,
+    rows: usize,
+    block_len: usize,
+    max_points_per_call: usize,
+    stats: MatrixSamplingStats,
+}
+
+/// How a distinct point of one request batch is obtained.
+enum PointSlot<T> {
+    Ready(Box<[T]>),
+    Missing(usize),
+}
+
+impl<T, F> SourceState<T, F>
+where
+    T: Scalar,
+    F: Fn(&[MultiIndex], &mut [T]),
+{
+    fn new(source: F, shape: MatrixShape, physical_dims: &[usize]) -> Result<Self> {
+        let block_len = checked_block_len::<T>(shape)?;
+        let cache = MultiIndexCache::new(physical_dims).map_err(|error| {
+            TCIError::InvalidConfiguration {
+                message: format!("cannot key the matrix cache: {error}"),
+            }
+        })?;
+        let max_points_per_call = (isize::MAX as usize / std::mem::size_of::<T>().max(1))
+            .checked_div(block_len)
+            .unwrap_or(1)
+            .max(1);
+        Ok(Self {
+            source,
+            cache,
+            rows: shape.rows,
+            block_len,
+            max_points_per_call,
+            stats: MatrixSamplingStats::default(),
+        })
+    }
+
+    /// Answers scalar requests `(x, i, j)` in request order.
+    ///
+    /// Distinct points are resolved once per call: cached points are read from
+    /// the cache, the remaining ones are passed to the callback in
+    /// first-occurrence order, and the results are inserted into the cache.
+    fn entries(&mut self, requests: &[(&[usize], usize, usize)]) -> Vec<T> {
+        let mut slot_of: HashMap<&[usize], usize> = HashMap::new();
+        let mut slots: Vec<PointSlot<T>> = Vec::new();
+        let mut miss_points: Vec<MultiIndex> = Vec::new();
+        let mut request_slots = Vec::with_capacity(requests.len());
+        for &(x, _, _) in requests {
+            let slot = *slot_of.entry(x).or_insert_with(|| {
+                // The solver only requests in-range points, so a cache key
+                // error cannot occur; it would be treated as a miss.
+                match self.cache.get(x).ok().flatten() {
+                    Some(block) => {
+                        slots.push(PointSlot::Ready(block));
+                        slots.len() - 1
+                    }
+                    None => {
+                        miss_points.push(x.to_vec());
+                        slots.push(PointSlot::Missing(miss_points.len() - 1));
+                        slots.len() - 1
+                    }
+                }
+            });
+            request_slots.push(slot);
+        }
+
+        let mut miss_blocks: Vec<Box<[T]>> = Vec::with_capacity(miss_points.len());
+        for chunk in miss_points.chunks(self.max_points_per_call) {
+            let mut out = vec![T::default(); chunk.len() * self.block_len];
+            (self.source)(chunk, &mut out);
+            self.stats.source_points += chunk.len();
+            for (point, block) in chunk.iter().zip(out.chunks_exact(self.block_len)) {
+                let block: Box<[T]> = block.into();
+                // An insert fails only for an invalid key, which cannot
+                // happen for a point the callback was just asked about.
+                let _ = self.cache.insert(point, block.clone());
+                miss_blocks.push(block);
+            }
+        }
+
+        let mut values = Vec::with_capacity(requests.len());
+        for (&(_, i, j), &slot) in requests.iter().zip(&request_slots) {
+            let block = match &slots[slot] {
+                PointSlot::Ready(block) => block,
+                PointSlot::Missing(m) => &miss_blocks[*m],
+            };
+            values.push(block[i + self.rows * j]);
+        }
+        self.stats.entry_requests += requests.len();
+        self.stats.cache_hits += requests.len() - miss_points.len();
+        values
+    }
+
+    fn finished_stats(&self) -> MatrixSamplingStats {
+        MatrixSamplingStats {
+            table_bytes: self.cache.retained_bytes(),
+            payload_bytes: self.cache.len() * self.block_len * std::mem::size_of::<T>(),
+            ..self.stats
+        }
+    }
+}
+
+/// `rows * cols`, rejecting zero and sizes whose byte count cannot be allocated.
+fn checked_block_len<T>(shape: MatrixShape) -> Result<usize> {
+    if shape.rows == 0 || shape.cols == 0 {
+        return Err(TCIError::InvalidConfiguration {
+            message: format!(
+                "matrix shape {} x {} must have positive rows and cols",
+                shape.rows, shape.cols
+            ),
+        });
+    }
+    shape
+        .rows
+        .checked_mul(shape.cols)
+        .filter(|len| {
+            len.checked_mul(std::mem::size_of::<T>().max(1))
+                .is_some_and(|bytes| bytes <= isize::MAX as usize)
+        })
+        .ok_or_else(|| TCIError::DimensionMismatch {
+            message: format!(
+                "matrix shape {} x {} overflows the addressable size",
+                shape.rows, shape.cols
+            ),
+        })
+}
+
+fn validate_matrix_problem(
+    shape: MatrixShape,
+    local_dims: &[usize],
+    initial_pivots: &[MultiIndex],
+) -> Result<()> {
+    if local_dims.is_empty() {
+        return Err(TCIError::DimensionMismatch {
+            message: "local_dims must contain at least one physical site".to_string(),
+        });
+    }
+    if let Some(site) = local_dims.iter().position(|&d| d == 0) {
+        return Err(TCIError::InvalidConfiguration {
+            message: format!("local dimension {site} is zero"),
+        });
+    }
+    let internal_dims: Vec<usize> = std::iter::once(shape.rows)
+        .chain(local_dims.iter().copied())
+        .chain(std::iter::once(shape.cols))
+        .collect();
+    for (n, pivot) in initial_pivots.iter().enumerate() {
+        if pivot.len() != internal_dims.len() {
+            return Err(TCIError::DimensionMismatch {
+                message: format!(
+                    "initial pivot {n} has length {}, expected {}",
+                    pivot.len(),
+                    internal_dims.len()
+                ),
+            });
+        }
+        if let Some(site) = pivot.iter().zip(&internal_dims).position(|(p, d)| p >= d) {
+            return Err(TCIError::IndexOutOfBounds {
+                message: format!("initial pivot {n} is out of range at site {site}"),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Interpolates a matrix-valued function of `L` physical sites with TCI2.
+///
+/// `source(points, out)` receives a batch of distinct physical points
+/// (`points[p]` has length `L`) and must write the `rows x cols` matrix of
+/// point `p` into `out[p * rows * cols ..][.. rows * cols]` in column-major
+/// order: entry `(i, j)` of point `p` is `out[p * rows * cols + i + rows * j]`.
+/// The library allocates `out` with length `points.len() * rows * cols` and
+/// fills it with `T::default()`; the callback must overwrite every entry, since
+/// unwritten entries cannot be detected. The callback is infallible, like the
+/// scalar entry points, and is never asked for a point that is still cached.
+///
+/// Internally the problem is the chain `[rows, d_1, .., d_L, cols]` with
+/// `f(i, x, j) = F(x)[i, j]`, solved by the unchanged scalar TCI2 machinery.
+/// Only entries the solver requests enter the amplitude scale, so `tolerance`
+/// and `normalize_error` mean what they mean for [`crossinterpolate2`](super::crossinterpolate2)
+/// on that endpoint problem, and the fit reproduces its pivots, ranks and
+/// errors exactly.
+///
+/// # Arguments
+///
+/// * `source` - batched matrix callback described above.
+/// * `shape` - matrix shape; both extents must be positive.
+/// * `local_dims` - dimensions `d_1..d_L` of the physical sites only; `L >= 1`
+///   and every `d_k >= 1`.
+/// * `initial_pivots` - full indices `[i, x_1, .., x_L, j]` of length `L + 2`;
+///   empty means the all-zero index.
+/// * `options` - the unchanged scalar [`TCI2Options`].
+///
+/// # Errors
+///
+/// Returns [`TCIError::InvalidConfiguration`] for a zero extent in `shape` or
+/// `local_dims`, invalid options, or physical dimensions the cache cannot key;
+/// [`TCIError::DimensionMismatch`] for `L == 0`, a pivot of the wrong length,
+/// or a matrix size that overflows; [`TCIError::IndexOutOfBounds`] for an
+/// out-of-range pivot; and [`TCIError::InvalidPivot`] when all initial pivots
+/// evaluate to zero.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::{crossinterpolate2_matrix, MatrixShape, TCI2Options, TCIError};
+///
+/// let source = |points: &[Vec<usize>], out: &mut [f64]| {
+///     for (p, x) in points.iter().enumerate() {
+///         // 2 x 3 matrix, entry (i, j) = (1 + i + 2 j) * (1 + x0)
+///         for j in 0..3 {
+///             for i in 0..2 {
+///                 out[p * 6 + i + 2 * j] = ((1 + i + 2 * j) * (1 + x[0])) as f64;
+///             }
+///         }
+///     }
+/// };
+/// let fit = crossinterpolate2_matrix::<f64, _>(
+///     source,
+///     MatrixShape { rows: 2, cols: 3 },
+///     vec![4],
+///     vec![],
+///     TCI2Options { seed: Some(3), ..TCI2Options::default() },
+/// )
+/// .unwrap();
+/// let m = fit.evaluate(&[3]).unwrap();
+/// assert!((m[[1, 2]] - (6.0 * 4.0)).abs() < 1e-9);
+///
+/// let bad = crossinterpolate2_matrix::<f64, _>(
+///     |_: &[Vec<usize>], _: &mut [f64]| {},
+///     MatrixShape { rows: 0, cols: 3 },
+///     vec![4],
+///     vec![],
+///     TCI2Options::default(),
+/// );
+/// assert!(matches!(bad, Err(TCIError::InvalidConfiguration { .. })));
+/// ```
+pub fn crossinterpolate2_matrix<T, F>(
+    source: F,
+    shape: MatrixShape,
+    local_dims: Vec<usize>,
+    initial_pivots: Vec<MultiIndex>,
+    options: TCI2Options,
+) -> Result<MatrixTCI2Result<T>>
+where
+    T: Scalar + TTScalar + Default + MatrixLuciScalar + Send + Sync + 'static,
+    F: Fn(&[MultiIndex], &mut [T]),
+{
+    let mut rng = seeded_rng(options.seed);
+    crossinterpolate2_matrix_with_rng(source, shape, local_dims, initial_pivots, options, &mut rng)
+}
+
+/// Matrix-valued TCI2 on a caller-owned random stream.
+///
+/// Same as [`crossinterpolate2_matrix`], but consumes `rng` directly for the
+/// global pivot search, like
+/// [`crossinterpolate2_with_rng`](super::crossinterpolate2_with_rng).
+///
+/// # Errors
+///
+/// See [`crossinterpolate2_matrix`].
+///
+/// # Examples
+///
+/// ```
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_tensorci::{crossinterpolate2_matrix_with_rng, MatrixShape, TCI2Options};
+///
+/// let mut rng = ChaCha8Rng::seed_from_u64(5);
+/// let fit = crossinterpolate2_matrix_with_rng::<f64, _, _>(
+///     |points: &[Vec<usize>], out: &mut [f64]| {
+///         for (p, x) in points.iter().enumerate() {
+///             out[p * 2] = 1.0 + x[0] as f64;
+///             out[p * 2 + 1] = 2.0;
+///         }
+///     },
+///     MatrixShape { rows: 2, cols: 1 },
+///     vec![3],
+///     vec![],
+///     TCI2Options::default(),
+///     &mut rng,
+/// )
+/// .unwrap();
+/// let m = fit.evaluate(&[1]).unwrap();
+/// assert!((m[[0, 0]] - 2.0).abs() < 1e-9);
+/// assert!((m[[1, 0]] - 2.0).abs() < 1e-9);
+/// ```
+pub fn crossinterpolate2_matrix_with_rng<T, F, R>(
+    source: F,
+    shape: MatrixShape,
+    local_dims: Vec<usize>,
+    initial_pivots: Vec<MultiIndex>,
+    options: TCI2Options,
+    rng: &mut R,
+) -> Result<MatrixTCI2Result<T>>
+where
+    T: Scalar + TTScalar + Default + MatrixLuciScalar + Send + Sync + 'static,
+    F: Fn(&[MultiIndex], &mut [T]),
+    R: rand::Rng + ?Sized,
+{
+    validate_matrix_problem(shape, &local_dims, &initial_pivots)?;
+    let n_physical = local_dims.len();
+    let state = RefCell::new(SourceState::new(source, shape, &local_dims)?);
+
+    let single = |index: &MultiIndex| -> T {
+        let request = (&index[1..=n_physical], index[0], index[n_physical + 1]);
+        state.borrow_mut().entries(&[request])[0]
+    };
+    let batched = |indices: &[MultiIndex]| -> Vec<T> {
+        let requests: Vec<_> = indices
+            .iter()
+            .map(|index| (&index[1..=n_physical], index[0], index[n_physical + 1]))
+            .collect();
+        state.borrow_mut().entries(&requests)
+    };
+
+    let internal_dims: Vec<usize> = std::iter::once(shape.rows)
+        .chain(local_dims)
+        .chain(std::iter::once(shape.cols))
+        .collect();
+    let result = crossinterpolate2_with_rng_linalg(
+        single,
+        Some(batched),
+        internal_dims,
+        initial_pivots,
+        options,
+        rng,
+        &mut TciLinalg::Global,
+    )?;
+    let stats = state.borrow().finished_stats();
+    Ok(MatrixTCI2Result {
+        result,
+        shape,
+        stats,
+    })
+}
+
+#[cfg(test)]
+mod tests;
