@@ -168,8 +168,6 @@
   {"path": "crates/tensor4all-core/src/tensor_like.rs", "pattern": "context-ref-param", "scope": "validate_context", "site": "_context:&tensor4all_tensorbackend::ExecutionContext", "count": 1},
   {"path": "crates/tensor4all-interpolativeqtt/src/chebyshev_patches.rs", "pattern": "context-ref-param", "scope": "interpolate_chebyshev_patches", "site": "context:&CpuExecutionContext", "count": 1},
   {"path": "crates/tensor4all-interpolativeqtt/src/chebyshev_patches.rs", "pattern": "session-call", "scope": "interpolate_chebyshev_patches", "site": ".with_session(", "count": 1},
-  {"path": "crates/tensor4all-interpolativeqtt/src/interpolation.rs", "pattern": "global-accessor", "scope": "compress_train", "site": "default_cpu_execution_context()", "count": 1},
-  {"path": "crates/tensor4all-interpolativeqtt/src/interpolation.rs", "pattern": "session-call", "scope": "compress_train", "site": ".with_session(", "count": 1},
   {"path": "crates/tensor4all-interpolativeqtt/src/patched.rs", "pattern": "context-ref-param", "scope": "interpolate_patched_nd", "site": "context:&CpuExecutionContext", "count": 1},
   {"path": "crates/tensor4all-interpolativeqtt/src/patched.rs", "pattern": "session-call", "scope": "interpolate_patched_nd", "site": ".with_session(", "count": 1},
   {"path": "crates/tensor4all-itensorlike/src/contract.rs", "pattern": "context-ref-param", "scope": "contract_in", "site": "context:&ExecutionContext", "count": 2},

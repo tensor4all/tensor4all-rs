@@ -4,6 +4,23 @@
 
 ### Behavior changes
 
+- `TCI2Termination::Converged` under `PivotSearchStrategy::Rook` now rests on
+  an exact bond error (#1257). Rook's own bond errors are last rook pivots, not
+  residual bounds: on a 150 x 260 ridge and a 300 x 300 two-band matrix the
+  search stopped one or two pivots early (rank 49 of 50, 129 of 131) and
+  returned `Converged` with a true error of 1.2x and 1.28x the tolerance while
+  reporting less than the tolerance. Once the history criterion
+  is met under `Rook`, TCI2 now runs an exact `Full` sweep and reports
+  `Converged` only if that sweep has bond error below tolerance, no global pivot
+  and no rank growth; otherwise it keeps sweeping with `Rook`. The meaning is
+  `Full`'s sampled one: for two sites the candidate matrix is the whole tensor,
+  up to the allowance for the final 1-site cleanup sweep; for more sites it is
+  not a bound on the whole tensor. A caller that relied on early `Rook`
+  convergence now pays a `Full` sweep per attempt (not counted against
+  `max_iter`) (about a `Full` sweep of
+  evaluations, with the dense candidate matrices in memory) and, where `Rook`
+  was wrong, sees more sweeps, a larger rank or `MaxIterations` instead of a
+  false `Converged`. No public type changed.
 - Tree ACI also expands candidates across a non-unit branching vertex when
   at least two committed pivots agree at its local coordinate (#1435).
   The degree must be at least 3; the existing incoming-rank product slack

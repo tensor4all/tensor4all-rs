@@ -17,14 +17,18 @@
 //!     interpolate_single_scale, InterpolativeQttOptions,
 //! };
 //!
-//! let (tree, sites) = interpolate_single_scale(
+//! let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+//!     tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+//! );
+//! let (tree, sites) = context
+//!     .with_session(|exec| interpolate_single_scale(exec,
 //!     |x| (-x * x).exp(),
 //!     -1.0,
 //!     1.0,
 //!     4,
 //!     10,
 //!     &InterpolativeQttOptions::default(),
-//! ).unwrap();
+//! )).unwrap().unwrap();
 //!
 //! assert_eq!(tree.node_count(), 4);
 //! let value = tree.evaluate_point(&sites, &[0, 0, 0, 0]).unwrap().real();
@@ -75,8 +79,11 @@ pub use patched::{interpolate_patched_nd, InterpolativePatch, PatchedInterpolati
 ///
 /// ```
 /// use tensor4all_interpolativeqtt::{interpolate_single_scale, InterpolativeQtt};
-/// let (tree, sites): InterpolativeQtt =
-///     interpolate_single_scale(|x| 1.0 + x, 0.0, 1.0, 3, 2, &Default::default())?;
+/// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let (tree, sites): InterpolativeQtt = context.with_session(|exec| {
+///     interpolate_single_scale(exec, |x| 1.0 + x, 0.0, 1.0, 3, 2, &Default::default())
+/// })??;
 /// let value = tree.evaluate_point(&sites, &[1, 0, 1])?;
 /// assert!((value.real() - 1.625).abs() < 1e-12);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
