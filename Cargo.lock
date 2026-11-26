@@ -2672,6 +2672,7 @@ dependencies = [
  "num-traits",
  "rand",
  "rand_chacha",
+ "rustc-hash",
  "tenferro-cpu",
  "tensor4all-core",
  "tensor4all-simplett",
