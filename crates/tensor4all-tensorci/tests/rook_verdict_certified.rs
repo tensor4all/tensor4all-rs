@@ -5,8 +5,9 @@
 //! The property asserted for both strategies and both `max_nglobal_pivot`
 //! settings is `!Converged || true_error <= tolerance`. The reported bond error
 //! is exact only up to the final 1-site cleanup sweep, which may add up to
-//! `tolerance`; the matrices below stay inside the stricter bound with a margin
-//! of 24-35 %, and `smooth_ridge_tolerance.rs` states the allowance for `Full`.
+//! `tolerance`; the matrices below stay inside the stricter bound with margins
+//! of 35 %, 24 % and 3 % (two-band; it is the tightest, so a change in the
+//! cleanup could trip it first), and `smooth_ridge_tolerance.rs` states the allowance for `Full`.
 //!
 //! Why `Rook` needs a check of its own: its bond error is the last rook pivot,
 //! the largest entry of that pivot's own residual row and column, not of the

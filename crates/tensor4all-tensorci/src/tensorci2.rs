@@ -91,7 +91,9 @@ pub struct TCI2Options {
     ///
     /// Each iteration performs one forward or backward two-site sweep
     /// followed by a global pivot search. Increase if the function is
-    /// difficult to converge.
+    /// difficult to converge. Under [`PivotSearchStrategy::Rook`] the exact
+    /// `Full` sweeps that certify convergence are not counted, so `errors` and
+    /// `ranks` can hold more than `max_iter` entries.
     pub max_iter: usize,
     /// Hard upper bound on bond dimension (default: `None`, i.e. no limit).
     ///
