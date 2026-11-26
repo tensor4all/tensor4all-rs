@@ -81,7 +81,7 @@ fn host_core_values<T: TreeRsiScalar>(
             dense_values_on_session::<T>(session, tensor, order).map_err(readback_error)
         }
         #[cfg(feature = "tenferro-cuda")]
-        Exec::Cuda(cuda) => {
+        Exec::Cuda(cuda, _) => {
             let host = tensor.download(cuda).map_err(TreeRsiError::numerical)?;
             // INVARIANT: a CUDA run reaches the process-global CPU session here
             // even though its own context is CUDA; a caller already inside a
@@ -97,13 +97,12 @@ fn host_core_values<T: TreeRsiScalar>(
 /// The local rank decision: a host LU pivot search with a lower-triangular solve.
 ///
 /// On a session the solve runs on that session. A CUDA run has no device twin
-/// for it, so it keeps running on the process-global CPU context: host
-/// dependency 1 of 2 of a CUDA run (the other is the input-core readback in
-/// [`host_core_values`]). See #1158 step 2 for the device-resident sketch. A
-/// build without `tensor4all-core/global-defaults` has no such context and the
-/// CUDA arm refuses with a typed error instead. The
-/// session arm never takes that fallback, which is what lets the session entry
-/// run while another thread holds the process-global backend.
+/// for it, so it runs on the CPU context carried by [`Exec::Cuda`], which
+/// `run_in` creates for that run: host dependency 1 of 2 of a CUDA run (the
+/// other is the input-core readback in [`host_core_values`]). See #1158 step 2
+/// for the device-resident sketch. This arm never reads a process-global
+/// context, so it works in a build without `tensor4all-core/global-defaults`
+/// and never contends with another thread holding the global backend.
 fn row_interpolation<T: TreeRsiScalar>(
     exec: &mut Exec<'_, '_>,
     matrix: Matrix<T>,
@@ -114,12 +113,11 @@ fn row_interpolation<T: TreeRsiScalar>(
             matrix_luci_row_interpolation_owned_on_session(matrix, Some(options), session)
         }
         #[cfg(feature = "tenferro-cuda")]
-        Exec::Cuda(_) => {
-            // Without `tensor4all-core/global-defaults` there is no process-global
-            // CPU context, so the CUDA arm refuses instead (#1376 stage A3).
-            let context = tensor4all_core::legacy::default_cpu_execution_context()
-                .map_err(TreeRsiError::numerical)?;
-            tensor4all_core::matrix_luci_row_interpolation_owned_in(matrix, Some(options), &context)
+        Exec::Cuda(_, cpu) => {
+            // The CPU context was handed to this run by `run_in`; nothing is
+            // looked up from a process-global, so the arm behaves the same with
+            // and without `tensor4all-core/global-defaults`.
+            tensor4all_core::matrix_luci_row_interpolation_owned_in(matrix, Some(options), cpu)
         }
     }
     .map_err(TreeRsiError::numerical)
@@ -716,7 +714,13 @@ pub(crate) fn run_in<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
         #[cfg(feature = "tenferro-cuda")]
         ExecutionContext::Cuda(cuda) => {
             validate()?;
-            run::<T, V, R>(inputs, options, rng, &mut Exec::Cuda(cuda))?
+            // A run-owned single-thread CPU context for the host rank decision
+            // (an LU pivot search on small matrices); dropped with the run.
+            let cpu = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+                tensor4all_tensorbackend::CpuBackend::with_threads(1)
+                    .map_err(TreeRsiError::numerical)?,
+            );
+            run::<T, V, R>(inputs, options, rng, &mut Exec::Cuda(cuda, &cpu))?
         }
         // A build without the CUDA feature cannot execute the variant at all.
         #[allow(unreachable_patterns)]
