@@ -117,6 +117,10 @@ Shared interpolation plumbing includes `CachedFunction`, `MultiIndex`, packed as
   stays a randomized search: `Converged` is not a dense-error certificate.
 - Local errors use the configured peak-relative or absolute policy. They are
   sampled estimates, not independent full-network Frobenius error bounds.
+- Candidate expansion also covers branching nodes of degree at least 3 when
+  at least two committed pivots share their local coordinate (#1435), under
+  the existing incoming-rank slack. It keeps every local value in the grid;
+  pivot agreement is a heuristic and does not certify a delta site.
 
 ## tensor4all-quanticstci — high-level quantics TCI
 

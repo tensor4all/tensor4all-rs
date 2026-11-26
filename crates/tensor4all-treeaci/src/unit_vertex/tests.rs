@@ -87,14 +87,15 @@ fn a_unit_side_below_the_factor_expands_its_largest_rank_other_bond() {
     let edge_ranks = ranks(&state, &[(0, 1, 3), (1, 2, 1), (1, 3, 2), (3, 4, 2)]);
     for forward in [directed(&state, 1, 0), directed(&state, 0, 1)] {
         assert_eq!(
-            unit_vertex_expansion_targets(problem, &edge_ranks, forward).unwrap(),
+            unit_vertex_expansion_targets(problem, &edge_ranks, forward, |_| Ok(false)).unwrap(),
             vec![directed(&state, 3, 1)],
         );
     }
     // Bond 1-3: the other bonds offer 3 * 1 = 3 < 2 * 2, the largest is
     // 0 -> 1; side 3 has a binary site.
     assert_eq!(
-        unit_vertex_expansion_targets(problem, &edge_ranks, directed(&state, 1, 3)).unwrap(),
+        unit_vertex_expansion_targets(problem, &edge_ranks, directed(&state, 1, 3), |_| Ok(false))
+            .unwrap(),
         vec![directed(&state, 0, 1)],
     );
 }
@@ -109,24 +110,28 @@ fn a_unit_side_at_the_factor_or_a_site_side_does_not_expand() {
     // The other bonds of 0-1 offer exactly 2 * 2 = 4.
     let at_factor = ranks(&state, &[(0, 1, 2), (1, 2, 2), (1, 3, 2), (3, 4, 2)]);
     for forward in [directed(&state, 1, 0), directed(&state, 0, 1)] {
-        assert!(unit_vertex_expansion_targets(problem, &at_factor, forward)
-            .unwrap()
-            .is_empty());
+        assert!(
+            unit_vertex_expansion_targets(problem, &at_factor, forward, |_| Ok(false))
+                .unwrap()
+                .is_empty()
+        );
     }
     // Bond 3-4 joins a binary node and a leaf, whatever the ranks.
     let low = ranks(&state, &[(0, 1, 1), (1, 2, 1), (1, 3, 1), (3, 4, 2)]);
     for forward in [directed(&state, 3, 4), directed(&state, 4, 3)] {
-        assert!(unit_vertex_expansion_targets(problem, &low, forward)
-            .unwrap()
-            .is_empty());
+        assert!(
+            unit_vertex_expansion_targets(problem, &low, forward, |_| Ok(false))
+                .unwrap()
+                .is_empty()
+        );
     }
-    // A tree without a unit vertex never expands.
+    // Without pivot agreement, a tree without a unit vertex never expands.
     let (plain, plain_options) = unit_fixture(&EDGES, 5, &[]);
     let plain_state = TreeAciState::<f64, usize>::initialize(&plain, &plain_options).unwrap();
     let ones = vec![1; plain_state.edge_ranks.len()];
     for forward in 0..plain_state.problem.directed_edges.len() {
         assert!(
-            unit_vertex_expansion_targets(&plain_state.problem, &ones, forward)
+            unit_vertex_expansion_targets(&plain_state.problem, &ones, forward, |_| Ok(false))
                 .unwrap()
                 .is_empty()
         );
@@ -143,7 +148,7 @@ fn ties_expand_the_first_incoming_bond() {
     let incoming = &state.problem.directed_edges[forward].incoming_to_from;
     assert_eq!(incoming.len(), 2);
     assert_eq!(
-        unit_vertex_expansion_targets(&state.problem, &edge_ranks, forward).unwrap(),
+        unit_vertex_expansion_targets(&state.problem, &edge_ranks, forward, |_| Ok(false)).unwrap(),
         vec![incoming[0]],
     );
 }
@@ -164,7 +169,7 @@ fn two_unit_sides_both_expand_and_unit_leaves_never_do() {
     let forward = directed(&state, 1, 3);
     let reverse = state.problem.directed_edges[forward].reverse;
     assert_eq!(
-        unit_vertex_expansion_targets(&state.problem, &edge_ranks, forward).unwrap(),
+        unit_vertex_expansion_targets(&state.problem, &edge_ranks, forward, |_| Ok(false)).unwrap(),
         vec![
             directed(&state, 0, 1),
             state.problem.directed_edges[reverse].incoming_to_from[0]
@@ -174,7 +179,7 @@ fn two_unit_sides_both_expand_and_unit_leaves_never_do() {
     // 2 * 1 = 2, not below 2 * 1.
     for forward in [directed(&state, 5, 3), directed(&state, 3, 5)] {
         assert!(
-            unit_vertex_expansion_targets(&state.problem, &edge_ranks, forward)
+            unit_vertex_expansion_targets(&state.problem, &edge_ranks, forward, |_| Ok(false))
                 .unwrap()
                 .is_empty()
         );
@@ -187,11 +192,11 @@ fn unknown_edges_and_ranks_are_internal_errors() {
     let state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
     let edges = state.problem.directed_edges.len();
     assert!(matches!(
-        unit_vertex_expansion_targets(&state.problem, &state.edge_ranks, edges),
+        unit_vertex_expansion_targets(&state.problem, &state.edge_ranks, edges, |_| Ok(false)),
         Err(TreeAciError::InternalInvariant { .. })
     ));
     assert!(matches!(
-        unit_vertex_expansion_targets(&state.problem, &[], 0),
+        unit_vertex_expansion_targets(&state.problem, &[], 0, |_| Ok(false)),
         Err(TreeAciError::InternalInvariant { .. })
     ));
 }
@@ -208,7 +213,8 @@ fn expansion_appends_the_neighbour_side_samples_and_finish_cuts_them_back() {
     let forward = directed(&state, 1, 2);
     let target = state.problem.directed_edges[forward].incoming_to_from[0];
     assert_eq!(
-        unit_vertex_expansion_targets(&state.problem, &state.edge_ranks, forward).unwrap(),
+        unit_vertex_expansion_targets(&state.problem, &state.edge_ranks, forward, |_| Ok(false))
+            .unwrap(),
         vec![target]
     );
     let before = state.candidates.ids[target].clone();
@@ -558,9 +564,11 @@ fn an_enumeration_over_the_candidate_limit_of_its_side_is_skipped() {
         };
         let forward = directed(&state, from, to);
         assert_eq!(
-            unit_vertex_expansion_targets(&state.problem, &state.edge_ranks, forward)
-                .unwrap()
-                .len(),
+            unit_vertex_expansion_targets(&state.problem, &state.edge_ranks, forward, |_| Ok(
+                false
+            ))
+            .unwrap()
+            .len(),
             1,
             "{from} -> {to} qualifies for an expansion"
         );
@@ -686,9 +694,10 @@ fn a_skipped_target_leaves_the_other_side_expanded() {
     }
 }
 
-/// A run on a tree without a unit vertex never expands.
+/// This product target has neither a unit vertex nor a qualifying locally
+/// fixed junction, so it never expands.
 #[test]
-fn runs_without_unit_vertices_never_expand() {
+fn product_runs_without_locally_fixed_junctions_never_expand() {
     let (_, inputs) = crate::test_support::branched_product_inputs();
     expansion_debug_log::take();
     crate::tree_elementwise_batched(
@@ -699,3 +708,5 @@ fn runs_without_unit_vertices_never_expand() {
     .unwrap();
     assert!(expansion_debug_log::take().is_empty());
 }
+
+mod junction;

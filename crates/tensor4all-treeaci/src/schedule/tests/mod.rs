@@ -520,6 +520,12 @@ fn return_pass_recommits_off_spine_bonds_the_guard_enlarged() {
     )
     .unwrap();
     assert_eq!(crate::test_support::pivot_basis_deviation(&state), 0.0);
+    // The junction rule (#1435) already spans binary leaf 5 after the
+    // forward pass. Guard injection can still enlarge 4 -> 1, but cannot
+    // add a third independent coordinate to 5 -> 4.
+    let leaf = directed_between(&state, 5, 4);
+    assert_eq!(state.edge_ranks[leaf / 2], 2);
+    assert_eq!(state.candidates.ids[leaf].len(), 2);
     let capacities = global_injection_capacities(&state, &options);
     let injected = crate::global_guard::inject_global_pivots(
         &mut state,
@@ -535,19 +541,11 @@ fn return_pass_recommits_off_spine_bonds_the_guard_enlarged() {
             .candidate_set_outgrew_basis(directed_between(state, from, to))
             .unwrap()
     };
-    // The injection enlarged the off-spine bonds 4 -> 1 and 5 -> 4, but not
-    // 6 -> 4 or 7 -> 2.
-    assert!(grown(&state, 4, 1) && grown(&state, 5, 4));
+    // Only the off-spine bond 4 -> 1 outgrows its basis.
+    assert!(grown(&state, 4, 1));
+    assert!(!grown(&state, 5, 4));
     assert!(!grown(&state, 6, 4) && !grown(&state, 7, 2));
-    let expected = vec![
-        step(3, 2),
-        step(2, 1),
-        step(1, 4),
-        step(4, 5),
-        step(5, 4),
-        step(4, 1),
-        step(1, 0),
-    ];
+    let expected = vec![step(3, 2), step(2, 1), step(1, 4), step(4, 1), step(1, 0)];
 
     // The stored spine-only walk (`main` before #1450) breaks the pivot basis.
     let mut spine_only = state.clone();

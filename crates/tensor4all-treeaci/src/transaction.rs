@@ -48,8 +48,8 @@ where
     } else {
         None
     };
-    // Across a unit vertex, the commit reads an expanded candidate set for
-    // this one proposal (#1435); it is cut back once the commit stands.
+    // Across a unit vertex or locally fixed junction, the commit reads an
+    // expanded candidate set for this proposal (#1435), then cuts it back.
     let expansion = expand_unit_vertices(state, forward, options, exec)?;
     let committed = materialize_and_factor_edge(
         state.inputs,

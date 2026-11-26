@@ -33,8 +33,8 @@ pub(crate) struct ResidualRefreshReport {
 ///
 /// For each such edge the operator is evaluated on the edge's current local
 /// matrix (the same points its next commit would read), and the output on the
-/// same points through a frame store of the output. A commit across a vertex
-/// of local dimension 1 also reads the candidates its unit-vertex expansion
+/// same points through a frame store of the output. A commit across a unit
+/// vertex or locally fixed junction also reads the candidates its expansion
 /// adds for that one commit (`crate::unit_vertex`); the refresh does not: it
 /// measures the plain local matrix of the current candidate sets, which no
 /// expansion outlives. `edge_errors` receives
