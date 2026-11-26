@@ -110,8 +110,12 @@ fn operation_error_from_anyhow(op: &'static str, source: anyhow::Error) -> anyho
 /// the same eager autodiff graph as tensors while preserving the existing
 /// dynamic scalar API shape. The infallible scalar constructors retain a
 /// tensor-initialization failure for later fallible tensor or AD operations.
-/// Infallible arithmetic also retains typed backend diagnostics and the
-/// tracked-state marker when an eager operation fails.
+/// Infallible arithmetic also retains typed backend diagnostics when an eager
+/// operation fails. The result of a failed operation carries a primal-only
+/// fallback `value` and is **detached**: [`AnyScalar::tracks_grad`] is derived
+/// from the live tensor, so it is `false` whenever the tensor slot holds an
+/// error. The failure stays retrievable through every `try_*` method, which
+/// return it instead of computing.
 #[derive(Clone)]
 pub struct AnyScalar {
     tensor: std::result::Result<IdxTensor, AnyScalarTensorError>,
@@ -122,7 +126,6 @@ pub struct AnyScalar {
     /// `f64`/`c64`), so the integer and bool variants are matched but never
     /// stored.
     value: ScalarValue,
-    tracks_grad: bool,
 }
 
 impl AnyScalar {
@@ -134,11 +137,9 @@ impl AnyScalar {
             dims
         );
         let value = Self::scalar_value_from_tensor(&tensor)?;
-        let tracks_grad = tensor.tracks_grad();
         Ok(Self {
             tensor: Ok(tensor),
             value,
-            tracks_grad,
         })
     }
 
@@ -151,7 +152,6 @@ impl AnyScalar {
         result: Result<Self>,
         op: &'static str,
         fallback: impl FnOnce() -> ScalarValue,
-        tracks_grad: bool,
     ) -> Self {
         match result {
             Ok(result) => result,
@@ -166,7 +166,6 @@ impl AnyScalar {
                 Self {
                     tensor: Err(error),
                     value: fallback(),
-                    tracks_grad,
                 }
             }
         }
@@ -310,7 +309,6 @@ impl AnyScalar {
         Self {
             tensor: Ok(tensor),
             value: T::scalar_value(value),
-            tracks_grad: false,
         }
     }
 
@@ -372,7 +370,6 @@ impl AnyScalar {
         Self {
             tensor: initialize_tensor(value),
             value: T::scalar_value(value),
-            tracks_grad: false,
         }
     }
 
@@ -534,8 +531,10 @@ impl AnyScalar {
     ///
     /// # Returns
     ///
-    /// `true` when the scalar participates in autodiff or retains a failed
-    /// tracked operation, otherwise `false`.
+    /// `true` only when the scalar holds a live tensor that participates in
+    /// autodiff. A scalar left by a failed operation (see the type docs) holds
+    /// an error instead of a tensor, its gradient path is severed, and this
+    /// returns `false`; the error is reported by the `try_*` methods.
     ///
     /// # Examples
     ///
@@ -546,7 +545,7 @@ impl AnyScalar {
     /// assert!(!scalar.tracks_grad());
     /// ```
     pub fn tracks_grad(&self) -> bool {
-        self.tracks_grad || self.tensor.as_ref().is_ok_and(IdxTensor::tracks_grad)
+        self.tensor.as_ref().is_ok_and(IdxTensor::tracks_grad)
     }
 
     /// Returns the stored gradient, if any.
@@ -882,7 +881,6 @@ impl AnyScalar {
             self.try_conj().map_err(|error| error.source),
             "conj",
             || Self::scalar_value_from_backend(self.to_backend_scalar().conj()),
-            self.tracks_grad(),
         )
     }
 
@@ -902,12 +900,9 @@ impl AnyScalar {
     /// assert!(scalar.is_real());
     /// ```
     pub fn real_part(&self) -> Self {
-        Self::fallback_result(
-            self.try_real_part(),
-            "real_part",
-            || Self::from_real(self.real()).value(),
-            self.tracks_grad(),
-        )
+        Self::fallback_result(self.try_real_part(), "real_part", || {
+            Self::from_real(self.real()).value()
+        })
     }
 
     /// Returns the imaginary part as a real-valued scalar.
@@ -926,12 +921,9 @@ impl AnyScalar {
     /// assert!(scalar.is_real());
     /// ```
     pub fn imag_part(&self) -> Self {
-        Self::fallback_result(
-            self.try_imag_part(),
-            "imag_part",
-            || Self::from_real(self.imag()).value(),
-            self.tracks_grad(),
-        )
+        Self::fallback_result(self.try_imag_part(), "imag_part", || {
+            Self::from_real(self.imag()).value()
+        })
     }
 
     /// Combines two real-valued scalars into a complex scalar.
@@ -989,12 +981,9 @@ impl AnyScalar {
     /// assert!(scalar.is_real());
     /// ```
     pub fn sqrt(&self) -> Self {
-        Self::fallback_result(
-            self.try_sqrt(),
-            "sqrt",
-            || Self::scalar_value_from_backend(self.to_backend_scalar().sqrt()),
-            self.tracks_grad(),
-        )
+        Self::fallback_result(self.try_sqrt(), "sqrt", || {
+            Self::scalar_value_from_backend(self.to_backend_scalar().sqrt())
+        })
     }
 
     /// Raises this scalar to a floating-point power.
@@ -1016,12 +1005,9 @@ impl AnyScalar {
     /// assert_eq!(scalar.real(), 8.0);
     /// ```
     pub fn powf(&self, exponent: f64) -> Self {
-        Self::fallback_result(
-            self.try_powf(exponent),
-            "powf",
-            || Self::scalar_value_from_backend(self.to_backend_scalar().powf(exponent)),
-            self.tracks_grad(),
-        )
+        Self::fallback_result(self.try_powf(exponent), "powf", || {
+            Self::scalar_value_from_backend(self.to_backend_scalar().powf(exponent))
+        })
     }
 
     /// Raises this scalar to an integer power.
@@ -1045,12 +1031,9 @@ impl AnyScalar {
     /// assert_eq!(AnyScalar::new_real(2.0).powi(-1).real(), 0.5);
     /// ```
     pub fn powi(&self, exponent: i32) -> Self {
-        Self::fallback_result(
-            self.try_powi(exponent),
-            "powi",
-            || Self::scalar_value_from_backend(self.to_backend_scalar().powi(exponent)),
-            self.tracks_grad(),
-        )
+        Self::fallback_result(self.try_powi(exponent), "powi", || {
+            Self::scalar_value_from_backend(self.to_backend_scalar().powi(exponent))
+        })
     }
 
     pub(crate) fn to_backend_scalar(&self) -> BackendScalar {
@@ -1250,16 +1233,9 @@ impl Add<&AnyScalar> for &AnyScalar {
     type Output = AnyScalar;
 
     fn add(self, rhs: &AnyScalar) -> Self::Output {
-        AnyScalar::fallback_result(
-            self.try_add(rhs),
-            "add",
-            || {
-                AnyScalar::scalar_value_from_backend(
-                    self.to_backend_scalar() + rhs.to_backend_scalar(),
-                )
-            },
-            self.tracks_grad() || rhs.tracks_grad(),
-        )
+        AnyScalar::fallback_result(self.try_add(rhs), "add", || {
+            AnyScalar::scalar_value_from_backend(self.to_backend_scalar() + rhs.to_backend_scalar())
+        })
     }
 }
 
@@ -1323,16 +1299,9 @@ impl Mul<&AnyScalar> for &AnyScalar {
     type Output = AnyScalar;
 
     fn mul(self, rhs: &AnyScalar) -> Self::Output {
-        AnyScalar::fallback_result(
-            self.try_mul(rhs),
-            "mul",
-            || {
-                AnyScalar::scalar_value_from_backend(
-                    self.to_backend_scalar() * rhs.to_backend_scalar(),
-                )
-            },
-            self.tracks_grad() || rhs.tracks_grad(),
-        )
+        AnyScalar::fallback_result(self.try_mul(rhs), "mul", || {
+            AnyScalar::scalar_value_from_backend(self.to_backend_scalar() * rhs.to_backend_scalar())
+        })
     }
 }
 
@@ -1364,16 +1333,9 @@ impl Div<&AnyScalar> for &AnyScalar {
     type Output = AnyScalar;
 
     fn div(self, rhs: &AnyScalar) -> Self::Output {
-        AnyScalar::fallback_result(
-            self.try_div(rhs),
-            "div",
-            || {
-                AnyScalar::scalar_value_from_backend(
-                    self.to_backend_scalar() / rhs.to_backend_scalar(),
-                )
-            },
-            self.tracks_grad() || rhs.tracks_grad(),
-        )
+        AnyScalar::fallback_result(self.try_div(rhs), "div", || {
+            AnyScalar::scalar_value_from_backend(self.to_backend_scalar() / rhs.to_backend_scalar())
+        })
     }
 }
 
@@ -1405,12 +1367,9 @@ impl Neg for &AnyScalar {
     type Output = AnyScalar;
 
     fn neg(self) -> Self::Output {
-        AnyScalar::fallback_result(
-            self.try_neg(),
-            "neg",
-            || AnyScalar::scalar_value_from_backend(-self.to_backend_scalar()),
-            self.tracks_grad(),
-        )
+        AnyScalar::fallback_result(self.try_neg(), "neg", || {
+            AnyScalar::scalar_value_from_backend(-self.to_backend_scalar())
+        })
     }
 }
 
