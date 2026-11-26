@@ -6,9 +6,10 @@
 
 - `TCI2Termination::Converged` under `PivotSearchStrategy::Rook` now rests on
   an exact bond error (#1257). Rook's own bond errors are last rook pivots, not
-  residual bounds: on a 150 x 260 and a 300 x 300 ridge the search stopped one
-  pivot early and returned `Converged` with a true error 1.2x and 1.3x the
-  tolerance while reporting less than the tolerance. Once the history criterion
+  residual bounds: on a 150 x 260 ridge and a 300 x 300 two-band matrix the
+  search stopped one or two pivots early (rank 49 of 50, 129 of 131) and
+  returned `Converged` with a true error of 1.2x and 1.28x the tolerance while
+  reporting less than the tolerance. Once the history criterion
   is met under `Rook`, TCI2 now runs an exact `Full` sweep and reports
   `Converged` only if that sweep has bond error below tolerance, no global pivot
   and no rank growth; otherwise it keeps sweeping with `Rook`. The meaning is

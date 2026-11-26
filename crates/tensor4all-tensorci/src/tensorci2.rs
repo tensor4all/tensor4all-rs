@@ -345,8 +345,9 @@ pub enum PivotSearchStrategy {
     /// Heuristic lazy block-rook pivoting over partial matrix blocks.
     ///
     /// Each pivot is found by an O(d)-sized rook walk that alternates residual
-    /// column and row maxima until they agree, so the full candidate matrix is
-    /// never materialized. A rook pivot is the largest entry of its own
+    /// column and row maxima until they agree, so the search itself never
+    /// materializes the full candidate matrix (the final exact sweep described
+    /// below does). A rook pivot is the largest entry of its own
     /// residual row and column only.
     ///
     /// The bond stop is heuristic: when the current rook pivot is below

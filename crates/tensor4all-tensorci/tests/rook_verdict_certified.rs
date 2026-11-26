@@ -47,6 +47,7 @@ fn run(
     m: usize,
     strategy: PivotSearchStrategy,
     max_nglobal_pivot: usize,
+    seed: u64,
 ) -> (TCI2Termination, usize, usize, f64) {
     let amax = (0..n)
         .flat_map(|i| (0..m).map(move |j| entry(i, j).abs()))
@@ -56,7 +57,7 @@ fn run(
         max_iter: 30,
         pivot_search: strategy,
         max_nglobal_pivot,
-        seed: Some(1),
+        seed: Some(seed),
         ..TCI2Options::default()
     };
     let res = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
@@ -93,12 +94,12 @@ fn converged_implies_true_error_within_tolerance_for_both_strategies() {
     ];
     for (name, entry, n, m) in cases {
         for strategy in [PivotSearchStrategy::Full, PivotSearchStrategy::Rook] {
-            for max_nglobal_pivot in [0, 5] {
+            for (max_nglobal_pivot, seed) in [(0, 1), (5, 1), (0, 2), (5, 2), (0, 3), (5, 3)] {
                 let (termination, sweeps, rank, true_rel) =
-                    run(entry, n, m, strategy, max_nglobal_pivot);
+                    run(entry, n, m, strategy, max_nglobal_pivot, seed);
                 println!(
-                    "{name} {strategy:?} g={max_nglobal_pivot}: {termination:?} sweeps={sweeps} \
-                     rank={rank} true={true_rel:.2e}"
+                    "{name} {strategy:?} g={max_nglobal_pivot} seed={seed}: {termination:?} \
+                     sweeps={sweeps} rank={rank} true={true_rel:.2e}"
                 );
                 assert!(
                     termination != TCI2Termination::Converged || true_rel <= TOL,
@@ -121,7 +122,7 @@ fn rook_still_converges_on_the_ridges() {
     ] {
         for max_nglobal_pivot in [0, 5] {
             let (termination, _, _, true_rel) =
-                run(entry, n, m, PivotSearchStrategy::Rook, max_nglobal_pivot);
+                run(entry, n, m, PivotSearchStrategy::Rook, max_nglobal_pivot, 1);
             assert_eq!(termination, TCI2Termination::Converged);
             assert!(true_rel <= TOL, "true error {true_rel:.2e}");
         }
