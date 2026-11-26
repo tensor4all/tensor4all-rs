@@ -73,8 +73,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use tensor4all_core::{
-    DynIndex, IdxTensor, IndexLike, LinearizationOrder, SvdTruncationPolicy, TensorIndex,
-    TensorLike,
+    DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy, TensorIndex, TensorLike,
 };
 
 use super::index_mapping::IndexMapping;
@@ -90,7 +89,8 @@ use crate::operator::compose::{
     compose_exclusive_linear_operators_unchecked, identity_factor, in_common_dtype,
 };
 use crate::treetn::contraction::{
-    contract, ContractionMethod, ContractionOptions, IdentityNodes, SrcOptions,
+    contract, contract_local_exact, ContractionMethod, ContractionOptions, ContractionTopology,
+    IdentityNodes, SrcOptions,
 };
 use crate::treetn::TreeTN;
 
@@ -104,6 +104,8 @@ use crate::treetn::TreeTN;
 /// state/operator link pair into one product link. It does not materialize the
 /// full state or operator tensor. Truncation fields such as `max_bond_dim`,
 /// `svd_policy`, and `qr_rtol` are ignored by the naive path.
+/// No orthogonal gauge is established: the result has no canonical region or
+/// form. Canonicalize it explicitly when a certified center is needed.
 ///
 /// # Defaults
 ///
@@ -174,8 +176,10 @@ pub struct ApplyOptions<V> {
     /// `None` keeps the default centre: the smaller-named
     /// chain endpoint on a chain, otherwise the smallest node name. Set it to an
     /// interior node (for example the one with the largest bonds) to keep the
-    /// result canonical there and to start zip-up from that side. A centre that
-    /// is not a node of the state is rejected before any contraction work.
+    /// result canonical there and to start zip-up from that side. Naive local
+    /// apply only validates the center and returns an uncertified gauge; it
+    /// does not factorize tensors. A centre that is not a node of the state is
+    /// rejected before any contraction work.
     pub center: Option<V>,
 }
 
@@ -292,7 +296,8 @@ impl<V> ApplyOptions<V> {
 /// With [`ApplyOptions::naive`], this function uses a dedicated local exact
 /// apply path instead of the generic dense [`ContractionMethod::Naive`] TreeTN
 /// contraction. No full state/operator tensor is materialized; bonds may grow
-/// as state/operator product links.
+/// as state/operator product links. Local contraction does not establish an
+/// orthogonal gauge, so the result has no canonical region or form.
 ///
 /// # Partial operators
 ///
@@ -486,8 +491,13 @@ where
     };
 
     let contracted = if options.method == ContractionMethod::Naive {
-        apply_linear_operator_naive_local(&full_operator, &transformed_state, &center)
-            .context("Failed to locally apply state with operator")?
+        contract_local_exact(
+            &transformed_state,
+            full_operator.mpo(),
+            &center,
+            ContractionTopology::PreserveInputTopology,
+        )
+        .context("Failed to locally apply state with operator")?
     } else if options.method == ContractionMethod::Zipup {
         transformed_state
             .contract_zipup_skipping_identity_nodes(
@@ -992,160 +1002,6 @@ where
     }
 
     Ok(normalized)
-}
-
-fn apply_linear_operator_naive_local<T, V>(
-    operator: &LinearOperator<T, V>,
-    transformed_state: &TreeTN<T, V>,
-    center: &V,
-) -> Result<TreeTN<T, V>>
-where
-    T: TensorLike,
-    T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
-    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
-    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
-{
-    let mpo = operator.mpo();
-    if !transformed_state.same_topology(mpo) {
-        return Err(anyhow::anyhow!(
-            "apply_linear_operator_naive_local: state and operator topologies differ (state: {} nodes, {} edges; operator: {} nodes, {} edges)",
-            transformed_state.node_count(),
-            transformed_state.edge_count(),
-            mpo.node_count(),
-            mpo.edge_count()
-        ));
-    }
-
-    let state = transformed_state.sim_internal_inds();
-    let mpo = mpo.sim_internal_inds();
-
-    let mut node_names = state.node_names();
-    node_names.sort();
-
-    let mut tensors_by_node: HashMap<V, T> = HashMap::with_capacity(node_names.len());
-    for node in &node_names {
-        let state_node = state.node_index(node).ok_or_else(|| {
-            anyhow::anyhow!(
-                "apply_linear_operator_naive_local: missing state node {:?}",
-                node
-            )
-        })?;
-        let mpo_node = mpo.node_index(node).ok_or_else(|| {
-            anyhow::anyhow!(
-                "apply_linear_operator_naive_local: missing operator node {:?}",
-                node
-            )
-        })?;
-        let state_tensor = state.tensor(state_node).ok_or_else(|| {
-            anyhow::anyhow!(
-                "apply_linear_operator_naive_local: missing state tensor at {:?}",
-                node
-            )
-        })?;
-        let mpo_tensor = mpo.tensor(mpo_node).ok_or_else(|| {
-            anyhow::anyhow!(
-                "apply_linear_operator_naive_local: missing operator tensor at {:?}",
-                node
-            )
-        })?;
-
-        let contracted = if mpo
-            .site_space(node)
-            .is_some_and(|site_space| site_space.is_empty())
-        {
-            state_tensor.contract_pair(mpo_tensor).with_context(|| {
-                format!(
-                    "apply_linear_operator_naive_local: failed spectator product at {:?}",
-                    node
-                )
-            })?
-        } else {
-            T::contract(&[state_tensor, mpo_tensor]).with_context(|| {
-                format!("apply_linear_operator_naive_local: failed at {:?}", node)
-            })?
-        };
-        tensors_by_node.insert(node.clone(), contracted);
-    }
-
-    let mut edges: Vec<(V, V)> = state.site_index_network().edges().collect();
-    edges.sort();
-    for (node_a, node_b) in edges {
-        let state_edge = state.edge_between(&node_a, &node_b).ok_or_else(|| {
-            anyhow::anyhow!(
-                "apply_linear_operator_naive_local: missing state edge {:?}-{:?}",
-                node_a,
-                node_b
-            )
-        })?;
-        let mpo_edge = mpo.edge_between(&node_a, &node_b).ok_or_else(|| {
-            anyhow::anyhow!(
-                "apply_linear_operator_naive_local: missing operator edge {:?}-{:?}",
-                node_a,
-                node_b
-            )
-        })?;
-        let state_bond = state.bond_index(state_edge).ok_or_else(|| {
-            anyhow::anyhow!(
-                "apply_linear_operator_naive_local: missing state bond {:?}-{:?}",
-                node_a,
-                node_b
-            )
-        })?;
-        let mpo_bond = mpo.bond_index(mpo_edge).ok_or_else(|| {
-            anyhow::anyhow!(
-                "apply_linear_operator_naive_local: missing operator bond {:?}-{:?}",
-                node_a,
-                node_b
-            )
-        })?;
-        let old_indices = [state_bond.clone(), mpo_bond.clone()];
-        let product_link = T::Index::product_link(&old_indices).with_context(|| {
-            format!(
-                "apply_linear_operator_naive_local: failed to create product link for {:?}-{:?}",
-                node_a, node_b
-            )
-        })?;
-
-        for node in [&node_a, &node_b] {
-            let tensor = tensors_by_node.get_mut(node).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "apply_linear_operator_naive_local: missing contracted tensor at {:?}",
-                    node
-                )
-            })?;
-            *tensor = tensor
-                .fuse_indices(
-                    &old_indices,
-                    product_link.clone(),
-                    LinearizationOrder::ColumnMajor,
-                )
-                .with_context(|| {
-                    format!(
-                        "apply_linear_operator_naive_local: failed to fuse product link at {:?}",
-                        node
-                    )
-                })?;
-        }
-    }
-
-    let tensors = node_names
-        .iter()
-        .map(|node| {
-            tensors_by_node.remove(node).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "apply_linear_operator_naive_local: missing result tensor for {:?}",
-                    node
-                )
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let mut result = TreeTN::from_tensors(tensors, node_names)
-        .context("apply_linear_operator_naive_local: failed to build result TreeTN")?;
-    result
-        .set_canonical_region(std::iter::once(center.clone()))
-        .context("apply_linear_operator_naive_local: failed to set canonical center")?;
-
-    Ok(result)
 }
 
 /// Extend a partial operator to cover the full state space.

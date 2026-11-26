@@ -11,7 +11,7 @@ use tensor4all_core::{
     TagSetLike, TensorElement,
 };
 use tensor4all_treetn::{
-    contraction::{self, ContractionMethod, ContractionOptions},
+    contraction::{self, ContractionMethod, ContractionOptions, ContractionTopology},
     SiteIndexNetwork, SumEngine, TreeTN, TruncationOptions,
 };
 
@@ -721,6 +721,10 @@ where
     /// Compatible projectors are merged, then entries for site indices absent
     /// from the contracted output are removed. The returned subdomain retains
     /// the left budget metadata and never stores `center`.
+    /// This standalone operation always uses the requested contraction method
+    /// and truncation policy, including dimension-one operands. By contrast,
+    /// [`crate::PartitionedTreeTN::contract`] and `contract_selected` contract
+    /// dimension-one patch pairs exactly before any output-group truncation.
     ///
     /// # Errors
     ///
@@ -731,6 +735,8 @@ where
     /// [`PartitionedTreeTNError::InvalidCenter`] for an absent center,
     /// [`PartitionedTreeTNError::InvalidOptions`] for forbidden dense/reference
     /// options, or [`PartitionedTreeTNError::TreeTN`] for contraction failures.
+    /// The latter wraps `TreeTNOperationError::InvalidConfiguration` for invalid
+    /// initialization, RSVD, or SRC options, preserving the typed source.
     /// Returns `Ok(None)` when the projector regions conflict.
     ///
     /// # Examples
@@ -760,10 +766,40 @@ where
         center: &V,
         options: ContractionOptions,
     ) -> Result<Option<Self>> {
+        self.contract_pair(other, center, options, false)
+    }
+
+    /// Partition algebra preserves exact unit-bond pairs; adaptive probes and
+    /// standalone subdomain contraction retain their compressed-pair policy.
+    pub(crate) fn contract_partition_pair(
+        &self,
+        other: &Self,
+        center: &V,
+        options: ContractionOptions,
+    ) -> Result<Option<Self>> {
+        self.contract_pair(other, center, options, true)
+    }
+
+    fn contract_pair(
+        &self,
+        other: &Self,
+        center: &V,
+        options: ContractionOptions,
+        exact_unit_bonds: bool,
+    ) -> Result<Option<Self>> {
         let Some(merged) = self.prepare_pair_contraction(other, center, &options)? else {
             return Ok(None);
         };
-        let data = contraction::contract(&self.data, &other.data, center, options)?;
+        let data = if exact_unit_bonds && (self.max_bond_dim() == 1 || other.max_bond_dim() == 1) {
+            let topology = if options.method == ContractionMethod::Zipup {
+                ContractionTopology::PruneScalarSubtrees
+            } else {
+                ContractionTopology::PreserveInputTopology
+            };
+            contraction::contract_local_exact(&self.data, &other.data, center, topology)?
+        } else {
+            contraction::contract(&self.data, &other.data, center, options)?
+        };
         self.finish_pair_contraction(data, merged).map(Some)
     }
 
@@ -1105,6 +1141,7 @@ pub(crate) fn validate_contraction_options(options: &ContractionOptions) -> Resu
             reason: "convergence_tol must be finite and non-negative",
         });
     }
+    options.validate()?;
     Ok(())
 }
 

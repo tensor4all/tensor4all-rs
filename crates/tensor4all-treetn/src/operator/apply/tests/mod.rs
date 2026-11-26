@@ -1042,8 +1042,8 @@ fn test_apply_options_builder() {
 
 #[test]
 fn apply_options_explicit_center_is_honored_on_a_chain() {
-    // Non-`usize` String node names, and both the naive-local and contraction
-    // dispatch paths, must canonicalize the result at the requested centre.
+    // Non-`usize` String node names: zip-up establishes the requested center;
+    // local exact apply validates it without claiming an orthogonal gauge.
     use crate::operator::apply_linear_operator;
 
     let (state, sites) = build_chain_state();
@@ -1057,11 +1057,12 @@ fn apply_options_explicit_center_is_honored_on_a_chain() {
             ..method
         };
         let result = apply_linear_operator(&operator, &state, options).unwrap();
-        assert!(
-            result.canonical_region().contains("site1"),
-            "{label}: expected the result centred on site1, got {:?}",
-            result.canonical_region()
-        );
+        if label == "naive" {
+            assert!(result.canonical_region().is_empty());
+            assert_eq!(result.canonical_form(), None);
+        } else {
+            assert!(result.canonical_region().contains("site1"));
+        }
         let distance = result
             .to_dense()
             .unwrap()

@@ -28,6 +28,25 @@ use tensor4all_treetn::{
 /// A plain [`ContractionOptions`] converts into this type with
 /// [`SumEngine::Binary`] and [`DEFAULT_GROUP_SUM_LIMIT_BYTES`].
 ///
+/// # Exact patch pairs
+///
+/// When every link of either operand of a patch pair has dimension one, that
+/// pair is contracted locally and exactly, without factorization or truncation,
+/// regardless of `contraction`'s rank cap or truncation policy. This includes
+/// trees without links. The site tensors are arbitrary: signs, phases, dense
+/// local matrices, singular projectors, and copy tensors need no identity,
+/// unitarity, or invertibility assumption. The pair inherits the other
+/// operand's dimensions on every retained link. With Zipup, site-free subtrees
+/// are absorbed by exact local contractions following the same topology plan
+/// as compressed Zipup; Fit and SRC retain the input topology. Exact and
+/// compressed contributions therefore share one output tree in a mixed call.
+/// Pairs where both operands have a link dimension
+/// above one use the requested contraction method as usual.
+///
+/// A single contribution is returned without further truncation. Multiple
+/// contributions to one output projector are still summed exactly and
+/// truncated once with `contraction`'s policy, including exact patch pairs.
+///
 /// # Summing contributions
 ///
 /// Several patch pairs can contribute to the same output projector. Their
@@ -72,8 +91,8 @@ use tensor4all_treetn::{
 /// ```
 #[derive(Debug, Clone)]
 pub struct PartitionedContractionOptions {
-    /// How each compatible patch pair is contracted, and the truncation of
-    /// every summed output projector.
+    /// How pairs without an all-dimension-one operand are contracted, and the
+    /// truncation of every output projector with multiple contributions.
     pub contraction: ContractionOptions,
     /// How the contributions to one output projector are summed. Default:
     /// [`SumEngine::Binary`].
@@ -1198,6 +1217,10 @@ where
     /// when the refinement grid has more than [`AUTOMATIC_REFINEMENT_LIMIT`]
     /// atoms, [`PartitionedTreeTNError::GroupSumLimit`] when an exact group sum
     /// would exceed the configured limit, or a typed TreeTN/backend error.
+    /// Method-specific initialization, RSVD, and SRC option failures are
+    /// [`PartitionedTreeTNError::TreeTN`] with a
+    /// `TreeTNOperationError::InvalidConfiguration` source; the other invalid
+    /// options listed above use [`PartitionedTreeTNError::InvalidOptions`].
     /// The operation returns a new partition, so failure cannot mutate either input.
     pub fn contract(
         &self,
@@ -1326,7 +1349,11 @@ where
     /// output layouts, [`PartitionedTreeTNError::GroupSumLimit`] when a wanted
     /// output's exact sum would exceed the configured limit, or a typed
     /// TreeTN/backend error. Operand validation runs even when no pair is
-    /// selected. Neither input is mutated.
+    /// selected. Method-specific invalid initialization, RSVD, or SRC options
+    /// use [`PartitionedTreeTNError::TreeTN`] with an
+    /// `TreeTNOperationError::InvalidConfiguration` source; other invalid
+    /// options use [`PartitionedTreeTNError::InvalidOptions`]. Neither input
+    /// is mutated.
     ///
     /// # Examples
     ///
@@ -1471,7 +1498,9 @@ where
         self.for_each_planned_pair(other, center, wanted, |(left, right, output)| {
             #[cfg(test)]
             CONTRACTED_PAIRS.with(|count| count.set(count.get() + 1));
-            let Some(contribution) = left.contract(right, center, options.clone())? else {
+            let Some(contribution) =
+                left.contract_partition_pair(right, center, options.clone())?
+            else {
                 return Ok(());
             };
             debug_assert_eq!(
