@@ -4,6 +4,12 @@
 
 ### Behavior changes
 
+- `tensor4all-treersi`, `tenferro-cuda` builds (#1379): the lower-triangular
+  solve of the local rank decision now runs on a single-thread CPU context
+  owned by the run, not the process-global CPU context. It no longer contends
+  with other users of the global backend; thread count changes from the global
+  default to 1, which may alter the interpolation matrix in the last bits. The
+  input-core readback still uses the global context.
 - `TCI2Termination::Converged` under `PivotSearchStrategy::Rook` now rests on
   an exact bond error (#1257). Rook's own bond errors are last rook pivots, not
   residual bounds: on a 150 x 260 ridge and a 300 x 300 two-band matrix the

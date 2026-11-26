@@ -225,11 +225,11 @@ snippet below is the pre-fix code.*
 match exec {
     Exec::Session(session) => matrix_luci_row_interpolation_owned_on_session(matrix, Some(options), session),
     #[cfg(feature = "tenferro-cuda")]
-    Exec::Cuda(_) => tensor4all_core::matrix_luci_row_interpolation_owned_in(
-        matrix,
-        Some(options),
-        &tensor4all_core::legacy::default_cpu_execution_context().map_err(TreeRsiError::numerical)?,   // <-- :118 (the call was wrapped in `Exec::Cuda(_) => { let context = ...; ... &context }`)
-    ),
+    Exec::Cuda(_) => {
+        let context = tensor4all_core::legacy::default_cpu_execution_context()   // <-- :118
+            .map_err(TreeRsiError::numerical)?;
+        tensor4all_core::matrix_luci_row_interpolation_owned_in(matrix, Some(options), &context)
+    }
 }
 ```
 
