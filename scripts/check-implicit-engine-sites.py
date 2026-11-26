@@ -16,10 +16,11 @@ the remaining code:
     ``with_eager_session_typed``, ``with_engine`` or ``with_execution_engine``.
     Arguments are split with a balanced-delimiter scan, so a call that
     ``rustfmt`` wrapped over several lines is still found. Since #1378 core's
-    eager entries take an ``EngineRoute`` instead of an ``Option``, and an
-    implicit caller spells the bridge ``EngineRoute::Legacy``: like
-    ``legacy::mat_mul`` that is a bridge operation, not a site, and the bridge
-    itself stays counted where it enters ``with_runtime_engine_or_global(``.
+    eager entries take an ``EngineRoute`` instead of an ``Option``, and the
+    former ``None`` is spelled ``EngineRoute::Legacy``: it means the same
+    implicit route, so every ``EngineRoute::Legacy`` expression (a ``match``
+    arm pattern ``EngineRoute::Legacy =>`` is not one) and every
+    ``EngineRoute::context_or_legacy(None)`` is a site of this pattern too.
 ``global-accessor``
     a call of ``default_context()``, ``default_eager_ctx()``,
     ``default_cpu_execution_context()``, ``with_default_session(``,
@@ -107,6 +108,12 @@ NONE_ROUTE_FUNCTIONS = (
 )
 NONE_ROUTE_RE = re.compile(
     r"\b(" + "|".join(NONE_ROUTE_FUNCTIONS) + r")\s*(?:::\s*<[^;{}]*?>\s*)?\("
+)
+# #1378: the `EngineRoute` spelling of the former literal `None` route.
+LEGACY_ROUTE_RE = re.compile(r"\bEngineRoute\s*::\s*Legacy\b")
+MATCH_ARM_AFTER_RE = re.compile(r"\s*(?:=>|\|)")
+LEGACY_FROM_NONE_RE = re.compile(
+    r"\bEngineRoute\s*::\s*context_or_legacy\s*\(\s*None\s*\)"
 )
 GLOBAL_ACCESSOR_RE = re.compile(
     r"\b(default_context|default_eager_ctx|default_cpu_execution_context"
@@ -278,7 +285,7 @@ def normalise(text: str) -> str:
 
 
 # A file without any of these words cannot hold a site; skip lexing it.
-PREFILTER = ("with_", "default_", "ExecutionContext", "eager_runtime")
+PREFILTER = ("with_", "default_", "ExecutionContext", "eager_runtime", "EngineRoute")
 
 
 def scan_source(rel_path: str, source: str) -> list[Site]:
@@ -295,6 +302,13 @@ def scan_source(rel_path: str, source: str) -> list[Site]:
             if arg.strip() == "None":
                 raw.append((start + arg.index("None"), "none-context-arg",
                             f"{m.group(1)}(arg{index}=None)"))
+
+    for m in LEGACY_ROUTE_RE.finditer(code):
+        if MATCH_ARM_AFTER_RE.match(code, m.end()):
+            continue
+        raw.append((m.start(), "none-context-arg", "EngineRoute::Legacy"))
+    for m in LEGACY_FROM_NONE_RE.finditer(code):
+        raw.append((m.start(), "none-context-arg", "EngineRoute::context_or_legacy(None)"))
 
     for m in GLOBAL_ACCESSOR_RE.finditer(code):
         if FN_DEF_BEFORE_RE.search(code[max(0, m.start() - 8):m.start()]):

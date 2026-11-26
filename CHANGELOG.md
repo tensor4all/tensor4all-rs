@@ -11,7 +11,9 @@
   doc-hidden bridge `with_runtime_engine_or_global` (also
   `tensor4all_core::legacy::with_runtime_engine_or_global`), which core's
   context-free operations use, so their behavior is unchanged. Operations given
-  an explicit context still run on exactly that context's engine.
+  an explicit context still run on exactly that context's engine. Breaking:
+  `ExecutionContextEntryError` gains the variant `NoLiveOwner`, so exhaustive
+  matches on it need a new arm.
 - Nonempty `TreeTN<T, V>` implements `TensorVectorSpace`, enabling the core's
   `gmres_with_truncation` and `restart_gmres_with_truncation` on branched trees
   (#1423). Sums remain exact until the explicit truncation callback; operands

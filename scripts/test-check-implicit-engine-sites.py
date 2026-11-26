@@ -102,8 +102,26 @@ class PatternTests(unittest.TestCase):
         self.assertEqual(patterns(definition), [])
         renamed = "use tensor4all_tensorbackend::with_runtime_engine_or_global as eng;\n"
         self.assertEqual(patterns(renamed), ["global-accessor"])
-        route = "fn f() { with_eager_session(&rt, EngineRoute::Legacy, |s| s.run()); }\n"
-        self.assertEqual(patterns(route), [])
+
+    def test_legacy_engine_route_is_counted_like_the_none_it_replaced(self) -> None:
+        # #1378: `EngineRoute::Legacy` is the old literal `None`, renamed; it
+        # must stay a site wherever it is written, except as a match pattern.
+        for text in (
+            "fn f() { with_eager_session(&rt, EngineRoute::Legacy, |s| s.run()); }\n",
+            "fn f() { let route = super::EngineRoute::Legacy; g(route); }\n",
+            "fn f() { with_engine(&rt, EngineRoute::context_or_legacy(None), h); }\n",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(patterns(text), ["none-context-arg"])
+        arms = (
+            "fn f(route: EngineRoute) { match route {\n"
+            "    EngineRoute::Legacy => g(),\n"
+            "    EngineRoute::Context(c) => h(c),\n"
+            "} }\n"
+        )
+        self.assertEqual(patterns(arms), [])
+        forwarded = "fn f(c: X) { with_engine(&rt, EngineRoute::context_or_legacy(c), h); }\n"
+        self.assertEqual(patterns(forwarded), [])
 
     def test_renaming_import_of_an_accessor_is_a_site(self) -> None:
         source = "use tensor4all_core::legacy::default_cpu_execution_context as cpu;\n"

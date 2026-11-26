@@ -36,8 +36,10 @@ CI runs the same command in the Lint job of `.github/workflows/CI_rs.yml`.
 
 - the linked `tensor4all-core` has no global route (`legacy::GLOBAL_DEFAULTS`
   is `false`), so the other tests cannot pass on the wrong configuration;
-- core's `legacy` bridges and `with_runtime_engine` on an owner-less runtime
-  refuse with `ExecutionContextEntryError::NoContext` without running anything;
+- core's `legacy` bridges (including `with_runtime_engine_or_global`) refuse an
+  owner-less runtime with `ExecutionContextEntryError::NoContext`, and the strict
+  `with_runtime_engine` refuses it with `NoLiveOwner` (#1378), without running
+  anything;
 - a context-free construction from host data refuses with the typed
   `IdxTensorError::EngineEntry { source: NoContext }`, and a context-free
   contraction works on values whose context is alive and refuses once it is gone;

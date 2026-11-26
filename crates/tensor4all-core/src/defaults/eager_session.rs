@@ -155,7 +155,10 @@ fn engine_reads(target: &EngineTarget, value: &TensorRead<'_>) -> bool {
 /// (tensor4all-rs#1378). Each caller now names its route.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum EngineRoute<'a> {
-    /// The caller's context: exactly this context's engine, never another one.
+    /// The caller's context: this context's engine, never another context's
+    /// or the process-global one. (On a Rayon worker the context's own session
+    /// entry substitutes a serial engine sharing its plan cache, as for every
+    /// context entry.)
     Context(&'a ExecutionContext),
     /// The legacy migration bridge (design doc section 7.0) for an implicit
     /// entry that has no engine yet: the engine of the context owning the

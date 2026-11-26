@@ -1249,8 +1249,8 @@ pub enum ExecutionContextEntryError {
     /// that published the value has been dropped, or the value was never
     /// published in one. Pass an [`ExecutionContext`] to the operation's
     /// context-taking form. Code that has no engine yet and must keep the legacy
-    /// process-global route calls the explicitly named bridge
-    /// [`with_runtime_engine_or_global`] instead. Transitional: it is removed
+    /// process-global route calls the explicitly named, doc-hidden bridge
+    /// `with_runtime_engine_or_global` instead. Transitional: it is removed
     /// with the owner-resolving route in stage D2 of tensor4all-rs#1376.
     #[error(
         "no live owner: no live execution context owns the operand's eager runtime; pass an \
@@ -1822,8 +1822,8 @@ pub(crate) fn register_eager_runtime_owner(runtime: &EagerRuntime, owner: Runtim
 /// context owns `runtime` (for example after the context was dropped) it
 /// refuses with [`ExecutionContextEntryError::NoLiveOwner`] in every build,
 /// including `global-defaults` (tensor4all-rs#1378). Code that has no engine yet
-/// and must keep the legacy process-global route calls
-/// [`with_runtime_engine_or_global`], whose name makes that choice visible.
+/// and must keep the legacy process-global route calls the doc-hidden bridge
+/// `with_runtime_engine_or_global`, whose name makes that choice visible.
 ///
 /// # Errors
 ///
