@@ -1,3 +1,5 @@
+mod disconnected;
+
 use super::{
     contract_prefix_with_probed_site_pair, contract_prefix_with_probed_site_pair_batch_range,
     contract_prefix_with_site_pair, contract_retaining, contract_site_pair, local_output_indices,

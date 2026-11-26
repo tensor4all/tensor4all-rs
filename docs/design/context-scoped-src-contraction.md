@@ -33,6 +33,11 @@ CUDA.
 - Full `Index` identity, direction, prime level, tags, order, column-major
   payload semantics, dtype, storage class, eager AD identity, numerical
   policies, and source errors are preserved.
+- Local SRC probe and projection factors may be disconnected when only one
+  operand carries output legs (#1472). SRC contracts each connected component
+  before explicitly taking their outer product. A retained probe-batch index
+  connects all factors carrying it, preserving elementwise column pairing.
+  Core contraction continues to require a connected network.
 
 ## Dependency-ordered PRs
 
