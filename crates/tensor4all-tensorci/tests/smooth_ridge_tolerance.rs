@@ -8,9 +8,9 @@
 //! `Rook` stops when the current rook pivot is below tolerance, after a few
 //! stop-check walks from other columns found nothing above it. On this ridge a
 //! single walk stopped on a local maximum and `Rook` returned `Converged` with
-//! a true error of 1.3e-6; the stop-check walks find the missed pivots, and the
-//! exact `Full` sweep that must precede a `Rook` `Converged` confirms them
-//! (`rook_verdict_certified.rs` states the property on more matrices).
+//! a true error of 1.3e-6; the stop-check walks find the missed pivots. That is
+//! an improvement on this ridge, not a bound: `Converged` under `Rook` is still
+//! not a proof of the tolerance.
 use tensor4all_simplett::AbstractTensorTrain;
 use tensor4all_tensorci::{crossinterpolate2, PivotSearchStrategy, TCI2Options, TCI2Termination};
 
