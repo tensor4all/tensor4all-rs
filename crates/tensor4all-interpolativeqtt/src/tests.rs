@@ -1112,3 +1112,38 @@ fn invert_qtt_degree2_exact_when_uncompressed_blend_when_compressed() {
         }
     }
 }
+
+/// A builder runs its compression on the engine it was handed (tensor4all-rs#1379).
+///
+/// The compression used to open a session of the process-global context. Here
+/// the global context's session is already held on this thread, so a builder
+/// that still reached for the global context would be refused as a re-entry;
+/// one that runs on the caller's engine, a different context's, is not
+/// affected and yields the same train as an unobstructed run.
+#[test]
+fn builders_compress_on_the_engine_they_are_given() {
+    let caller = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+        tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+    );
+    let global = tensor4all_core::legacy::default_cpu_execution_context().unwrap();
+    assert!(!std::ptr::eq(&*global, &caller));
+    let options = InterpolativeQttOptions::default().with_tolerance(1e-10);
+    let build = |engine: &mut dyn tensor4all_tensorbackend::ExecutionEngine| {
+        super::interpolate_single_scale(engine, |x| (3.0 * x).sin(), 0.0, 1.0, 5, 6, &options)
+    };
+
+    let expected = caller
+        .with_session(|engine| build(engine))
+        .unwrap()
+        .unwrap();
+    let held = global
+        .with_session(|_global_engine| caller.with_session(|engine| build(engine)))
+        .expect("the global context's session is enterable")
+        .expect("the caller's context is a different context")
+        .expect("compression ran on the caller's engine, not the global context");
+
+    assert_eq!(
+        held.0.chain_cores::<f64>(&held.1).unwrap(),
+        expected.0.chain_cores::<f64>(&expected.1).unwrap()
+    );
+}
