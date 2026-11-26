@@ -7,6 +7,11 @@
 //! and z bonds could not grow past each other: every update recorded a
 //! residual of ~1e-16 while the output stayed wrong. The true centre ranks are
 //! (12, 1, 12).
+//!
+//! The target is 0 off the plane `y = 16`. A run whose first Guard searches
+//! draw no start near the plane also stopped with the zero output (#1435,
+//! mechanism 2), until the third Guard stage (#1466) enumerated the branches
+//! around the searches' starts.
 
 use tensor4all_treeaci::{tree_elementwise, TreeAciOptions, TreeAciTermination};
 
@@ -53,8 +58,19 @@ fn unit_junction_seed_1_reaches_the_true_centre_ranks() {
 }
 
 /// Before the expansion: `Converged` after 7 passes at centre ranks (2, 1, 2)
-/// with a dense relative error of 0.33.
+/// with a dense relative error of 0.33. With the expansion and before the
+/// third Guard stage (#1466): 8 passes, the same exact tree.
 #[test]
 fn unit_junction_seed_4_reaches_the_true_centre_ranks() {
-    assert_exact(4, 8);
+    assert_exact(4, 6);
+}
+
+/// The zero-output case (#1435 mechanism 2, #1466). Before the third Guard
+/// stage this seed stopped `Converged` after 2 passes with the zero output
+/// (centre ranks (1, 1, 1), dense relative error 1): every start of the first
+/// two Guard searches lies two or more `y` bits off the plane `y = 16`, where
+/// every residual of the zero output is exactly 0 and no walk moves.
+#[test]
+fn unit_junction_seed_2_leaves_the_zero_output() {
+    assert_exact(2, 6);
 }
