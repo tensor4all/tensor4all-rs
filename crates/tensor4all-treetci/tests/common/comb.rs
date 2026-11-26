@@ -130,6 +130,23 @@ pub fn run<P: PivotCandidateProposer>(
     enable_global_pivots: bool,
     proposer: &P,
 ) -> Result<Run> {
+    run_with_stop_rule(target, enable_global_pivots, proposer, Default::default())
+}
+
+/// Run the same comb fixture with an explicit stopping rule.
+///
+/// # Errors
+///
+/// Returns `TreeTciError::InvalidGraph` for invalid fixture edges,
+/// `TreeTciError::InvalidConfiguration` for invalid options, and operation
+/// errors if interpolation, materialization or validation readout fails.
+/// See [`run`] for the individual construction and readout boundaries.
+pub fn run_with_stop_rule<P: PivotCandidateProposer>(
+    target: Target,
+    enable_global_pivots: bool,
+    proposer: &P,
+    stop_rule: tensor4all_treetci::StopRule,
+) -> Result<Run> {
     let graph = comb_graph()?;
 
     // Start at the grid centre.
@@ -146,6 +163,7 @@ pub fn run<P: PivotCandidateProposer>(
     };
 
     let options = TreeTciOptions {
+        stop_rule,
         tolerance: TOLERANCE,
         max_iter: 30,
         enable_global_pivots,

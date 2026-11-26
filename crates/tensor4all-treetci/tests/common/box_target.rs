@@ -169,6 +169,10 @@ impl BoxTarget {
                 .ok_or_else(|| anyhow::anyhow!("no dense reference"))?;
             let target = stored.replace_indices(stored.indices(), &indices)?;
             let error = run.treetn.to_dense()?.sub(&target)?.maxabs()?;
+            println!(
+                "issue1441 box r={} seed={seed} rule={stop_rule:?} points={} iterations={} ranks={:?} termination={:?} error={error:e}",
+                self.r, run.evaluation.evaluated_points, run.errors.len(), run.ranks, run.termination,
+            );
             assert!(
                 run.termination == TreeTciTermination::Converged && error <= TOLERANCE,
                 "box r = {} seed {seed}, {stop_rule:?}: {:?} after {} iterations, dense error {error:e}",

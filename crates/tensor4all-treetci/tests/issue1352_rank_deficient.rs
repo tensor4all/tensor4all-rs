@@ -208,6 +208,11 @@ where
         let target = stored.replace_indices(stored.indices(), &indices)?;
         let difference = tn.to_dense()?.sub(&target)?;
         let error = difference.maxabs()? / target.maxabs()?;
+        println!(
+            "issue1441 plane={} binary={} seed={seed} rule={stop_rule:?} points={} iterations={} ranks={:?} termination={:?} error={error:e}",
+            plane.coordinate, plane.binary_junction, run.evaluation.evaluated_points,
+            run.errors.len(), run.ranks, run.termination,
+        );
         if plane.binary_junction {
             eprintln!(
                 "delta junction {} seed {seed}, {stop_rule:?}: dense residual {error:e}",
@@ -267,9 +272,21 @@ fn check_reopened<T>(scale: T) -> Result<()>
 where
     T: MatrixLuciScalar + CommonScalar + FullPivLuScalar + TensorElement + ScalarParts,
 {
+    check_reopened_seeds(scale, &[4, 6])
+}
+
+/// Validate the frozen reopened table on a caller-selected seed set.
+///
+/// # Errors
+///
+/// Propagates fixture interpolation and dense reconstruction errors.
+pub(crate) fn check_reopened_seeds<T>(scale: T, seeds: &[u64]) -> Result<()>
+where
+    T: MatrixLuciScalar + CommonScalar + FullPivLuScalar + TensorElement + ScalarParts,
+{
     check_plane(
         include_str!("fixtures/issue1352_reopened_bits.txt"),
-        &[4, 6],
+        seeds,
         scale,
         Plane::unit(N / 2),
         &[[N / 2, N / 2, N / 2], [N / 2 - 1, N / 2, N / 2 - 1]],

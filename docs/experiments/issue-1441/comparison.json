@@ -1,0 +1,2155 @@
+{
+  "cells": [
+    {
+      "case": "box r=6",
+      "seed": 1,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 4266,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4266,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 1,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 4266,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4266,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 2,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 4565,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4565,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 2,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 4565,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4565,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 3,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 4262,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4262,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 3,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 4262,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4262,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 4,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 4565,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4565,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 4,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 4565,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4565,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 5,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 4291,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4291,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 5,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 4291,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4291,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 6,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 4470,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4470,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 6,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 4470,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4470,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 7,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 4289,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4289,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 7,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 4289,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4289,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 8,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 4267,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4267,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 8,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 4267,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4267,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 9,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 4151,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4151,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 9,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 4151,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4151,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 10,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 4565,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4565,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 10,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 4565,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4565,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 11,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 4283,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4283,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=6",
+      "seed": 11,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 4283,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 4283,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 1,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 1,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 2,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 2,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 3,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 3,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 4,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 4,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 5,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 5,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 6,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 6821,
+        "iterations": 5,
+        "ranks": [
+          2,
+          3,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 6821,
+        "iterations": 5,
+        "ranks": [
+          2,
+          3,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 6,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 6821,
+        "iterations": 5,
+        "ranks": [
+          2,
+          3,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 6821,
+        "iterations": 5,
+        "ranks": [
+          2,
+          3,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 7,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 7,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 8,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 6823,
+        "iterations": 5,
+        "ranks": [
+          2,
+          3,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 6823,
+        "iterations": 5,
+        "ranks": [
+          2,
+          3,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 8,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 6823,
+        "iterations": 5,
+        "ranks": [
+          2,
+          3,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 6823,
+        "iterations": 5,
+        "ranks": [
+          2,
+          3,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 9,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 9,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 10,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 6825,
+        "iterations": 5,
+        "ranks": [
+          2,
+          3,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 6825,
+        "iterations": 5,
+        "ranks": [
+          2,
+          3,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 10,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 6825,
+        "iterations": 5,
+        "ranks": [
+          2,
+          3,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 6825,
+        "iterations": 5,
+        "ranks": [
+          2,
+          3,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 11,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "box r=7",
+      "seed": 11,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "candidate": {
+        "points": 5897,
+        "iterations": 4,
+        "ranks": [
+          2,
+          3,
+          3,
+          3
+        ],
+        "termination": "Converged",
+        "error": 0.0
+      },
+      "identical": true
+    },
+    {
+      "case": "comb delta=1",
+      "seed": 11,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 46781,
+        "iterations": 4,
+        "ranks": [
+          15,
+          20,
+          20,
+          20
+        ],
+        "termination": "Converged",
+        "error": 1.330598075267888e-06
+      },
+      "candidate": {
+        "points": 46781,
+        "iterations": 4,
+        "ranks": [
+          15,
+          20,
+          20,
+          20
+        ],
+        "termination": "Converged",
+        "error": 1.330598075267888e-06
+      },
+      "identical": true
+    },
+    {
+      "case": "comb delta=1",
+      "seed": 11,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 45328,
+        "iterations": 4,
+        "ranks": [
+          15,
+          20,
+          20,
+          20
+        ],
+        "termination": "Converged",
+        "error": 7.954982267238903e-07
+      },
+      "candidate": {
+        "points": 45328,
+        "iterations": 4,
+        "ranks": [
+          15,
+          20,
+          20,
+          20
+        ],
+        "termination": "Converged",
+        "error": 7.954982267238903e-07
+      },
+      "identical": true
+    },
+    {
+      "case": "comb delta=4",
+      "seed": 11,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 489714,
+        "iterations": 6,
+        "ranks": [
+          18,
+          47,
+          48,
+          48,
+          49,
+          48
+        ],
+        "termination": "Converged",
+        "error": 2.0727457040654806e-06
+      },
+      "candidate": {
+        "points": 489714,
+        "iterations": 6,
+        "ranks": [
+          18,
+          47,
+          48,
+          48,
+          49,
+          48
+        ],
+        "termination": "Converged",
+        "error": 2.0727457040654806e-06
+      },
+      "identical": true
+    },
+    {
+      "case": "comb delta=4",
+      "seed": 11,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 529037,
+        "iterations": 5,
+        "ranks": [
+          18,
+          48,
+          51,
+          50,
+          50
+        ],
+        "termination": "Converged",
+        "error": 3.369874514820864e-07
+      },
+      "candidate": {
+        "points": 529037,
+        "iterations": 5,
+        "ranks": [
+          18,
+          48,
+          51,
+          50,
+          50
+        ],
+        "termination": "Converged",
+        "error": 3.369874514820864e-07
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 1,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 37175,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 37175,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 1,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 37175,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 37175,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 2,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 37567,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 37567,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 2,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 37567,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 37567,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 3,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 36997,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 36997,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 3,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 36997,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 36997,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 4,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 29044,
+        "iterations": 4,
+        "ranks": [
+          8,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 29044,
+        "iterations": 4,
+        "ranks": [
+          8,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 4,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 29044,
+        "iterations": 4,
+        "ranks": [
+          8,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 29044,
+        "iterations": 4,
+        "ranks": [
+          8,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 5,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 29046,
+        "iterations": 4,
+        "ranks": [
+          8,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 29046,
+        "iterations": 4,
+        "ranks": [
+          8,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 5,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 29046,
+        "iterations": 4,
+        "ranks": [
+          8,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 29046,
+        "iterations": 4,
+        "ranks": [
+          8,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 6,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 37310,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 37310,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 6,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 37310,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 37310,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 7,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 38170,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 38170,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 7,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 38170,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 38170,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 8,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 27532,
+        "iterations": 4,
+        "ranks": [
+          8,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 27532,
+        "iterations": 4,
+        "ranks": [
+          8,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 8,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 27532,
+        "iterations": 4,
+        "ranks": [
+          8,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 27532,
+        "iterations": 4,
+        "ranks": [
+          8,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 9,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 37119,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 37119,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 9,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 37119,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 37119,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 10,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 39279,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 39279,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 10,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 39279,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 39279,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 11,
+      "rule": "PerBond",
+      "baseline": {
+        "points": 37102,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 37102,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    },
+    {
+      "case": "plane=16 binary=false",
+      "seed": 11,
+      "rule": "Sampled",
+      "baseline": {
+        "points": 37102,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "candidate": {
+        "points": 37102,
+        "iterations": 5,
+        "ranks": [
+          8,
+          16,
+          16,
+          16,
+          16
+        ],
+        "termination": "Converged",
+        "error": 4.089622707551871e-16
+      },
+      "identical": true
+    }
+  ],
+  "all_identical": true
+}

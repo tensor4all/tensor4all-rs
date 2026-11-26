@@ -1,8 +1,8 @@
 use super::{
     branch_slice_cache_max_bytes, cached_walk_readout, cached_walk_readout_on_session,
-    enumeration_chunk_points, enumeration_points, find_global_pivots, materialized_tree_bytes,
+    enumeration_chunk_points, find_global_pivots, materialized_tree_bytes,
     maximal_enumeration_sides, retained_pivot_starts, search_thresholds, search_with_readout,
-    ScalarParts, SearchParams, LEAF_SIDE_ENUMERATION_BUDGET,
+    EnumerationPoints, ScalarParts, SearchParams, LEAF_SIDE_ENUMERATION_BUDGET,
 };
 use crate::{
     materialize::to_treetn, optimize_with_proposer, AllEdges, DefaultProposer, GlobalIndexBatch,
@@ -1883,7 +1883,8 @@ fn enumeration_points_cover_every_side_configuration_once() {
     let anchor = vec![1, 1, 1];
     // The anchor is reached from both sides, and a repeated anchor adds
     // nothing: 9 + 4 - 1 points.
-    let points = enumeration_points(&[anchor.clone(), anchor.clone()], &sides, &dims);
+    let points: Vec<_> =
+        EnumerationPoints::new(&[anchor.clone(), anchor.clone()], &sides, &dims).collect();
     let mut expected: Vec<Vec<usize>> = (0..3)
         .flat_map(|a| (0..3).map(move |b| vec![a, b, 1]))
         .chain((0..4).map(|c| vec![1, 1, c]))
@@ -1894,14 +1895,16 @@ fn enumeration_points_cover_every_side_configuration_once() {
     assert_eq!(points, expected);
 
     // Two anchors that agree outside the side give the same points once.
-    let block = enumeration_points(&[vec![1, 1, 1], vec![0, 2, 1]], &[vec![0, 1]], &dims);
+    let block: Vec<_> =
+        EnumerationPoints::new(&[vec![1, 1, 1], vec![0, 2, 1]], &[vec![0, 1]], &dims).collect();
     assert_eq!(block.len(), 9);
     assert!(block.iter().all(|point| point[2] == 1));
     // Two anchors that differ outside it give two blocks.
-    let two = enumeration_points(&[vec![1, 1, 1], vec![1, 1, 2]], &[vec![0, 1]], &dims);
+    let two: Vec<_> =
+        EnumerationPoints::new(&[vec![1, 1, 1], vec![1, 1, 2]], &[vec![0, 1]], &dims).collect();
     assert_eq!(two.len(), 18);
-    assert!(enumeration_points(&[anchor], &[], &dims).is_empty());
-    assert!(enumeration_points(&[], &sides, &dims).is_empty());
+    assert_eq!(EnumerationPoints::new(&[anchor], &[], &dims).next(), None);
+    assert_eq!(EnumerationPoints::new(&[], &sides, &dims).next(), None);
 }
 
 /// A stream whose every draw is zero, so each random start and each restart
@@ -1975,6 +1978,16 @@ fn stage_search_chunked(
     fail_batch_readout: bool,
     chunk_len: usize,
 ) -> crate::error::Result<StageRun> {
+    stage_search_limited(local_dims, errors, fail_batch_readout, chunk_len, 5)
+}
+
+fn stage_search_limited(
+    local_dims: Vec<usize>,
+    errors: &[([usize; 7], f64)],
+    fail_batch_readout: bool,
+    chunk_len: usize,
+    limit: usize,
+) -> crate::error::Result<StageRun> {
     assert_eq!(rand::Rng::random_range(&mut ZeroRng, 0..2usize), 0);
     let mut state =
         TreeTCI2::<f64>::new(local_dims, TreeTciGraph::linear_chain(7).unwrap()).unwrap();
@@ -2014,7 +2027,7 @@ fn stage_search_chunked(
         &mut execution,
         SearchParams {
             nsearch: 2,
-            max_nglobal_pivot: 5,
+            max_nglobal_pivot: limit,
             tol_margin: 1.0,
             abs_tol: 1.0,
             enumeration_chunk_len: chunk_len,
@@ -2063,6 +2076,25 @@ fn enumeration_returns_points_above_abs_tol_strongest_first() {
     assert_eq!(run.pivots, vec![STAGE_Q2.to_vec(), STAGE_Q.to_vec()]);
     assert_eq!(run.max_error, 3.0);
     assert!(run.evaluated.contains(&STAGE_Q3.to_vec()));
+}
+
+#[test]
+fn enumeration_keeps_the_earlier_equal_residual_across_batch_boundaries() {
+    let errors = [(STAGE_Q, 2.0), (STAGE_Q2, 2.0), (STAGE_Q3, 3.0)];
+    for chunk_len in [1, 5, 48] {
+        let run = stage_search_limited(unit_chain(), &errors, false, chunk_len, 2).unwrap();
+        assert_eq!(run.pivots, vec![STAGE_Q3.to_vec(), STAGE_Q.to_vec()]);
+        assert_eq!(run.max_error, 3.0);
+        for point in [STAGE_Q, STAGE_Q2, STAGE_Q3] {
+            assert_eq!(
+                run.evaluated
+                    .iter()
+                    .filter(|at| at.as_slice() == point)
+                    .count(),
+                1
+            );
+        }
+    }
 }
 
 #[test]

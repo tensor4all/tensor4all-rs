@@ -10,6 +10,10 @@
   with other users of the global backend; thread count changes from the global
   default to 1, which may alter the interpolation matrix in the last bits. The
   input-core readback still uses the global context.
+- TreeTCI streams the third-stage leaf-side enumeration instead of retaining
+  every deduplicated full-site point (#1441). Sparse cursors preserve its
+  lexicographic order and equal-residual pivot ties, while only one bounded
+  evaluation batch and at most `max_nglobal_pivot` accepted points are kept.
 - Reverts #1484: `TCI2Termination::Converged` under `PivotSearchStrategy::Rook`
   is again not certified by an exact `Full` sweep. `Rook` is a fast, inexact
   heuristic by design; use `Full` when the tolerance must hold (#1257).

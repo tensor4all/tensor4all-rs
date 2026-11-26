@@ -27,6 +27,9 @@ use tensor4all_core::{floating_zone_walk, AnyScalar, ColMajorArrayRef, DynIndex,
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator};
 
+mod enumeration;
+use enumeration::{retain_pivot, EnumerationPoints};
+
 // INVARIANT: the argument list is the search's boundary (state, evaluator,
 // search limits, tolerance, stream); grouping them into a struct would only
 // move the same values through one more layer.
@@ -401,8 +404,9 @@ const LEAF_SIDE_ENUMERATION_BUDGET: usize = 32;
 /// at most [`LEAF_SIDE_ENUMERATION_BUDGET`] configurations each. On a star of
 /// `k` five-site binary chains joined at a dimension-one centre, for example,
 /// that is about `31 k` points per anchor, each `5 k + 1` sites long. Chunking
-/// keeps the batch buffer at 2^20 entries (8 MiB) whatever the tree; the
-/// deduplicated point set itself still holds every point.
+/// keeps each batch at 2^20 entries (8 MiB), or one full point when it is
+/// larger. Sparse cursors generate the sorted, deduplicated union without
+/// storing its full-site points, and accepted pivots are capped separately.
 const ENUMERATION_CHUNK_ENTRIES: usize = 1 << 20;
 
 /// Points per evaluation batch of the third-stage enumeration: the largest
@@ -449,37 +453,6 @@ fn maximal_enumeration_sides<T>(
         .filter(|side| !fitting.iter().any(|other| contains(other, side)))
         .cloned()
         .collect())
-}
-
-/// All points that agree with an anchor outside one side, deduplicated and in
-/// lexicographic order.
-///
-/// For each anchor and each side, every configuration of the side's sites is
-/// combined with the anchor's coordinates elsewhere. A point reached from
-/// several anchors or sides (the anchor itself, at least) appears once. The
-/// count is at most `anchors.len()` times the sum of the sides' configuration
-/// counts.
-fn enumeration_points(
-    anchors: &[MultiIndex],
-    sides: &[Vec<usize>],
-    local_dims: &[usize],
-) -> Vec<MultiIndex> {
-    let mut points = std::collections::BTreeSet::new();
-    for anchor in anchors {
-        for side in sides {
-            let configurations: usize = side.iter().map(|&site| local_dims[site]).product();
-            for code in 0..configurations {
-                let mut point = anchor.clone();
-                let mut rest = code;
-                for &site in side {
-                    point[site] = rest % local_dims[site];
-                    rest /= local_dims[site];
-                }
-                points.insert(point);
-            }
-        }
-    }
-    points.into_iter().collect()
 }
 
 /// Scalar parameters of one global pivot search, as passed to
@@ -830,19 +803,23 @@ where
         // stream and the earlier stages are unchanged.
         if best.is_empty() {
             let anchors: Vec<MultiIndex> = retained.into_iter().map(|start| start.point).collect();
-            let points = if anchors.is_empty() {
+            let sides = if anchors.is_empty() {
                 Vec::new()
             } else {
-                let sides = maximal_enumeration_sides(state, LEAF_SIDE_ENUMERATION_BUDGET)?;
-                enumeration_points(&anchors, &sides, &state.local_dims)
+                maximal_enumeration_sides(state, LEAF_SIDE_ENUMERATION_BUDGET)?
             };
+            let mut points = EnumerationPoints::new(&anchors, &sides, &state.local_dims);
             // Chunked so that the index buffer stays bounded on large trees.
             // `batch_residuals` computes each residual from its own point, so
             // the residuals, their order and the returned set are the same as
             // for one batch. `enumeration_chunk_length_does_not_change_the_search`
             // checks the evaluated point sequence, the batch sizes, the
             // returned pivots and `max_error` for several chunk lengths.
-            for chunk in points.chunks(enumeration_chunk_len.max(1)) {
+            loop {
+                let chunk: Vec<_> = points.by_ref().take(enumeration_chunk_len.max(1)).collect();
+                if chunk.is_empty() {
+                    break;
+                }
                 let errors = batch_residuals(
                     execution,
                     &mut cache,
@@ -850,15 +827,15 @@ where
                     &site_indices,
                     n_sites,
                     &mut flat,
-                    chunk,
+                    &chunk,
                     None,
                     &mut readout,
                     readout_on_session,
                 )?;
-                for (error, point) in errors.into_iter().zip(chunk) {
+                for (error, point) in errors.into_iter().zip(&chunk) {
                     max_error = max_error.max(error);
                     if error > fallback_threshold {
-                        best.push((error, point.clone()));
+                        retain_pivot(&mut best, error, point, max_nglobal_pivot);
                     }
                 }
             }
