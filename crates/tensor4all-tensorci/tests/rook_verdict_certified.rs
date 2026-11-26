@@ -3,7 +3,10 @@
 //! Two sites: the candidate matrix is the whole tensor, so the interpolant's
 //! true maximum error over the grid is what the verdict has to bound.
 //! The property asserted for both strategies and both `max_nglobal_pivot`
-//! settings is `!Converged || true_error <= tolerance`.
+//! settings is `!Converged || true_error <= tolerance`. The reported bond error
+//! is exact only up to the final 1-site cleanup sweep, which may add up to
+//! `tolerance`; the matrices below stay inside the stricter bound with a margin
+//! of 24-35 %, and `smooth_ridge_tolerance.rs` states the allowance for `Full`.
 //!
 //! Why `Rook` needs a check of its own: its bond error is the last rook pivot,
 //! the largest entry of that pivot's own residual row and column, not of the

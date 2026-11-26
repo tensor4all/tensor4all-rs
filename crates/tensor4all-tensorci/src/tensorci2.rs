@@ -108,9 +108,12 @@ pub struct TCI2Options {
     ///
     /// `Rook` searches with O(d) rook walks, so its bond errors during the
     /// sweeps are the last rook pivots, not bounds. Its
-    /// [`TCI2Termination::Converged`] is nevertheless `Full`'s: when the
-    /// history criterion is met, one exact `Full` sweep follows and only that
-    /// sweep may report convergence. See [`PivotSearchStrategy::Rook`].
+    /// [`TCI2Termination::Converged`] rests on `Full`'s bond errors: when the
+    /// history criterion is met, an exact `Full` sweep follows (repeated each
+    /// time the criterion is met again) and only a `Full` sweep with bond error
+    /// below tolerance, no global pivot and no rank growth may report
+    /// convergence. That sweep materializes the dense candidate matrices, so
+    /// `Rook` no longer avoids them. See [`PivotSearchStrategy::Rook`].
     pub pivot_search: PivotSearchStrategy,
     /// Whether to normalize the bond error by the maximum observed sample
     /// value (default: `true`).
@@ -239,7 +242,8 @@ pub enum TCI2Termination {
     /// criterion and does not prove the tolerance on unsampled entries. Under
     /// [`PivotSearchStrategy::Rook`] the search sweeps record last rook
     /// pivots, but this variant is reported only after an exact `Full` sweep
-    /// has met the same criterion, so it means what it means under `Full`.
+    /// found a bond error below tolerance, so it rests on the same sampled
+    /// bond errors as under `Full`.
     Converged,
     /// The recent rank history reached the configured maximum bond dimension.
     MaxBondDimension,
@@ -356,9 +360,13 @@ pub enum PivotSearchStrategy {
     /// runs one more sweep with the exact [`Full`](Self::Full) update and
     /// returns [`TCI2Termination::Converged`] only if that sweep's bond errors
     /// (exact residual maxima of the candidate matrices), global-pivot count
-    /// and rank all pass. Otherwise it keeps sweeping with `Rook` from the
-    /// pivots the exact sweep added, so a run that ends `Converged` carries
-    /// `Full`'s guarantee, at the price of one `Full` sweep.
+    /// and rank all pass (a single-sweep test, not the `ncheck_history`
+    /// window). Otherwise it keeps sweeping with `Rook` from the pivots the
+    /// exact sweep added. The verdict then has `Full`'s sampled meaning: the
+    /// bond errors bound the residual of the candidate matrices, which for two
+    /// sites is the whole tensor, up to the allowance for the final 1-site
+    /// cleanup sweep. The price is a `Full` sweep per attempt, including its
+    /// dense candidate matrix in memory.
     ///
     /// Exactly zero starting residual columns are skipped; an all-zero residual
     /// can require all remaining entries to be inspected, one column at a time.

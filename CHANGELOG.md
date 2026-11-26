@@ -4,17 +4,21 @@
 
 ### Behavior changes
 
-- `PivotSearchStrategy::Rook` can no longer end `TCI2Termination::Converged`
-  on a result that misses the tolerance (#1257). Its bond errors are last rook
-  pivots, which are not residual bounds: on a 150 x 260 and a 300 x 300 ridge
-  the search stopped one pivot early and returned `Converged` with a true error
-  1.2x and 1.3x the tolerance while reporting less than the tolerance. Once the
-  history criterion is met under `Rook`, TCI2 now runs one exact `Full` sweep
-  and reports `Converged` only if that sweep passes the same criterion;
-  otherwise it keeps sweeping with `Rook`. A caller that relied on `Rook`
-  converging early now sees one extra sweep (about one `Full` sweep of
-  evaluations) and, where `Rook` was wrong, more sweeps, a larger rank or
-  `MaxIterations` instead of a false `Converged`. No public type changed.
+- `TCI2Termination::Converged` under `PivotSearchStrategy::Rook` now rests on
+  an exact bond error (#1257). Rook's own bond errors are last rook pivots, not
+  residual bounds: on a 150 x 260 and a 300 x 300 ridge the search stopped one
+  pivot early and returned `Converged` with a true error 1.2x and 1.3x the
+  tolerance while reporting less than the tolerance. Once the history criterion
+  is met under `Rook`, TCI2 now runs an exact `Full` sweep and reports
+  `Converged` only if that sweep has bond error below tolerance, no global pivot
+  and no rank growth; otherwise it keeps sweeping with `Rook`. The meaning is
+  `Full`'s sampled one: for two sites the candidate matrix is the whole tensor,
+  up to the allowance for the final 1-site cleanup sweep; for more sites it is
+  not a bound on the whole tensor. A caller that relied on early `Rook`
+  convergence now pays a `Full` sweep per attempt (about a `Full` sweep of
+  evaluations, with the dense candidate matrices in memory) and, where `Rook`
+  was wrong, sees more sweeps, a larger rank or `MaxIterations` instead of a
+  false `Converged`. No public type changed.
 - Tree ACI also expands candidates across a non-unit branching vertex when
   at least two committed pivots agree at its local coordinate (#1435).
   The degree must be at least 3; the existing incoming-rank product slack
