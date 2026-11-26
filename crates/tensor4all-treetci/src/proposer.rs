@@ -118,6 +118,13 @@ pub trait PivotCandidateProposer {
 /// the largest-rank other bond's pivots are replaced by its neighbour's own
 /// side candidates. Larger products are used unchanged.
 ///
+/// The same expansion applies at a branching endpoint (degree at least 3)
+/// when at least two retained pivots on its side agree at its local site:
+/// that site may be a delta on the observed support (#1436). All local values
+/// remain candidates, including values absent from those pivots. This is a
+/// sampling heuristic, not a proof of support. Ordinary chain sites with
+/// local dimension greater than 1 keep their neighbor-product candidates.
+///
 /// # Examples
 ///
 /// ```
@@ -460,6 +467,10 @@ fn union_with_pivots(
 /// edge's current rank, the slack a binary site would add. Above that, the
 /// unit vertex keeps the plain product, so high-rank junctions pay nothing
 /// extra. A unit leaf has no other bond and keeps its single candidate.
+/// A branching vertex with a local index uses the same expansion if at least
+/// two of this side's retained pivots agree at the local coordinate (#1436).
+/// Its full local index is always expanded, so this heuristic never discards
+/// an unobserved local value. Non-unit chain vertices are left unchanged.
 fn side_candidates<T>(
     state: &TreeTCI2<T>,
     vertex: usize,
@@ -470,12 +481,18 @@ fn side_candidates<T>(
     let in_keys = state.graph.edge_in_ij_keys(vertex, &adjacent)?;
     let pivots = pivot_set(&state.ijset, &in_keys, key)?;
     let position = subtree_position(key, vertex)?;
-    if state.local_dims[vertex] != 1 || adjacent.is_empty() {
-        return kronecker(&pivots, position, state.local_dims[vertex]);
+    let local_dim = state.local_dims[vertex];
+    // Ordinary chain sites keep their original candidates. Only branching
+    // sites can use observed local support to unlock mutually capped bonds.
+    if adjacent.is_empty() || (local_dim != 1 && adjacent.len() < 2) {
+        return kronecker(&pivots, position, local_dim);
     }
     let rank = state.ijset.get(key).map_or(Ok(0), ncols_2d)?;
-    if pivots.len() >= 2 * rank.max(1) {
-        return kronecker(&pivots, position, 1);
+    // Divide instead of multiplying the rank, to avoid usize overflow.
+    if pivots.len() / 2 >= rank.max(1)
+        || (local_dim != 1 && !fixed_local_pivots(state, key, position)?)
+    {
+        return kronecker(&pivots, position, local_dim);
     }
 
     // Expand the other bond with the most pivots; ties keep the first.
@@ -508,8 +525,38 @@ fn side_candidates<T>(
         .collect::<Result<Vec<_>>>()?;
     let mut candidates = pivots;
     candidates.extend(product_over_keys(&parts, &in_keys, key)?);
+    // Keep every value of the junction's local index. Agreement of retained
+    // pivots is a reason to explore farther, not proof of a delta site (#1436).
     // The caller deduplicates and adds the edge's own pivots.
-    Ok(candidates)
+    if local_dim == 1 {
+        Ok(candidates)
+    } else {
+        kronecker(&candidates, position, local_dim)
+    }
+}
+
+/// Whether at least two retained pivots agree at the endpoint's local site.
+fn fixed_local_pivots<T>(state: &TreeTCI2<T>, key: &SubtreeKey, position: usize) -> Result<bool> {
+    let Some(pivots) = state.ijset.get(key) else {
+        return Ok(false);
+    };
+    let rank = ncols_2d(pivots)?;
+    if rank < 2 {
+        return Ok(false);
+    }
+    let local_value = |column| -> Result<usize> {
+        column_2d(pivots, column)?
+            .get(position)
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("local site position exceeds pivot column length"))
+    };
+    let first = local_value(0)?;
+    for column in 1..rank {
+        if local_value(column)? != first {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Every combination of one entry per part, scattered into `out_key` order.
