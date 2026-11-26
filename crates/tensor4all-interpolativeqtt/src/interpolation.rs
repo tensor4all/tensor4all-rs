@@ -225,6 +225,7 @@ where
 /// assert_eq!(tree.node_count(), 4);
 /// assert!((tree.evaluate_point(&sites, &[0, 0, 0, 0]).unwrap().real() - 1.0).abs() < 1e-10);
 /// ```
+#[allow(clippy::too_many_arguments)] // `exec` joins the existing eight (tensor4all-rs#1379)
 pub fn interpolate_multi_scale<T, F>(
     exec: &mut dyn ExecutionEngine,
     f: F,
@@ -281,6 +282,7 @@ where
 /// )).unwrap().unwrap();
 /// assert!((tree.evaluate_point(&sites, &[1, 2, 0]).unwrap().real() - 0.125).abs() < 1e-10);
 /// ```
+#[allow(clippy::too_many_arguments)] // `exec` joins the existing eight (tensor4all-rs#1379)
 pub fn interpolate_multi_scale_nd<T, F>(
     exec: &mut dyn ExecutionEngine,
     f: F,
@@ -505,6 +507,7 @@ where
 /// let origin = tree.evaluate_point(&sites, &[0; 4]).unwrap().real();
 /// assert!((origin - 1.0).abs() < 1e-10);
 /// ```
+#[allow(clippy::too_many_arguments)] // `exec` joins the existing eight (tensor4all-rs#1379)
 pub fn interpolate_single_scale_sparse<T, F>(
     exec: &mut dyn ExecutionEngine,
     f: F,
@@ -560,6 +563,7 @@ where
 /// )).unwrap().unwrap();
 /// assert!((tree.evaluate_point(&sites, &[1, 2, 0]).unwrap().real() - 0.75).abs() < 1e-10);
 /// ```
+#[allow(clippy::too_many_arguments)] // `exec` joins the existing eight (tensor4all-rs#1379)
 pub fn interpolate_single_scale_sparse_nd<T, F>(
     exec: &mut dyn ExecutionEngine,
     f: F,
