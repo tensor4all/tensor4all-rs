@@ -11,8 +11,9 @@ autotests = false
 [features]
 # Opt-in context-free `hadamard_many` on the process-global route.
 global-defaults = ["tensor4all-core/global-defaults"]
-# CUDA execution of the sketch contractions. The rank decision stays on the
-# host CPU context, so this feature also requires the host default context.
+# CUDA execution of the sketch contractions. The lower-triangular solve of
+# the rank decision runs on a run-owned CPU context; the input-core readback still enters the process-global
+# CPU context, so this feature also requires the host default context.
 tenferro-cuda = [
     "global-defaults",
     "tensor4all-core/tenferro-cuda",

@@ -193,6 +193,11 @@ mod cuda {
     use super::*;
     use std::sync::Arc;
 
+    /// A private single-threaded CPU context for the host side of a CUDA `Exec`.
+    fn owned_cpu() -> CpuExecutionContext {
+        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap())
+    }
+
     /// A CUDA context, or a panic naming what failed.
     ///
     /// A missing device and a broken CUDA initialization both surface here as
@@ -214,7 +219,10 @@ mod cuda {
     #[test]
     #[ignore = "requires visible CUDA ordinal 0"]
     fn contract_axis_diag_probe_matches_the_naive_probe_loop_f64_on_cuda() {
-        assert_contract_axis_diag_probe_matches_naive::<f64>(&mut Exec::Cuda(&cuda_execution()));
+        assert_contract_axis_diag_probe_matches_naive::<f64>(&mut Exec::Cuda(
+            &cuda_execution(),
+            &owned_cpu(),
+        ));
     }
 
     #[test]
@@ -222,6 +230,7 @@ mod cuda {
     fn contract_axis_diag_probe_matches_the_naive_probe_loop_c64_on_cuda() {
         assert_contract_axis_diag_probe_matches_naive::<Complex64>(&mut Exec::Cuda(
             &cuda_execution(),
+            &owned_cpu(),
         ));
     }
 
@@ -233,8 +242,13 @@ mod cuda {
             data: (1..=12).map(|value| value as f64).collect(),
         };
         let weights = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let out = contract_axis_diag_probe(&mut Exec::Cuda(&cuda_execution()), input, 1, &weights)
-            .unwrap();
+        let out = contract_axis_diag_probe(
+            &mut Exec::Cuda(&cuda_execution(), &owned_cpu()),
+            input,
+            1,
+            &weights,
+        )
+        .unwrap();
         assert_eq!(out.dims, vec![2, 3]);
         assert_eq!(out.data, vec![7.0, 10.0, 43.0, 50.0, 111.0, 122.0]);
     }
@@ -250,9 +264,10 @@ mod cuda {
     #[ignore = "requires visible CUDA ordinal 0"]
     fn cuda_primitives_enter_the_callers_context_engine() {
         let cuda = cuda_execution();
+        let cpu = owned_cpu();
         let (probe, product) = cuda
             .with_session(|_engine| {
-                let mut exec = Exec::Cuda(&cuda);
+                let mut exec = Exec::Cuda(&cuda, &cpu);
                 let probe = contract_axis_diag_probe(
                     &mut exec,
                     Dense {
@@ -302,7 +317,8 @@ mod cuda {
     #[ignore = "requires visible CUDA ordinal 0"]
     fn cuda_primitives_dispatch_to_the_device_arm() {
         let cuda = cuda_execution();
-        let mut exec = Exec::Cuda(&cuda);
+        let cpu = owned_cpu();
+        let mut exec = Exec::Cuda(&cuda, &cpu);
         let probe_input = || Dense {
             dims: vec![2, 2, 3],
             data: (1..=12).map(|value| value as f64).collect(),
@@ -344,7 +360,15 @@ mod cuda {
         let a = vec![1.0_f64, 3.0, 2.0, 4.0];
         let b = vec![5.0_f64, 7.0, 6.0, 8.0];
         let cpu = on_cpu(|exec| mat_mul_cols(exec, a.clone(), 2, 2, b.clone(), 2)).unwrap();
-        let cuda = mat_mul_cols(&mut Exec::Cuda(&cuda_execution()), a, 2, 2, b, 2).unwrap();
+        let cuda = mat_mul_cols(
+            &mut Exec::Cuda(&cuda_execution(), &owned_cpu()),
+            a,
+            2,
+            2,
+            b,
+            2,
+        )
+        .unwrap();
         // 2x2 column-major `[1 2; 3 4] [5 6; 7 8] = [19 22; 43 50]`.
         assert_eq!(cpu, vec![19.0, 43.0, 22.0, 50.0]);
         assert_eq!(cuda, cpu);
