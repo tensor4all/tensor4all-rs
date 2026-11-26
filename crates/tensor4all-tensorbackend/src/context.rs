@@ -1241,6 +1241,22 @@ pub enum ExecutionContextEntryError {
          its operand; pass an explicit execution context or enable the `global-defaults` feature"
     )]
     NoContext,
+    /// No live context owns the operand's eager runtime, and the caller asked
+    /// for the owning engine only.
+    ///
+    /// [`with_runtime_engine`] reports this in every build instead of
+    /// substituting the process-global context (tensor4all-rs#1378): the context
+    /// that published the value has been dropped, or the value was never
+    /// published in one. Pass an [`ExecutionContext`] to the operation's
+    /// context-taking form. Code that has no engine yet and must keep the legacy
+    /// process-global route calls the explicitly named, doc-hidden bridge
+    /// `with_runtime_engine_or_global` instead. Transitional: it is removed
+    /// with the owner-resolving route in stage D2 of tensor4all-rs#1376.
+    #[error(
+        "no live owner: no live execution context owns the operand's eager runtime; pass an \
+         explicit execution context"
+    )]
+    NoLiveOwner,
     /// The owning CUDA context rejected the session entry.
     #[cfg(feature = "tenferro-cuda")]
     #[error(transparent)]
@@ -1765,8 +1781,9 @@ enum LiveRuntimeOwner {
 /// The entry holds a [`Weak`] handle: a context registers its runtime when it
 /// builds it, and the entry dangles when the context (the only strong owner) is
 /// dropped. Lookups prune the dead entry, so no background cleanup is needed.
-/// Only a `global-defaults` build falls back to the process-global context for a
-/// runtime without a live owner.
+/// A runtime without a live owner has no engine: [`with_runtime_engine`] refuses
+/// it, and only the explicitly named bridge [`with_runtime_engine_or_global`]
+/// falls back to the process-global context (`global-defaults` builds only).
 static EAGER_RUNTIME_OWNERS: OnceLock<Mutex<HashMap<ContextId, RuntimeOwner>>> = OnceLock::new();
 
 fn eager_runtime_owners() -> std::sync::MutexGuard<'static, HashMap<ContextId, RuntimeOwner>> {
@@ -1800,22 +1817,26 @@ pub(crate) fn register_eager_runtime_owner(runtime: &EagerRuntime, owner: Runtim
 /// variant instead of waiting for the engine. An entry from a Rayon worker runs
 /// inline on a serial CPU engine that shares the context's prepared-plan cache;
 /// a CUDA context keeps its single engine and never opens a second one.
-/// When no live context owns `runtime` (for example after the context was
-/// dropped), a `global-defaults` build falls back to the process-global CPU
-/// context (the global context's own runtime resolves to itself). An
-/// explicit-only build has no such context and refuses the entry instead of
-/// choosing an engine.
+///
+/// This function never chooses an engine on the caller's behalf: when no live
+/// context owns `runtime` (for example after the context was dropped) it
+/// refuses with [`ExecutionContextEntryError::NoLiveOwner`] in every build,
+/// including `global-defaults` (tensor4all-rs#1378). Code that has no engine yet
+/// and must keep the legacy process-global route calls the doc-hidden bridge
+/// `with_runtime_engine_or_global`, whose name makes that choice visible.
 ///
 /// # Errors
 ///
 /// Returns [`ExecutionContextEntryError`] when the owning context's session
-/// entry is rejected, and [`ExecutionContextEntryError::NoContext`] when no live
-/// context owns `runtime` in a build without `global-defaults`.
+/// entry is rejected, and [`ExecutionContextEntryError::NoLiveOwner`] when no
+/// live context owns `runtime`.
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tensorbackend::{with_runtime_engine, CpuBackend, CpuExecutionContext};
+/// use tensor4all_tensorbackend::{
+///     with_runtime_engine, CpuBackend, CpuExecutionContext, ExecutionContextEntryError,
+/// };
 /// use tenferro_cpu::CpuEngine;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
@@ -1827,29 +1848,93 @@ pub(crate) fn register_eager_runtime_owner(runtime: &EagerRuntime, owner: Runtim
 ///         .map(|engine| engine.num_threads())
 /// })?;
 /// assert_eq!(threads, Some(1));
+///
+/// // Once the owning context is gone there is no engine to run on.
+/// drop(context);
+/// let refused = with_runtime_engine(&runtime, |_engine| ());
+/// assert!(matches!(refused, Err(ExecutionContextEntryError::NoLiveOwner)));
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn with_runtime_engine<R>(
     runtime: &EagerRuntime,
     f: impl FnOnce(&mut dyn ExecutionEngine) -> R,
 ) -> Result<R, ExecutionContextEntryError> {
-    let owner = {
-        let mut owners = eager_runtime_owners();
-        match owners.get(&runtime.id()).and_then(RuntimeOwner::upgrade) {
-            Some(owner) => owner,
-            None => {
-                owners.remove(&runtime.id());
-                #[cfg(feature = "global-defaults")]
-                {
-                    LiveRuntimeOwner::Cpu(Arc::clone(&defaults::default_context().owner))
-                }
-                #[cfg(not(feature = "global-defaults"))]
-                {
-                    return Err(ExecutionContextEntryError::NoContext);
-                }
-            }
-        }
-    };
+    match live_runtime_owner(runtime) {
+        Some(owner) => enter_runtime_owner(owner, f),
+        None => Err(ExecutionContextEntryError::NoLiveOwner),
+    }
+}
+
+/// Run `f` on the engine owning `runtime`, or on the process-global CPU context
+/// when no live context owns it.
+///
+/// Migration bridge for tensor4all-rs#1376 (design doc section 7.0), not API:
+/// this is the legacy fallback [`with_runtime_engine`] used to apply silently
+/// (tensor4all-rs#1378). It is a separate, explicitly named entry so that every
+/// caller that still depends on the process-global context says so in its code,
+/// where review and `grep with_runtime_engine_or_global` see it. It is deleted
+/// with the implicit route in stage D2.
+///
+/// With `global-defaults` an owner-less runtime runs on the process-global CPU
+/// context's engine, as before #1378. Without it there is no process-global
+/// context and the entry refuses with [`ExecutionContextEntryError::NoContext`].
+///
+/// # Errors
+///
+/// Returns [`ExecutionContextEntryError`] when the selected context's session
+/// entry is rejected, and [`ExecutionContextEntryError::NoContext`] when no live
+/// context owns `runtime` in a build without `global-defaults`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{
+///     with_runtime_engine_or_global, CpuBackend, CpuExecutionContext,
+/// };
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let runtime = context.eager_runtime()?;
+/// drop(context);
+/// // Unlike `with_runtime_engine`, the bridge may pick the process-global
+/// // context; a build without `global-defaults` refuses instead.
+/// let entered = with_runtime_engine_or_global(&runtime, |_engine| ());
+/// if let Err(error) = entered {
+///     assert!(error.to_string().contains("no execution context"));
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[doc(hidden)]
+pub fn with_runtime_engine_or_global<R>(
+    runtime: &EagerRuntime,
+    f: impl FnOnce(&mut dyn ExecutionEngine) -> R,
+) -> Result<R, ExecutionContextEntryError> {
+    match live_runtime_owner(runtime) {
+        Some(owner) => enter_runtime_owner(owner, f),
+        #[cfg(feature = "global-defaults")]
+        None => enter_runtime_owner(
+            LiveRuntimeOwner::Cpu(Arc::clone(&defaults::default_context().owner)),
+            f,
+        ),
+        #[cfg(not(feature = "global-defaults"))]
+        None => Err(ExecutionContextEntryError::NoContext),
+    }
+}
+
+/// The live context that owns `runtime`, pruning a dead registry entry.
+fn live_runtime_owner(runtime: &EagerRuntime) -> Option<LiveRuntimeOwner> {
+    let mut owners = eager_runtime_owners();
+    let owner = owners.get(&runtime.id()).and_then(RuntimeOwner::upgrade);
+    if owner.is_none() {
+        owners.remove(&runtime.id());
+    }
+    owner
+}
+
+/// Run `f` through `owner`'s normal session entry.
+fn enter_runtime_owner<R>(
+    owner: LiveRuntimeOwner,
+    f: impl FnOnce(&mut dyn ExecutionEngine) -> R,
+) -> Result<R, ExecutionContextEntryError> {
     match owner {
         LiveRuntimeOwner::Cpu(owner) => owner
             .with_session(|engine| f(engine))

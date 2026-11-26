@@ -1,11 +1,15 @@
 //! Engine selection for the implicit and context-scoped eager frontends.
 //!
-//! A context-aware entry point (`*_in(&ExecutionContext, ..)`) runs on that
-//! context's engine. An implicit entry point has no context to consult: it
-//! resolves the engine from the eager runtime of the operand it acts on, using
+//! Every entry names its engine route with [`EngineRoute`]. A context-aware entry
+//! point (`*_in(&ExecutionContext, ..)`) passes [`EngineRoute::Context`] and runs
+//! on that context's engine. An implicit entry point has no context to consult:
+//! it passes [`EngineRoute::Legacy`], the documented migration bridge, which
+//! resolves the engine from the eager runtime of the operand it acts on and uses
 //! the process-global default CPU context only when that runtime has no live
-//! owner. This is the transitional implicit route, which coexists with the
-//! engine-explicit API and will be removed with it.
+//! owner (`global-defaults` builds). There is no `None` spelling: a route that
+//! may reach the process-global engine says `Legacy` at the call site
+//! (tensor4all-rs#1378). The legacy route is transitional and is removed with the
+//! implicit API (#1376 stage D2).
 //!
 //! [`with_eager_on`] is the engine-taking entry of stage A2 (#1393): it runs a
 //! caller-owned [`Runtime`] on the caller's `&mut` engine after validating the
@@ -16,7 +20,9 @@ use std::sync::Arc;
 use tenferro::{EngineTarget, ExecutionContextIdentity, ExecutionEngine};
 use tenferro_ad::{EagerRuntime, EagerSession};
 use tenferro_tensor::{Engine, MemoryKind, TensorRead};
-use tensor4all_tensorbackend::{with_runtime_engine, CpuEngine, ExecutionContext, Runtime};
+use tensor4all_tensorbackend::{CpuEngine, ExecutionContext, Runtime};
+
+use crate::implicit_route::with_runtime_engine_or_global;
 
 use crate::{IdxTensor, IdxTensorError};
 
@@ -142,25 +148,55 @@ fn engine_reads(target: &EngineTarget, value: &TensorRead<'_>) -> bool {
     }
 }
 
-/// Run one eager session on the engine selected by `context`.
+/// Which engine an eager entry runs on.
 ///
-/// `None` selects the engine of the CPU or CUDA context that owns `runtime`'s
-/// eager runtime (falling back to the process-global default CPU context when
-/// that runtime has no live owner; the transitional implicit route).
-/// `Some(context)` selects that exact context's engine; a nested entry on the
+/// There is deliberately no `Option<&ExecutionContext>` here: `None` used to mean
+/// "the operand's owner, else the process-global context" without saying so
+/// (tensor4all-rs#1378). Each caller now names its route.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum EngineRoute<'a> {
+    /// The caller's context: this context's engine, never another context's
+    /// or the process-global one. (On a Rayon worker the context's own session
+    /// entry substitutes a serial engine sharing its plan cache, as for every
+    /// context entry.)
+    Context(&'a ExecutionContext),
+    /// The legacy migration bridge (design doc section 7.0) for an implicit
+    /// entry that has no engine yet: the engine of the context owning the
+    /// operand's runtime, else the process-global context through
+    /// [`with_runtime_engine_or_global`]. Removed in #1376 stage D2.
+    Legacy,
+}
+
+impl<'a> EngineRoute<'a> {
+    /// The route for a public `Option<&ExecutionContext>` parameter: the
+    /// caller's context when given, else the [`Legacy`](Self::Legacy) bridge.
+    ///
+    /// Naming the bridge here keeps the choice visible where an optional
+    /// context parameter (design doc family F2) is forwarded.
+    pub(crate) fn context_or_legacy(context: Option<&'a ExecutionContext>) -> Self {
+        context.map_or(Self::Legacy, Self::Context)
+    }
+}
+
+/// Run one eager session on the engine selected by `route`.
+///
+/// [`EngineRoute::Legacy`] selects the engine of the CPU or CUDA context that
+/// owns `runtime`'s eager runtime, falling back to the process-global default
+/// CPU context when that runtime has no live owner (the explicit legacy bridge).
+/// [`EngineRoute::Context`] selects that exact context's engine; a nested entry on the
 /// same thread is reported as the context's typed
 /// [`CpuExecutionContextError::Reentered`](tensor4all_tensorbackend::CpuExecutionContextError::Reentered)
 /// or `CudaExecutionContextError::Reentered` instead of waiting for the engine it
 /// already holds.
 pub(crate) fn with_eager_session<T, E>(
     runtime: &Arc<EagerRuntime>,
-    context: Option<&ExecutionContext>,
+    route: EngineRoute<'_>,
     f: impl FnOnce(&mut EagerSession<'_>) -> std::result::Result<T, E>,
 ) -> std::result::Result<T, IdxTensorError>
 where
     E: From<tenferro_ad::Error> + std::error::Error + Send + Sync + 'static,
 {
-    with_eager_session_typed(runtime, context, f)?.map_err(eager_error)
+    with_eager_session_typed(runtime, route, f)?.map_err(eager_error)
 }
 
 /// Run one eager session and keep the callback's own error type on failure.
@@ -172,29 +208,31 @@ where
 /// [`IdxTensorError`].
 pub(crate) fn with_eager_session_typed<T, E>(
     runtime: &Arc<EagerRuntime>,
-    context: Option<&ExecutionContext>,
+    route: EngineRoute<'_>,
     f: impl FnOnce(&mut EagerSession<'_>) -> std::result::Result<T, E>,
 ) -> std::result::Result<std::result::Result<T, E>, IdxTensorError>
 where
     E: From<tenferro_ad::Error>,
 {
-    match context {
-        Some(ExecutionContext::Cpu(context)) => context
+    match route {
+        EngineRoute::Context(ExecutionContext::Cpu(context)) => context
             .with_session(|engine| runtime.with_eager_session(engine, f))
             .map_err(IdxTensorError::from),
         #[cfg(feature = "tenferro-cuda")]
-        Some(ExecutionContext::Cuda(context)) => context
+        EngineRoute::Context(ExecutionContext::Cuda(context)) => context
             .with_session(|engine| runtime.with_eager_session(engine, f))
             .map_err(IdxTensorError::from),
-        None => with_runtime_engine(runtime, |engine| runtime.with_eager_session(engine, f))
-            .map_err(IdxTensorError::from),
+        EngineRoute::Legacy => {
+            with_runtime_engine_or_global(runtime, |engine| runtime.with_eager_session(engine, f))
+                .map_err(IdxTensorError::from)
+        }
         // INVARIANT: reachable only in the mixed configuration of
         // tensor4all-rs#869 (tensorbackend built with CUDA, core without), where
         // `ExecutionContext::Cuda` exists but this build cannot execute in it; in
         // every other configuration `Cpu` is the only variant.
         #[cfg(not(feature = "tenferro-cuda"))]
         #[allow(unreachable_patterns)]
-        Some(_) => Err(super::idx_tensor::unsupported_execution_context_error()),
+        EngineRoute::Context(_) => Err(super::idx_tensor::unsupported_execution_context_error()),
     }
 }
 
@@ -203,31 +241,33 @@ where
 /// The contract is the same as [`with_eager_session`], for operations that take
 /// a [`tenferro_tensor::Engine`] directly instead of an eager session. `runtime`
 /// is the eager runtime of the operand the operation acts on, and decides the
-/// engine on the implicit (`None`) route.
+/// engine on the [`EngineRoute::Legacy`] route.
 pub(crate) fn with_engine<T, E>(
     runtime: &Arc<EagerRuntime>,
-    context: Option<&ExecutionContext>,
+    route: EngineRoute<'_>,
     f: impl FnOnce(&mut dyn Engine) -> std::result::Result<T, E>,
 ) -> std::result::Result<T, IdxTensorError>
 where
     E: std::error::Error + Send + Sync + 'static,
 {
-    let result = match context {
-        Some(ExecutionContext::Cpu(context)) => context
+    let result = match route {
+        EngineRoute::Context(ExecutionContext::Cpu(context)) => context
             .with_session(|engine| f(engine))
             .map_err(IdxTensorError::from),
         #[cfg(feature = "tenferro-cuda")]
-        Some(ExecutionContext::Cuda(context)) => context
+        EngineRoute::Context(ExecutionContext::Cuda(context)) => context
             .with_session(|engine| f(engine))
             .map_err(IdxTensorError::from),
-        None => with_runtime_engine(runtime, |engine| f(engine)).map_err(IdxTensorError::from),
+        EngineRoute::Legacy => {
+            with_runtime_engine_or_global(runtime, |engine| f(engine)).map_err(IdxTensorError::from)
+        }
         // INVARIANT: reachable only in the mixed configuration of
         // tensor4all-rs#869 (tensorbackend built with CUDA, core without), where
         // `ExecutionContext::Cuda` exists but this build cannot execute in it; in
         // every other configuration `Cpu` is the only variant.
         #[cfg(not(feature = "tenferro-cuda"))]
         #[allow(unreachable_patterns)]
-        Some(_) => Err(super::idx_tensor::unsupported_execution_context_error()),
+        EngineRoute::Context(_) => Err(super::idx_tensor::unsupported_execution_context_error()),
     };
     result?.map_err(eager_error)
 }

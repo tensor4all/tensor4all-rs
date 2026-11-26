@@ -93,8 +93,20 @@ fn backend_runtime_without_a_live_owner_refuses() {
     drop(_context);
     drop(cpu);
     let mut ran = false;
+    // The strict entry never chooses an engine (#1378) ...
     let entry = with_runtime_engine(&runtime, |_engine| ran = true);
-    assert!(matches!(entry, Err(ExecutionContextEntryError::NoContext)));
+    assert!(matches!(
+        entry,
+        Err(ExecutionContextEntryError::NoLiveOwner)
+    ));
+    // ... and the legacy bridge has no process-global context to fall back to.
+    let bridged = tensor4all_tensorbackend::with_runtime_engine_or_global(&runtime, |_engine| {
+        ran = true;
+    });
+    assert!(matches!(
+        bridged,
+        Err(ExecutionContextEntryError::NoContext)
+    ));
     assert!(!ran, "no engine may be chosen for an owner-less runtime");
 }
 

@@ -274,10 +274,13 @@
   do not add new implicit-engine sites under `crates/*/src` (test sources and
   benches excluded):
   - a literal `None` context passed to `with_eager_session`,
-    `with_eager_session_typed`, `with_engine` or `with_execution_engine`;
+    `with_eager_session_typed`, `with_engine` or `with_execution_engine`, or
+    its #1378 spelling `EngineRoute::Legacy` /
+    `EngineRoute::context_or_legacy(None)`;
   - a call of `default_context()`, `default_eager_ctx()`,
-    `default_cpu_execution_context()`, the `with_default_*` helpers or the
-    `None`-route fallback `with_runtime_engine`, or a naming of
+    `default_cpu_execution_context()`, the `with_default_*` helpers, the
+    owner-resolving `with_runtime_engine` or its process-global fallback
+    bridge `with_runtime_engine_or_global`, or a naming of
     `implicit_route::eager_runtime` / `legacy::eager_runtime`;
   - an `Option<&ExecutionContext>`-shaped parameter (also `Cpu`/`Cuda`);
   - a new `&ExecutionContext` / `&CpuExecutionContext` /

@@ -112,7 +112,9 @@ therefore has its own command.
 ### 3.2 F1 — a literal `None` context argument
 
 `crates/tensor4all-core/src/defaults/eager_session.rs` defines three helpers that take
-`context: Option<&ExecutionContext>` and route `None` to `with_runtime_engine`
+`context: Option<&ExecutionContext>` and route `None` to `with_runtime_engine` (since #1378
+they take `EngineRoute`, the 53 sites spell `EngineRoute::Legacy`, and that route enters the
+bridge `with_runtime_engine_or_global`; the ratchet counts them under the same pattern)
 (`:63`, `:97`, `:131`). Production code passes the literal `None` at **53 sites**. The count uses a multi-line-safe
 query, because a single-line `grep` misses calls whose arguments wrap. Both give 53 at
 `20b42b0d`, but only the `rg -U` form stays correct after `rustfmt` reflows a call:
@@ -305,6 +307,15 @@ A runtime whose creating context was dropped does not produce a typed error; it 
 the global engine. This is issue #1375's finding 2, verbatim, and it is the single
 behavioural change with the widest blast radius (§8).
 
+**Status (#1378).** The silent substitution is gone. `with_runtime_engine` now refuses an
+owner-less runtime with the typed, transitional `ExecutionContextEntryError::NoLiveOwner`
+in every build. The fallback survives only as the `#[doc(hidden)]` bridge
+`with_runtime_engine_or_global` (re-exported as `tensor4all_core::legacy::with_runtime_engine_or_global`),
+and core's eager entries take `EngineRoute::{Context, Legacy}` instead of
+`Option<&ExecutionContext>`: each former literal-`None` site now spells `EngineRoute::Legacy`,
+and a forwarded optional context spells `EngineRoute::context_or_legacy(..)`. Deleting the
+route, the bridge and `NoLiveOwner` stays stage D2.
+
 ### 3.9 F7 — the `global-defaults` modules in `tensor4all-tensorbackend`
 
 Nine modules are compiled only on the legacy route (`crates/tensor4all-tensorbackend/src/lib.rs:13-57`); the first column gives the file under `crates/tensor4all-tensorbackend/src/`:
@@ -383,8 +394,9 @@ un-gated modules. It understates the dependency, though. Core also **calls a
 helpers call it at `:63`, `:97`, `:131`. Core has no `global-defaults` cfg of its own.
 
 Dropping the requirement therefore needs two things. Stage B2 moves the re-exports
-and switches `mat_mul` in place (deleting `mat_mul_in`). Stage D2 deletes the `None` route,
-and with it core's only use of `with_runtime_engine`. Only after both does stage D4 drop
+and switches `mat_mul` in place (deleting `mat_mul_in`). Stage D2 deletes the `None` route
+(since #1378 the `EngineRoute::Legacy` route and its bridge `with_runtime_engine_or_global`),
+and with it core's only use of the owner-resolving entry. Only after both does stage D4 drop
 the requirement.
 
 **Status (#1377 stage 1).** The `explicit-context` feature of `tensor4all-tensorbackend` now
@@ -878,8 +890,9 @@ Order:
 
 1. **Delete the bridges** (`tensor4all_tensorbackend::legacy`) once phase C leaves no
    call site.
-2. **Delete the `None` route** (#1378): `with_runtime_engine`, the owner registry
-   (`context.rs:1881-1893`) and the `None` arms in `eager_session.rs`.
+2. **Delete the `None` route** (#1378 did the first step): `with_runtime_engine`, the
+   bridge `with_runtime_engine_or_global`, `ExecutionContextEntryError::NoLiveOwner`, the
+   owner registry and `EngineRoute::Legacy` in `eager_session.rs`.
 3. **Delete the contexts**: `CpuExecutionContext`, `CudaExecutionContext`,
    `ExecutionContext`, `EngineOwner`, the re-entry guard and `explicit::Session` (if
    nothing still needs it).
@@ -905,7 +918,7 @@ Order:
 | A1 | #1392 |
 | A2 | #1393 |
 | A3, and the phase B switch of `treetn` contraction and `interpolativeqtt` builders | #1379 |
-| D2 and the phase B switch of the F1 sites in `core` | #1378 (delete the route; no `NoLiveOwner`) |
+| D2 and the phase B switch of the F1 sites in `core` | #1378 (first step: no silent substitution, explicit `legacy` bridge, transitional `NoLiveOwner`; D2 deletes the route and the variant) |
 | B2 re-exports and D4 | #1377 |
 | phase C for `aci` | #1382 |
 | B1 bridge visibility | #1380 |

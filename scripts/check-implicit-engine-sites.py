@@ -15,13 +15,19 @@ the remaining code:
     a literal ``None`` argument to ``with_eager_session``,
     ``with_eager_session_typed``, ``with_engine`` or ``with_execution_engine``.
     Arguments are split with a balanced-delimiter scan, so a call that
-    ``rustfmt`` wrapped over several lines is still found.
+    ``rustfmt`` wrapped over several lines is still found. Since #1378 core's
+    eager entries take an ``EngineRoute`` instead of an ``Option``, and the
+    former ``None`` is spelled ``EngineRoute::Legacy``: it means the same
+    implicit route, so every ``EngineRoute::Legacy`` expression (a ``match``
+    arm pattern ``EngineRoute::Legacy =>`` is not one) and every
+    ``EngineRoute::context_or_legacy(None)`` is a site of this pattern too.
 ``global-accessor``
     a call of ``default_context()``, ``default_eager_ctx()``,
     ``default_cpu_execution_context()``, ``with_default_session(``,
     ``with_default_backend(``, ``with_default_graph_compiler(``, the
-    ``None``-route fallback ``with_runtime_engine(`` (their ``fn``
-    definitions are not sites), and every naming of the global
+    owner-resolving implicit entry ``with_runtime_engine(`` and its
+    process-global fallback bridge ``with_runtime_engine_or_global(`` (#1378;
+    their ``fn`` definitions are not sites), and every naming of the global
     ``implicit_route::eager_runtime`` / ``legacy::eager_runtime`` path (the
     ``context.eager_runtime()`` method is explicit and not a site). A
     renaming import (``use ..::default_context as ctx;``) is a site too.
@@ -103,10 +109,16 @@ NONE_ROUTE_FUNCTIONS = (
 NONE_ROUTE_RE = re.compile(
     r"\b(" + "|".join(NONE_ROUTE_FUNCTIONS) + r")\s*(?:::\s*<[^;{}]*?>\s*)?\("
 )
+# #1378: the `EngineRoute` spelling of the former literal `None` route.
+LEGACY_ROUTE_RE = re.compile(r"\bEngineRoute\s*::\s*Legacy\b")
+MATCH_ARM_AFTER_RE = re.compile(r"\s*(?:=>|\|)")
+LEGACY_FROM_NONE_RE = re.compile(
+    r"\bEngineRoute\s*::\s*context_or_legacy\s*\(\s*None\s*\)"
+)
 GLOBAL_ACCESSOR_RE = re.compile(
     r"\b(default_context|default_eager_ctx|default_cpu_execution_context"
     r"|with_default_session|with_default_backend|with_default_graph_compiler"
-    r"|with_runtime_engine)"
+    r"|with_runtime_engine_or_global|with_runtime_engine)"
     r"\s*(?:::\s*<[^;{}]*?>\s*)?\("
 )
 CONTEXT_TYPE = r"(?:[A-Za-z_]\w*\s*::\s*)*(?:Cpu|Cuda)?ExecutionContext\b"
@@ -127,7 +139,7 @@ GLOBAL_EAGER_RUNTIME_RE = re.compile(
 ACCESSOR_ALIAS_RE = re.compile(
     r"\b(default_context|default_eager_ctx|default_cpu_execution_context"
     r"|with_default_session|with_default_backend|with_default_graph_compiler"
-    r"|with_runtime_engine)\s+as\s+([A-Za-z_]\w*)"
+    r"|with_runtime_engine_or_global|with_runtime_engine)\s+as\s+([A-Za-z_]\w*)"
 )
 BRACE_RE = re.compile(r"[{};]")
 ITEM_RE = re.compile(r"\b(fn|struct|enum|trait)\s+([A-Za-z_]\w*)")
@@ -273,7 +285,7 @@ def normalise(text: str) -> str:
 
 
 # A file without any of these words cannot hold a site; skip lexing it.
-PREFILTER = ("with_", "default_", "ExecutionContext", "eager_runtime")
+PREFILTER = ("with_", "default_", "ExecutionContext", "eager_runtime", "EngineRoute")
 
 
 def scan_source(rel_path: str, source: str) -> list[Site]:
@@ -290,6 +302,13 @@ def scan_source(rel_path: str, source: str) -> list[Site]:
             if arg.strip() == "None":
                 raw.append((start + arg.index("None"), "none-context-arg",
                             f"{m.group(1)}(arg{index}=None)"))
+
+    for m in LEGACY_ROUTE_RE.finditer(code):
+        if MATCH_ARM_AFTER_RE.match(code, m.end()):
+            continue
+        raw.append((m.start(), "none-context-arg", "EngineRoute::Legacy"))
+    for m in LEGACY_FROM_NONE_RE.finditer(code):
+        raw.append((m.start(), "none-context-arg", "EngineRoute::context_or_legacy(None)"))
 
     for m in GLOBAL_ACCESSOR_RE.finditer(code):
         if FN_DEF_BEFORE_RE.search(code[max(0, m.start() - 8):m.start()]):

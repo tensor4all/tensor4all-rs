@@ -2,7 +2,7 @@
 //!
 //! This module works with concrete types (`DynIndex`, `IdxTensor`) only.
 
-use super::eager_session::with_eager_session;
+use super::eager_session::{with_eager_session, EngineRoute};
 use crate::defaults::idx_tensor::{unfold_index_sets, unfold_split_inner, unfold_split_inner_in};
 use crate::defaults::DynIndex;
 use crate::global_default::GlobalDefault;
@@ -190,11 +190,15 @@ fn resident_row_norms(
 ) -> Result<Vec<f64>, QrError> {
     // The resident factor's own runtime runs the reduction in one eager session, as the neighbouring CUDA-only
     // paths do; only the decision vector crosses back through `context`.
-    let sum_squares = with_eager_session(r_inner.runtime(), Some(context), |session| {
-        let upper = session.triu(r_inner, 0)?;
-        let magnitudes = session.abs(&upper)?;
-        session.reduce_sum_squares(&magnitudes, Some(&[1]))
-    })
+    let sum_squares = with_eager_session(
+        r_inner.runtime(),
+        EngineRoute::Context(context),
+        |session| {
+            let upper = session.triu(r_inner, 0)?;
+            let magnitudes = session.abs(&upper)?;
+            session.reduce_sum_squares(&magnitudes, Some(&[1]))
+        },
+    )
     .map_err(|error| QrError::ComputationError(anyhow::Error::new(error)))?;
     if sum_squares.shape() != [k] {
         return Err(QrError::ComputationError(anyhow::anyhow!(
@@ -325,7 +329,7 @@ pub fn qr_with<T>(
     let tenferro_linalg::Qr {
         q: q_inner,
         r: r_inner,
-    } = with_eager_session(matrix_inner.runtime(), None, |session| {
+    } = with_eager_session(matrix_inner.runtime(), EngineRoute::Legacy, |session| {
         session.qr(&matrix_inner)
     })
     .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
@@ -401,9 +405,11 @@ pub fn qr_with_in<T>(
     let tenferro_linalg::Qr {
         q: q_inner,
         r: r_inner,
-    } = with_eager_session(matrix_inner.runtime(), Some(context), |session| {
-        session.qr(&matrix_inner)
-    })
+    } = with_eager_session(
+        matrix_inner.runtime(),
+        EngineRoute::Context(context),
+        |session| session.qr(&matrix_inner),
+    )
     .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
 
     let keep = qr_retained_rows(&r_inner, k, n, options, Some(context))?;
@@ -632,13 +638,17 @@ fn qr_assemble(
 ) -> Result<(IdxTensor, IdxTensor), QrError> {
     let r = keep.len();
     if r < k {
-        q_inner = with_eager_session(q_inner.runtime(), context, |session| {
-            session.take_axis(&q_inner, 1, &keep)
-        })
+        q_inner = with_eager_session(
+            q_inner.runtime(),
+            EngineRoute::context_or_legacy(context),
+            |session| session.take_axis(&q_inner, 1, &keep),
+        )
         .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
-        r_inner = with_eager_session(r_inner.runtime(), context, |session| {
-            session.take_axis(&r_inner, 0, &keep)
-        })
+        r_inner = with_eager_session(
+            r_inner.runtime(),
+            EngineRoute::context_or_legacy(context),
+            |session| session.take_axis(&r_inner, 0, &keep),
+        )
         .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
     }
 
@@ -649,18 +659,22 @@ fn qr_assemble(
     let mut q_indices = left_indices.clone();
     q_indices.push(bond_index.clone());
     let q_dims: Vec<usize> = q_indices.iter().map(|idx| idx.dim).collect();
-    let q_reshaped = with_eager_session(q_inner.runtime(), context, |session| {
-        session.reshape(&q_inner, &q_dims)
-    })
+    let q_reshaped = with_eager_session(
+        q_inner.runtime(),
+        EngineRoute::context_or_legacy(context),
+        |session| session.reshape(&q_inner, &q_dims),
+    )
     .map_err(|e| QrError::ComputationError(anyhow::anyhow!("eager QR Q reshape failed: {e}")))?;
     let q = IdxTensor::from_inner(q_indices, q_reshaped).map_err(QrError::ComputationError)?;
 
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
     let r_dims: Vec<usize> = r_indices.iter().map(|idx| idx.dim).collect();
-    let r_reshaped = with_eager_session(r_inner.runtime(), context, |session| {
-        session.reshape(&r_inner, &r_dims)
-    })
+    let r_reshaped = with_eager_session(
+        r_inner.runtime(),
+        EngineRoute::context_or_legacy(context),
+        |session| session.reshape(&r_inner, &r_dims),
+    )
     .map_err(|e| QrError::ComputationError(anyhow::anyhow!("eager QR R reshape failed: {e}")))?;
     let r = IdxTensor::from_inner(r_indices, r_reshaped).map_err(QrError::ComputationError)?;
 
