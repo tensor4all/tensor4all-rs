@@ -811,6 +811,17 @@ operator-construction error, as the existing report does.
 
 ### Report and acceptance
 
+Full input-merge depth leaves one term per nonempty output region in tolerance
+mode, even when an output axis stops splitting earlier. `output_depth` limits
+executed levels; it does not prescribe a uniform output partition. A subsequent
+`into_partition()?.refine_to(&layout)` preserves retained values without another
+truncation when the layout covers the output. It produces that exact layout only
+when its projectors refine all existing restrictions, including spectators, and
+the relevant regions have not been dropped. It cannot coarsen finer boundaries
+or restore dropped regions. A common refinement can align retained partitions
+when a shared layout may be determined after the transforms. A fixed prescribed
+layout for arbitrary inputs remains a separate scheduling requirement.
+
 Record the selected `merge_policy` in `MergeRefineReport`. Add per-level
 records for every executed level with `merging_levels_left = L_t`, allocated
 allowance `e_t`, retained measured bound `E_t`, `remaining_before`,

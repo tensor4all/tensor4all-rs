@@ -74,6 +74,18 @@ impl<V> Default for PatchedFourierOptions<V> {
 /// `output_regions` select intersecting schedule cells, which can be coarser
 /// than the request. See [`MergeRefineOptions`] for limits and coverage contracts.
 ///
+/// With `MergePolicy::Tolerance`, executing the full input-merge depth
+/// (`output_depth: None`) leaves one term in every nonempty region, even when
+/// output splitting stops earlier. An explicit shorter depth can retain several
+/// terms. The depth is a level limit, not a requested uniform output layout.
+/// For a shared layout, convert with `into_partition()` and call
+/// [`PartitionedTreeTN::refine_to`] with projectors that cover the retained
+/// output and refine all its existing restrictions, including spectators.
+/// Refinement adds no truncation error, but it cannot coarsen existing patches
+/// or restore regions dropped within the allowance. Use
+/// [`PartitionedTreeTN::common_refinement`] to align differing adaptive layouts
+/// when their resulting shared layout need not be fixed in advance.
+///
 /// Each axis's output bits occupy its input indices in reversed significance.
 /// To undo a normalized forward transform, reverse **each axis's index vector**
 /// and use [`FourierOptions::inverse`]. Without normalization, the round trip
@@ -84,6 +96,8 @@ impl<V> Default for PatchedFourierOptions<V> {
 /// it excludes its Fourier approximation error and floating-point roundoff.
 /// `options.max_bond_dim` limits per-axis construction, not exact layout
 /// restructuring. No total exact-DFT error bound is promised.
+/// Tolerance-driven merges do not impose a hard peak-memory ceiling: the default
+/// leaf application is exact, and candidates can still have large transient bonds.
 ///
 /// # Input partition
 ///

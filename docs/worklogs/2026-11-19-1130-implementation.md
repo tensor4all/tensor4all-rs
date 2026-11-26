@@ -1,5 +1,40 @@
 # Tolerance merge policy implementation (#1130)
 
+## Current integration and output-layout limits (2026-11-26)
+
+The implementation is rebased onto `5af3e719` with both sets of CHANGELOG
+entries retained. The scheduler algorithm is unchanged. Historical acceptance
+measurements remain evidence for their recorded source and dependency revisions,
+not new performance measurements of the synchronized branch.
+
+The latest [consumer requirements](https://github.com/tensor4all/tensor4all-rs/issues/1130#issuecomment-7186152520)
+ask for two transformed axes, spectator constraints, a prescribed shared output
+layout and one term per region. Full-depth tolerance mode consolidates each
+nonempty region; `refine_to` can then align outputs only onto a layout that
+refines their existing restrictions. It cannot coarsen finer boundaries or
+restore dropped regions. The guide, public Fourier documentation and
+[design contract](../design/partitioned-treetn.md#report-and-acceptance) state
+that limitation instead of promising arbitrary fixed layouts.
+
+A small two-axis regression checks real-valued and complex inputs on the same
+requested layout, including a spectator sharing a selected index's ID at a
+different prime level. It checks strict conversion, exact refinement and a
+dense product-DFT residual against the reported allowance. A coarser-layout
+request explicitly retains the existing boundaries. The 64-by-64 input-patch
+case and a hard peak-memory bound remain unverified and are not claimed.
+
+Focused validation on the synchronized source passes: 22 scheduler units (one
+pre-existing timing test remains ignored), 21 reconstruction integration cases,
+14 patched Fourier cases, 49 QFT reconstruction cases and 49 Fourier doctests.
+The new test rejects an injected tolerance-merge mutation that retains both
+operands instead of consolidating them; the production source was restored
+before the passing Fourier suites. Strict affected-crate Clippy, rustdoc link
+validation, formatting, the API inventory, public-error documentation, test-target
+inventory, the implicit-engine ratchet and deterministic repository-rules review
+pass. The guide changes are prose only; guide snippets and their APIs are
+unchanged, so the mdBook executable suite was not repeated. Hosted checks and
+implementation review must run on the published rebased head.
+
 ## Decisions
 
 - Implement the design merged in #1394: mutually exclusive `MergePolicy`

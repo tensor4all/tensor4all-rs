@@ -201,6 +201,21 @@ Leave `coordinate_groups` unset; the front end derives them from the axes.
 The returned `MergeRefineResult` keeps output regions and their retained terms
 lazy. `into_partition()` requires one final term per region. Requested output
 regions select intersecting schedule cells and can return coarser cells.
+With `MergePolicy::Tolerance`, leave `output_depth` unset to execute the full
+input-merge depth: every nonempty region then has one term, even if output
+splitting stops earlier. A shorter depth can leave several terms per region.
+
+To pair outputs on a caller-chosen layout, first call `into_partition()`, then
+`refine_to(&layout_projectors)`. The layout must cover the retained output and
+refine every existing output and spectator restriction. This is exact masking
+and adds no truncation error. It cannot remove finer boundaries or restore
+regions dropped within the allowance, so a fixed `output_depth` followed by
+`refine_to` does not guarantee an arbitrary prescribed partition for every
+function. If the shared layout may be determined after transforming the
+functions, use `PartitionedTreeTN::common_refinement` and refine each output to
+those projectors. The two-axis/spectator workflow is checked in
+[`tolerance_full_depth_refines_two_axis_outputs_onto_a_shared_layout`](https://github.com/tensor4all/tensor4all-rs/blob/main/crates/tensor4all-quanticstransform/tests/patched_fourier.rs).
+
 Repeated exact transforms can grow intermediate bonds substantially. A rank
 goal is soft and does not bound the initial operator application, which is
 exact by default: its bonds are the input bond times the operator bond. Select
@@ -209,6 +224,10 @@ For large transforms set an appropriate output depth/region selection and a
 merge policy. The defaults preserve exact behavior and should not
 be treated as a scalable memory policy. The small round-trip example uses a
 rank goal with a tight reconstruction tolerance.
+Tolerance mode compresses accepted merges within the global allowance; it does
+not promise a hard peak-memory ceiling or establish feasibility for a 64-by-64
+input patch grid. Leaf application and transient candidate bonds still need
+workload-specific validation.
 
 Output significance reverses **within each axis**. For a normalized inverse
 round trip use `axes_inv[a] = axes[a].iter().rev().cloned().collect()` with
