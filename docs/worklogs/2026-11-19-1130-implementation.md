@@ -42,7 +42,7 @@ the published rebased head.
 
 The six findings in the [implementation review](https://github.com/tensor4all/tensor4all-rs/pull/1407#issuecomment-7201649508)
 are addressed without changing approximation tolerances or candidate tie order.
-The branch now includes `main` through `de053a07`.
+The branch now includes `main` through `970c101e`.
 
 Candidate key metadata stays bounded before tensor work. Work/term admission now
 uses the actual nonempty input items and terms after restriction and merging,

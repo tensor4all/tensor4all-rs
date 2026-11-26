@@ -98,9 +98,7 @@ pub struct TCI2Options {
     ///
     /// Each iteration performs one forward or backward two-site sweep
     /// followed by a global pivot search. Increase if the function is
-    /// difficult to converge. Under [`PivotSearchStrategy::Rook`] the exact
-    /// `Full` sweeps that certify convergence are not counted, so `errors` and
-    /// `ranks` can hold more than `max_iter` entries.
+    /// difficult to converge.
     pub max_iter: usize,
     /// Hard upper bound on bond dimension (default: `None`, i.e. no limit).
     ///
@@ -115,14 +113,12 @@ pub struct TCI2Options {
     /// the maximum remaining residual over the candidate matrix, a certified
     /// bound.
     ///
-    /// `Rook` searches with O(d) rook walks, so its bond errors during the
-    /// sweeps are the last rook pivots, not bounds. Its
-    /// [`TCI2Termination::Converged`] rests on `Full`'s bond errors: when the
-    /// history criterion is met, an exact `Full` sweep follows (repeated each
-    /// time the criterion is met again) and only a `Full` sweep with bond error
-    /// below tolerance, no global pivot and no rank growth may report
-    /// convergence. That sweep materializes the dense candidate matrices, so
-    /// `Rook` no longer avoids them. See [`PivotSearchStrategy::Rook`].
+    /// `Rook` trades that guarantee for fewer evaluations: it finds each pivot
+    /// with an O(d) rook walk and stops a bond update when the current rook
+    /// pivot, and two more walks started from other columns, find nothing
+    /// above tolerance. Its bond errors are the last rook pivots, not
+    /// bounds, so [`TCI2Termination::Converged`] under `Rook` does not prove
+    /// the tolerance. See [`PivotSearchStrategy::Rook`].
     pub pivot_search: PivotSearchStrategy,
     /// Whether to normalize the bond error by the maximum observed sample
     /// value (default: `true`).
@@ -246,13 +242,11 @@ pub enum TCI2Termination {
     /// The recorded error (bond errors and residuals measured by the global
     /// search), global-pivot history, and rank stability all converged.
     ///
-    /// The bond errors are residual maxima over the sampled candidate rows and
-    /// columns, so this variant is a sampled criterion: for two sites those
-    /// cover the whole tensor, for more sites they do not prove the tolerance
-    /// on unsampled entries. Under [`PivotSearchStrategy::Rook`] the search
-    /// sweeps record last rook pivots, but this variant is reported only after
-    /// an exact `Full` sweep (one sweep, not the `ncheck_history` window) found
-    /// a bond error below tolerance, no global pivot and no rank growth.
+    /// Under [`PivotSearchStrategy::Full`] the bond errors are residual
+    /// maxima over the sampled candidate rows and columns, not over the full
+    /// tensor. Under [`PivotSearchStrategy::Rook`] they are the last rook
+    /// pivots. Either way this variant is a sampled criterion and does not
+    /// prove the tolerance on unsampled entries.
     Converged,
     /// The recent rank history reached the configured maximum bond dimension.
     MaxBondDimension,
@@ -353,30 +347,27 @@ pub enum PivotSearchStrategy {
     Full,
     /// Heuristic lazy block-rook pivoting over partial matrix blocks.
     ///
+    /// `Rook` is a fast, inexact option by design: the final interpolation
+    /// error may exceed `tolerance` even when the run reports
+    /// [`TCI2Termination::Converged`]. It is not certified, and no
+    /// certification is planned, since that would cost the evaluation savings
+    /// that are the reason to choose it. Use [`Full`](Self::Full) when the
+    /// tolerance must hold.
+    ///
     /// Each pivot is found by an O(d)-sized rook walk that alternates residual
-    /// column and row maxima until they agree, so the search itself never
-    /// materializes the full candidate matrix (the final exact sweep described
-    /// below does). A rook pivot is the largest entry of its own
+    /// column and row maxima until they agree, so the full candidate matrix is
+    /// never materialized. A rook pivot is the largest entry of its own
     /// residual row and column only.
     ///
-    /// The bond stop is heuristic: when the current rook pivot is below
-    /// tolerance, two more walks start from columns spread over the remaining
-    /// block, and the bond update stops only if neither finds a pivot above
-    /// tolerance. That can still stop on a local maximum, so the bond error
-    /// recorded in `pivot_errors` and in the sweep `errors` is the last rook
-    /// pivot, not an upper bound.
-    ///
-    /// The verdict is not heuristic. When the history criterion is met, TCI2
-    /// runs one more sweep with the exact [`Full`](Self::Full) update and
-    /// returns [`TCI2Termination::Converged`] only if that sweep's bond errors
-    /// (exact residual maxima of the candidate matrices), global-pivot count
-    /// and rank all pass (a single-sweep test, not the `ncheck_history`
-    /// window). Otherwise it keeps sweeping with `Rook` from the pivots the
-    /// exact sweep added. The verdict then has `Full`'s sampled meaning: the
-    /// bond errors bound the residual of the candidate matrices, which for two
-    /// sites is the whole tensor, up to the allowance for the final 1-site
-    /// cleanup sweep. The price is a `Full` sweep per attempt, including its
-    /// dense candidate matrix in memory.
+    /// The stop is heuristic: when the current rook pivot is below tolerance,
+    /// two more walks start from columns spread over the remaining block, and
+    /// the bond update stops only if neither finds a pivot above tolerance.
+    /// This catches a walk that stopped on one small local maximum, but it
+    /// does **not** certify that the remaining residual is below tolerance.
+    /// The bond error recorded in `pivot_errors` and the sweep `errors` is that last rook pivot, not an upper bound, and
+    /// [`TCI2Termination::Converged`] under `Rook` is not a proof that the
+    /// tolerance holds. Use [`Full`](Self::Full) when a certified bound is
+    /// required.
     ///
     /// Exactly zero starting residual columns are skipped; an all-zero residual
     /// can require all remaining entries to be inspected, one column at a time.
@@ -2113,40 +2104,16 @@ where
     let mut ranks = Vec::new();
     let mut nglobal_pivots_history: Vec<usize> = Vec::new();
     let mut termination = TCI2Termination::MaxIterations;
-    // Set when a `Rook` run meets the convergence criterion: the next sweep is
-    // an exact `Full` sweep, and only it may report `Converged` (#1257).
-    let mut certifying = false;
 
-    // `max_iter` counts search sweeps; a certifying sweep after the last one
-    // is extra, so a `Rook` run that was already right is not turned into
-    // `MaxIterations` by the check.
-    let mut iter = 0usize;
-    let mut search_sweeps = 0usize;
-    loop {
-        if search_sweeps >= options.max_iter && !certifying {
-            break;
-        }
-        if !certifying {
-            search_sweeps += 1;
-        }
-        let this_iter = iter;
-        iter += 1;
+    for iter in 0..options.max_iter {
         let (error_normalization, abs_tol) = options.sweep_tolerance(tci.max_sample_value)?;
         let lu_abs_tol = abs_tol * LOCAL_TOLERANCE_FRACTION;
-        let sweep_options = if certifying {
-            TCI2Options {
-                pivot_search: PivotSearchStrategy::Full,
-                ..options.clone()
-            }
-        } else {
-            options.clone()
-        };
 
         // Determine sweep direction
         let is_forward = match options.sweep_strategy {
             Sweep2Strategy::Forward => true,
             Sweep2Strategy::Backward => false,
-            Sweep2Strategy::BackAndForth => this_iter.is_multiple_of(2),
+            Sweep2Strategy::BackAndForth => iter % 2 == 0,
         };
 
         // Get extra index sets from history for non-strictly-nested mode
@@ -2179,7 +2146,7 @@ where
                     PivotUpdateContext {
                         batched_f: &batched_f,
                         left_orthogonal: true,
-                        options: &sweep_options,
+                        options: &options,
                         abs_tol: lu_abs_tol,
                         extra_i_set: &extra_i_set[b + 1],
                         extra_j_set: &extra_j_set[b],
@@ -2196,7 +2163,7 @@ where
                     PivotUpdateContext {
                         batched_f: &batched_f,
                         left_orthogonal: false,
-                        options: &sweep_options,
+                        options: &options,
                         abs_tol: lu_abs_tol,
                         extra_i_set: &extra_i_set[b + 1],
                         extra_j_set: &extra_j_set[b],
@@ -2241,27 +2208,12 @@ where
         if options.verbosity > 0 {
             println!(
                 "iteration = {}, rank = {}, error = {:.2e}, maxsamplevalue = {:.2e}, nglobalpivot = {}",
-                this_iter + 1,
+                iter + 1,
                 tci.rank(),
                 error_normalized,
                 tci.max_sample_value,
                 n_global
             );
-        }
-
-        // A `Full` sweep that follows a `Rook` run is the certificate. Its bond
-        // errors are exact residual maxima of the candidate matrices, so the
-        // verdict is `Full`'s: `Converged` only if that sweep found nothing above
-        // the tolerance, added no pivot and no global pivot. Otherwise the Rook
-        // sweeps continue from the pivots the exact sweep added.
-        if certifying {
-            certifying = false;
-            let grew = ranks.len() >= 2 && ranks[ranks.len() - 1] > ranks[ranks.len() - 2];
-            if error_normalized < options.tolerance && n_global == 0 && !grew {
-                termination = TCI2Termination::Converged;
-                break;
-            }
-            continue;
         }
 
         // `errors` is already divided by `error_normalization`, so compare it
@@ -2274,12 +2226,6 @@ where
             options.max_bond_dim.unwrap_or(usize::MAX),
             options.ncheck_history,
         ) {
-            if reason == TCI2Termination::Converged
-                && options.pivot_search == PivotSearchStrategy::Rook
-            {
-                certifying = true;
-                continue;
-            }
             termination = reason;
             break;
         }
