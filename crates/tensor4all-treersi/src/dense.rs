@@ -20,9 +20,14 @@ use crate::{
 pub(crate) enum Exec<'a, 'session> {
     /// A caller-held CPU session; nothing else is entered.
     Session(&'a mut Session<'session>),
-    /// A CUDA context, entered per contraction.
+    /// A CUDA context, entered per contraction, with the CPU context that runs
+    /// the solve step of the host-side rank decision (second field). The CPU context is owned by
+    /// the run that built this value, never looked up from a process-global.
     #[cfg(feature = "tenferro-cuda")]
-    Cuda(&'a tensor4all_tensorbackend::CudaExecutionContext),
+    Cuda(
+        &'a tensor4all_tensorbackend::CudaExecutionContext,
+        &'a tensor4all_tensorbackend::CpuExecutionContext,
+    ),
 }
 
 /// A dense column-major array with explicit axis sizes.
@@ -52,7 +57,7 @@ fn einsum_host<T: TreeRsiScalar>(
     match exec {
         Exec::Session(session) => session_einsum_host(session, operands, input_ids, output_ids),
         #[cfg(feature = "tenferro-cuda")]
-        Exec::Cuda(cuda) => cuda_einsum_host(cuda, operands, input_ids, output_ids),
+        Exec::Cuda(cuda, _) => cuda_einsum_host(cuda, operands, input_ids, output_ids),
     }
 }
 
@@ -154,7 +159,7 @@ fn gemm<T: TreeRsiScalar>(
         // A two-operand einsum with one contracted pair takes tenferro-einsum's
         // binary-dot shortcut, so this reaches the device matmul directly.
         #[cfg(feature = "tenferro-cuda")]
-        Exec::Cuda(_) => {
+        Exec::Cuda(..) => {
             let (data, dims) = einsum_host(
                 exec,
                 &[
