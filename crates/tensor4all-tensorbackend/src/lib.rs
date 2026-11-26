@@ -83,8 +83,8 @@ pub use context::{
 #[cfg(feature = "explicit-context")]
 pub use context::{
     default_cpu_wait_policy, set_default_cpu_threads, set_default_cpu_wait_policy,
-    with_runtime_engine, AlreadyInitialized, CpuBackend, CpuExecutionContext,
-    CpuExecutionContextError, CpuThreadError, CpuWaitPolicy, ExecutionContext,
+    with_runtime_engine, with_runtime_engine_or_global, AlreadyInitialized, CpuBackend,
+    CpuExecutionContext, CpuExecutionContextError, CpuThreadError, CpuWaitPolicy, ExecutionContext,
     ExecutionContextEntryError, WaitPolicyAlreadyInitialized,
 };
 #[cfg(feature = "tenferro-cuda")]

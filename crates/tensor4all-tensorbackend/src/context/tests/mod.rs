@@ -468,11 +468,12 @@ fn explicit_paths_stay_independent_of_the_default_context() {
 }
 
 /// An implicit entry on a context-owned runtime runs on that context's engine, not
-/// on the process-global one, and falls back to the global context once the owner
-/// is gone.
+/// on the process-global one. Once the owner is gone the entry refuses with
+/// `NoLiveOwner` instead of substituting the global context (#1378); only the
+/// explicitly named bridge still reaches it.
 #[cfg(feature = "global-defaults")]
 #[test]
-fn runtime_engine_follows_the_owning_context_and_falls_back_after_drop() {
+fn runtime_engine_follows_the_owning_context_and_refuses_after_drop() {
     let default_threads = default_context().with_backend(|backend| backend.num_threads());
     let context_threads = if default_threads == 1 { 2 } else { 1 };
     let context = CpuExecutionContext::from_backend(
@@ -519,17 +520,84 @@ fn runtime_engine_follows_the_owning_context_and_falls_back_after_drop() {
         "the owning context's engine is used"
     );
 
-    // Keep the runtime but drop its owner: the dead entry falls back to the
-    // process-global context's engine.
+    // Keep the runtime but drop its owner: the strict entry refuses instead of
+    // substituting the process-global context (#1378).
     drop(context);
-    let fallback = with_runtime_engine(&runtime, |engine| {
+    let mut ran = false;
+    let refused = with_runtime_engine(&runtime, |_engine| ran = true);
+    assert!(
+        matches!(refused, Err(ExecutionContextEntryError::NoLiveOwner)),
+        "an owner-less runtime must not run on the process-global engine: {refused:?}"
+    );
+    assert!(!ran, "the closure must not run without an owning engine");
+
+    // The explicitly named legacy bridge is the only route to the global engine.
+    let fallback = with_runtime_engine_or_global(&runtime, |engine| {
         engine
             .as_any_mut()
             .downcast_mut::<CpuEngine>()
             .map(|engine| engine.num_threads())
     })
-    .expect("the process-global fallback session entry");
+    .expect("the process-global bridge session entry");
     assert_eq!(fallback, Some(default_threads));
+}
+
+/// The address of the engine `f`'s session entry hands out, as an identity.
+fn engine_address(engine: &mut dyn ExecutionEngine) -> usize {
+    std::ptr::from_mut(engine).cast::<()>() as usize
+}
+
+/// `with_runtime_engine` runs on exactly the owning context's engine instance,
+/// for each of two live contexts, and never on the process-global engine.
+#[test]
+fn runtime_engine_uses_that_exact_owning_engine() {
+    let first = context();
+    let second = context();
+    let first_engine = first
+        .with_session(|engine| engine_address(engine))
+        .expect("first context entry");
+    let second_engine = second
+        .with_session(|engine| engine_address(engine))
+        .expect("second context entry");
+    assert_ne!(first_engine, second_engine);
+
+    let first_runtime = first.eager_runtime().unwrap();
+    let second_runtime = second.eager_runtime().unwrap();
+    assert_eq!(
+        with_runtime_engine(&first_runtime, engine_address).unwrap(),
+        first_engine
+    );
+    assert_eq!(
+        with_runtime_engine(&second_runtime, engine_address).unwrap(),
+        second_engine
+    );
+    // The bridge takes the same owner while it is live.
+    assert_eq!(
+        with_runtime_engine_or_global(&first_runtime, engine_address).unwrap(),
+        first_engine
+    );
+
+    drop(first);
+    assert!(matches!(
+        with_runtime_engine(&first_runtime, engine_address),
+        Err(ExecutionContextEntryError::NoLiveOwner)
+    ));
+    #[cfg(feature = "global-defaults")]
+    {
+        let global_engine = default_context()
+            .with_session(|engine| engine_address(engine))
+            .expect("global context entry");
+        assert_eq!(
+            with_runtime_engine_or_global(&first_runtime, engine_address).unwrap(),
+            global_engine,
+            "the bridge, and only the bridge, takes the process-global engine"
+        );
+    }
+    #[cfg(not(feature = "global-defaults"))]
+    assert!(matches!(
+        with_runtime_engine_or_global(&first_runtime, engine_address),
+        Err(ExecutionContextEntryError::NoContext)
+    ));
 }
 
 /// A default pool built from a thread narrowed to one CPU is still sized and
