@@ -3,6 +3,10 @@ use std::cell::{Cell, RefCell};
 
 const SHAPE: MatrixShape = MatrixShape { rows: 2, cols: 3 };
 
+/// Accounted payload of one cached 2 x 3 `f64` point: the six entries and the
+/// two reference-count words of the shared allocation.
+const POINT_PAYLOAD: usize = 6 * std::mem::size_of::<f64>() + 2 * std::mem::size_of::<usize>();
+
 /// Entry `(i, j)` of the matrix at `x = (a, b)`; distinct for every slot.
 fn value(x: &[usize], i: usize, j: usize) -> f64 {
     1000.0 * x[0] as f64 + 100.0 * x[1] as f64 + 10.0 * i as f64 + j as f64
@@ -58,8 +62,12 @@ fn stats_count_source_points_requests_and_hits() {
     assert_eq!(stats.source_points, 3);
     assert_eq!(stats.entry_requests, 5);
     assert_eq!(stats.cache_hits, 2);
-    assert_eq!(stats.payload_bytes, 3 * 6 * std::mem::size_of::<f64>());
+    assert_eq!(stats.payload_bytes, 3 * POINT_PAYLOAD);
     assert!(stats.table_bytes > 0);
+    assert_eq!(
+        stats.retained_bytes,
+        stats.table_bytes + stats.payload_bytes
+    );
     assert_eq!(seen.get(), 3);
 }
 
@@ -300,7 +308,7 @@ fn miss_split_is_deterministic_and_matches_the_unsplit_run() {
     assert_eq!(stats.source_points, 6);
     assert_eq!(stats.entry_requests, 10);
     assert_eq!(stats.cache_hits, 4);
-    assert_eq!(stats.payload_bytes, 6 * 6 * std::mem::size_of::<f64>());
+    assert_eq!(stats.payload_bytes, 6 * POINT_PAYLOAD);
 }
 
 #[test]
@@ -341,4 +349,64 @@ fn scrambled_requests_keep_every_component_in_its_own_slot() {
         assert_eq!(hit.len(), n);
         assert_eq!(state.finished_stats().source_points, 12);
     }
+}
+
+#[test]
+fn point_payload_counts_entries_and_the_arc_header() {
+    assert_eq!(point_payload_bytes::<f64>(6), POINT_PAYLOAD);
+    assert_eq!(
+        point_payload_bytes::<num_complex::Complex64>(1),
+        16 + 2 * std::mem::size_of::<usize>()
+    );
+    assert_eq!(point_payload_bytes::<f64>(usize::MAX), usize::MAX);
+}
+
+#[test]
+fn wide_matrices_count_toward_the_limit_and_drive_eviction() {
+    let calls = Cell::new(0);
+    let seen = Cell::new(0);
+    let mut state = SourceState::new(layout_source(&calls, &seen), SHAPE, &[3, 4]).unwrap();
+    state.entries(&[(&[0, 0], 0, 0), (&[1, 0], 0, 0)]);
+    let two_points = state.finished_stats();
+    assert_eq!(two_points.payload_bytes, 2 * POINT_PAYLOAD);
+    assert_eq!(
+        two_points.retained_bytes,
+        two_points.table_bytes + two_points.payload_bytes
+    );
+    // The table alone has room for a third entry (capacity 3); the limit below
+    // pays for two payloads only, so the payload is what forces the eviction.
+    state
+        .cache
+        .set_retained_byte_limit(two_points.retained_bytes);
+    state.entries(&[(&[2, 0], 0, 0)]);
+    assert_eq!(state.cache.evicted_entries(), 2);
+    assert_eq!(state.cache.dropped_inserts(), 0);
+    let stats = state.finished_stats();
+    assert_eq!(stats.payload_bytes, POINT_PAYLOAD);
+    assert!(stats.retained_bytes <= two_points.retained_bytes);
+    assert_eq!(stats.source_points, 3);
+
+    // An evicted point is evaluated again; a retained one is not.
+    let value_again = state.entries(&[(&[0, 0], 1, 2), (&[2, 0], 1, 2)]);
+    assert_eq!(
+        value_again,
+        vec![value(&[0, 0], 1, 2), value(&[2, 0], 1, 2)]
+    );
+    assert_eq!(state.finished_stats().source_points, 4);
+}
+
+#[test]
+fn a_matrix_larger_than_the_limit_is_never_retained_but_still_served() {
+    let calls = Cell::new(0);
+    let seen = Cell::new(0);
+    let mut state = SourceState::new(layout_source(&calls, &seen), SHAPE, &[3, 4]).unwrap();
+    state.cache.set_retained_byte_limit(POINT_PAYLOAD);
+    let values = state.entries(&[(&[1, 1], 1, 2)]);
+    assert_eq!(values, vec![value(&[1, 1], 1, 2)]);
+    assert_eq!(state.cache.dropped_inserts(), 1);
+    let stats = state.finished_stats();
+    assert_eq!((stats.retained_bytes, stats.payload_bytes), (0, 0));
+    // The point is evaluated again on the next request.
+    state.entries(&[(&[1, 1], 0, 0)]);
+    assert_eq!(state.finished_stats().source_points, 2);
 }

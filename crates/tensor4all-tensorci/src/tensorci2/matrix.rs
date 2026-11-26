@@ -16,10 +16,15 @@
 //! # Cache memory
 //!
 //! The cache uses the default retained-byte limit
-//! ([`tensor4all_core::DEFAULT_RETAINED_BYTE_LIMIT`]). That limit bounds the
-//! hash-table bytes only; it does not bound the `rows * cols` payload stored per
-//! point. Callers with wide matrices should watch
-//! [`MatrixSamplingStats::payload_bytes`] and bound their problem accordingly.
+//! ([`tensor4all_core::DEFAULT_RETAINED_BYTE_LIMIT`], 256 MiB), and that limit
+//! bounds the hash table **and** the matrix payload: every cached point is
+//! accounted as `rows * cols * size_of::<T>()` bytes of matrix data plus the
+//! two reference-count words of its shared allocation
+//! (`2 * size_of::<usize>()`), see [`MatrixSamplingStats::payload_bytes`]. When
+//! the limit is reached the oldest generation of points is evicted, and a point
+//! requested again is passed to the callback again. At-most-once evaluation
+//! per point therefore holds only while the point stays retained; a fit whose
+//! distinct points exceed the limit re-evaluates evicted ones.
 
 use super::TciLinalg;
 use super::{crossinterpolate2_with_rng_linalg, seeded_rng, TCI2OptimizationResult, TCI2Options};
@@ -63,6 +68,7 @@ pub struct MatrixShape {
 /// let stats = MatrixSamplingStats::default();
 /// assert_eq!(stats.source_points, 0);
 /// assert_eq!(stats.payload_bytes, 0);
+/// assert_eq!(stats.retained_bytes, stats.table_bytes + stats.payload_bytes);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MatrixSamplingStats {
@@ -73,20 +79,20 @@ pub struct MatrixSamplingStats {
     /// Entry requests answered without a new callback evaluation, either from
     /// the cache or from another request for the same point in the same batch.
     pub cache_hits: usize,
-    /// Hash-table bytes retained by the cache
-    /// ([`MultiIndexCache::retained_bytes`]); excludes the matrix payloads.
-    /// The cache runs with the default retained-byte limit
-    /// ([`tensor4all_core::DEFAULT_RETAINED_BYTE_LIMIT`]), which bounds this
-    /// value only.
+    /// Total bytes retained by the cache at the end of the fit
+    /// ([`MultiIndexCache::retained_bytes`]): hash tables plus matrix payloads,
+    /// equal to `table_bytes + payload_bytes`. The cache runs with the default
+    /// retained-byte limit ([`tensor4all_core::DEFAULT_RETAINED_BYTE_LIMIT`]),
+    /// which bounds this value; oldest points are evicted, and so possibly
+    /// evaluated again, when it is reached.
+    pub retained_bytes: usize,
+    /// Hash-table part of [`Self::retained_bytes`] (buckets, keys, the handles
+    /// to the payloads and control bytes).
     pub table_bytes: usize,
-    /// Matrix payload bytes held by the cache:
-    /// `cached points * rows * cols * size_of::<T>()`. The default
-    /// retained-byte limit does **not** bound this value: it counts hash-table
-    /// bytes, not the `rows * cols` payload per point. Callers with wide
-    /// matrices should watch `payload_bytes` and bound their problem (number of
-    /// physical points, matrix size) accordingly. The per-point heap
-    /// overhead of the shared payload allocation (reference-count header) is
-    /// not counted.
+    /// Payload part of [`Self::retained_bytes`]: `cached points * (rows * cols *
+    /// size_of::<T>() + 2 * size_of::<usize>())`, the matrix data of each
+    /// retained point plus the reference-count header of its shared allocation.
+    /// Allocator overhead is not counted.
     pub payload_bytes: usize,
 }
 
@@ -192,7 +198,9 @@ impl<T: Scalar + TTScalar + Default + MatrixLuciScalar> MatrixTCI2Result<T> {
     /// let stats = fit.sampling_stats();
     /// assert!(stats.source_points >= 1);
     /// assert!(stats.source_points <= 3); // only three distinct points exist
-    /// assert_eq!(stats.payload_bytes % (2 * std::mem::size_of::<f64>()), 0);
+    /// let per_point = 2 * std::mem::size_of::<f64>() + 2 * std::mem::size_of::<usize>();
+    /// assert_eq!(stats.payload_bytes % per_point, 0);
+    /// assert_eq!(stats.retained_bytes, stats.table_bytes + stats.payload_bytes);
     /// ```
     pub fn sampling_stats(&self) -> &MatrixSamplingStats {
         &self.stats
@@ -238,6 +246,12 @@ impl<T: Scalar + TTScalar + Default + MatrixLuciScalar> MatrixTCI2Result<T> {
     /// One whole-matrix pass: the row core slab (`rows x r_1`), the middle
     /// cores sliced at `x`, and the column core slab (`r_L x cols`) are
     /// multiplied once. The result is column-major.
+    ///
+    /// The products are plain column-major loops, deliberately not the session's
+    /// `mat_mul`: readout is not a hot path yet, and routing it through the
+    /// session would make its cost depend on a backend that this step does not
+    /// otherwise touch. This is a choice, not an oversight; when readout becomes
+    /// hot it should move to the session.
     ///
     /// # Errors
     ///
@@ -362,11 +376,11 @@ where
 {
     fn new(source: F, shape: MatrixShape, physical_dims: &[usize]) -> Result<Self> {
         let block_len = checked_block_len::<T>(shape)?;
-        let cache = MultiIndexCache::new(physical_dims).map_err(|error| {
-            TCIError::InvalidConfiguration {
+        let cache = MultiIndexCache::new(physical_dims)
+            .map_err(|error| TCIError::InvalidConfiguration {
                 message: format!("cannot key the matrix cache: {error}"),
-            }
-        })?;
+            })?
+            .with_value_payload_bytes(point_payload_bytes::<T>(block_len));
         let max_points_per_call = (isize::MAX as usize / std::mem::size_of::<T>().max(1))
             .checked_div(block_len)
             .unwrap_or(1)
@@ -440,12 +454,28 @@ where
     }
 
     fn finished_stats(&self) -> MatrixSamplingStats {
+        let retained_bytes = self.cache.retained_bytes();
+        let payload_bytes = self
+            .cache
+            .len()
+            .saturating_mul(self.cache.value_payload_bytes());
         MatrixSamplingStats {
-            table_bytes: self.cache.retained_bytes(),
-            payload_bytes: self.cache.len() * self.block_len * std::mem::size_of::<T>(),
+            retained_bytes,
+            table_bytes: retained_bytes.saturating_sub(payload_bytes),
+            payload_bytes,
             ..self.stats
         }
     }
+}
+
+/// Bytes one cached point adds to the retained-byte accounting: its
+/// `block_len` matrix entries plus the two reference-count words of the
+/// `Arc<[T]>` allocation (strong and weak). Saturating, so a block whose byte
+/// count overflows is simply never retained.
+fn point_payload_bytes<T>(block_len: usize) -> usize {
+    block_len
+        .saturating_mul(std::mem::size_of::<T>())
+        .saturating_add(2 * std::mem::size_of::<usize>())
 }
 
 /// `rows * cols`, rejecting zero and sizes whose byte count cannot be allocated.
@@ -524,14 +554,22 @@ fn validate_matrix_problem(
 ///
 /// The points that one solver request needs and that are not cached are passed
 /// to the callback deterministically: in first-occurrence order, in consecutive
-/// chunks of at most `isize::MAX / (size_of::<T>() * rows * cols)` points. A
-/// request therefore costs one callback call unless that bound is exceeded.
+/// chunks of at most `isize::MAX / (size_of::<T>() * rows * cols)` points.
+/// **The callback may therefore be called more than once for one logical
+/// batch** (once per chunk); a request costs a single call unless that bound is
+/// exceeded, and the split never changes the values or the fit. A callback must
+/// not assume that one call sees all the points of a solver step.
 ///
 /// The fit-owned cache uses the default retained-byte limit
-/// ([`tensor4all_core::DEFAULT_RETAINED_BYTE_LIMIT`]). That limit bounds
-/// hash-table bytes only, not the `rows * cols` payload stored per point, so
-/// callers with wide matrices should watch
-/// [`MatrixSamplingStats::payload_bytes`] and bound their problem accordingly.
+/// ([`tensor4all_core::DEFAULT_RETAINED_BYTE_LIMIT`], 256 MiB), which bounds
+/// the hash tables **and** the matrix payloads: each cached point is accounted
+/// as `rows * cols * size_of::<T>() + 2 * size_of::<usize>()` bytes of payload
+/// (the matrix data and the reference-count header of its shared allocation),
+/// see [`MatrixSamplingStats::retained_bytes`]. When the limit is reached the
+/// oldest generation of points is evicted and a point asked for again is
+/// evaluated again: "not asked for a point that is still cached" is the
+/// guarantee, and at-most-once evaluation holds only while a point stays
+/// retained. A matrix too large for the limit is never retained.
 ///
 /// Internally the problem is the chain `[rows, d_1, .., d_L, cols]` with
 /// `f(i, x, j) = F(x)[i, j]`, solved by the unchanged scalar TCI2 machinery.
@@ -615,12 +653,13 @@ where
 /// global pivot search, like
 /// [`crossinterpolate2_with_rng`](super::crossinterpolate2_with_rng).
 ///
-/// The callback contract, the deterministic batch split and the cache memory
-/// note of [`crossinterpolate2_matrix`] apply unchanged: the cache uses the
-/// default retained-byte limit
-/// ([`tensor4all_core::DEFAULT_RETAINED_BYTE_LIMIT`]), which bounds hash-table
-/// bytes only, not the `rows * cols` payload per point
-/// ([`MatrixSamplingStats::payload_bytes`]).
+/// The callback contract, the deterministic batch split (the callback may be
+/// called more than once for one logical batch) and the cache memory note of
+/// [`crossinterpolate2_matrix`] apply unchanged: the cache uses the default
+/// retained-byte limit ([`tensor4all_core::DEFAULT_RETAINED_BYTE_LIMIT`]), which
+/// bounds hash tables and matrix payloads together
+/// ([`MatrixSamplingStats::retained_bytes`]); evicted points are evaluated
+/// again.
 ///
 /// # Errors
 ///

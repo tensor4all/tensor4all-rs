@@ -6,7 +6,7 @@ use num_complex::Complex64;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use tensor4all_core::{MatrixLuciScalar, MultiIndex, Scalar};
-use tensor4all_simplett::TTScalar;
+use tensor4all_simplett::{AbstractTensorTrain, TTScalar};
 use tensor4all_tensorbackend::Matrix;
 use tensor4all_tensorci::{
     crossinterpolate2, crossinterpolate2_matrix, MatrixShape, PivotSearchStrategy, TCI2Options,
@@ -459,4 +459,76 @@ fn unrelated_components_rook_f64() {
 #[test]
 fn unrelated_components_rook_complex64() {
     unrelated_components::<Complex64>(PivotSearchStrategy::Rook);
+}
+
+/// Pins the callback layout (point-major blocks, column-major inside) and the
+/// whole-matrix readout to the scalar semantics: at `rows = cols = 1` the matrix
+/// written through the layout and read back through `evaluate` equals, bit for
+/// bit, what `crossinterpolate2` produces for the same function, options, seed
+/// and initial point on the chain `[1, d_1, .., d_L, 1]`.
+///
+/// The reference is the chain with the two unit sites, not the plain
+/// `[d_1, .., d_L]` chain: that one has two bonds fewer, so the solver sweeps
+/// different bonds. Measured on this target (Full, f64), it selects the same
+/// pivots, ranks and termination, but its error history differs in one entry and
+/// 8 of the 24 grid values differ from the matrix fit by at most one unit in the
+/// last place (relative `1.5e-16`). Bit identity against the plain chain
+/// therefore does not hold, and is not asserted.
+fn one_by_one_layout_is_bit_identical<T: TestScalar + PartialEq + std::fmt::Debug>(
+    pivot_search: PivotSearchStrategy,
+) {
+    let shape = MatrixShape { rows: 1, cols: 1 };
+    let entry = |x: &[usize]| target::<T>(shape, x)[[0, 0]];
+    let pivot = vec![0, 1, 2, 1, 0];
+
+    let fit = crossinterpolate2_matrix::<T, _>(
+        |points: &[Vec<usize>], out: &mut [T]| {
+            assert_eq!(out.len(), points.len());
+            fill_blocks(points, out, |x| target::<T>(shape, x));
+        },
+        shape,
+        PHYSICAL_DIMS.to_vec(),
+        vec![pivot.clone()],
+        options(pivot_search),
+    )
+    .unwrap();
+
+    let value = |index: &MultiIndex| entry(&index[1..index.len() - 1]);
+    let scalar = crossinterpolate2::<T, _, _>(
+        value,
+        Some(|indices: &[MultiIndex]| indices.iter().map(value).collect()),
+        internal_dims(shape, &PHYSICAL_DIMS),
+        vec![pivot],
+        options(pivot_search),
+    )
+    .unwrap();
+    let scalar_train = scalar.tci.to_tensor_train().unwrap();
+
+    for x in all_points(&PHYSICAL_DIMS) {
+        let from_matrix = fit.evaluate(&x).unwrap()[[0, 0]];
+        let from_scalar = scalar_train
+            .evaluate(&[vec![0], x.clone(), vec![0]].concat())
+            .unwrap();
+        assert_eq!(from_matrix, from_scalar, "x = {x:?}");
+    }
+}
+
+#[test]
+fn one_by_one_layout_is_bit_identical_full_f64() {
+    one_by_one_layout_is_bit_identical::<f64>(PivotSearchStrategy::Full);
+}
+
+#[test]
+fn one_by_one_layout_is_bit_identical_full_complex64() {
+    one_by_one_layout_is_bit_identical::<Complex64>(PivotSearchStrategy::Full);
+}
+
+#[test]
+fn one_by_one_layout_is_bit_identical_rook_f64() {
+    one_by_one_layout_is_bit_identical::<f64>(PivotSearchStrategy::Rook);
+}
+
+#[test]
+fn one_by_one_layout_is_bit_identical_rook_complex64() {
+    one_by_one_layout_is_bit_identical::<Complex64>(PivotSearchStrategy::Rook);
 }

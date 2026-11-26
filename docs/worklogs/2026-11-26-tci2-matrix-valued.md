@@ -4,7 +4,7 @@
 
 - Matrix indices are the two boundary sites of an ordinary chain: internal dims `[rows, d_1..d_L, cols]`, `f(i, x, j) = F(x)[i, j]`. Both entry points delegate to the private `crossinterpolate2_with_rng_linalg`, so pivot kernels, RNG use, convergence and normalization are the scalar ones and no implicit-engine site is added (the ratchet stayed at 314 sites; no `_on_session` variant).
 - The callback is one infallible batched function `source(points, out)`. Layout is point-major blocks, column-major inside a block (`out[p*rows*cols + i + rows*j]`). The library allocates `out` filled with `T::default()`; the callback must overwrite every entry.
-- One fit-owned default-limit `MultiIndexCache<Box<[T]>>` keyed on `x` serves initialization, sweeps, global search and finalization. No custom cache policy. Payload bytes are reported next to the table bytes because the cache limit counts table bytes only.
+- One fit-owned default-limit `MultiIndexCache<Arc<[T]>>` keyed on `x` serves initialization, sweeps, global search and finalization. No custom cache policy. Payload bytes are reported next to the table bytes; since the 12:53 review the limit counts both (see below).
 - Only entries the solver requests update the amplitude scale, so `tolerance` and `normalize_error` keep their endpoint-problem meaning.
 - `evaluate(x)` is one whole-matrix pass with plain column-major loops (row slab, middle cores at `x`, column slab). It uses no engine, so it adds no engine site. Batches larger than the addressable size are split into several callback calls instead of failing.
 - The scalar tensor train keeps its invariants (unit boundary bonds, `L+2` cores). Folding is out of scope.
@@ -24,7 +24,16 @@
 - Condition 2, docs: the cache uses `DEFAULT_RETAINED_BYTE_LIMIT`, which bounds hash-table bytes only, not the `rows * cols` payload per point; callers with wide matrices watch `payload_bytes`. Stated in the module docs, on `MatrixSamplingStats::{table_bytes, payload_bytes}` and on both entry points. `crossinterpolate2_matrix_with_rng` now lists its concrete `# Errors` variants (public-error-docs check).
 
 - Fallible callback variant: separate change, not part of step 0.
-- Payload-aware cache limit in `tensor4all-core`: follow-up. `payload_bytes` stays reported, and the docs state that the limit covers the table only.
-- `_on_session` variant: not needed for step 0.
-- Plain-loop `evaluate` readout accepted; revisit only if folding changes core sizes.
+- Payload-aware cache limit in `tensor4all-core`: ~~follow-up~~ reversed at 12:53, see the next section.
+- `_on_session` variant: not needed for step 0 (confirmed at 12:53).
+- Plain-loop `evaluate` readout accepted (12:53: with a doc comment saying why).
 - No timings or performance claims in this step. The shared-sampling comparison from #1463 gates the folding/benefit PR.
+
+## 12:53 review decisions (supersede the 10:20 deferrals)
+
+- **Payload counted in `retained_bytes`.** Same bug class as the `tcontract` plan cache that retained 19 GiB while reporting 0.08 MiB. `MultiIndexCache::with_value_payload_bytes(bytes_per_value)` (core, default 0, so every other user is unchanged) adds `len() * bytes_per_value` to `retained_bytes()`; the byte limit and the generation eviction bound table and payload together, and one value that cannot fit is a dropped insert. The matrix fit declares `rows*cols*size_of::<T>() + 2*size_of::<usize>()` (matrix data plus the `Arc` count words) per point. `MatrixSamplingStats` reports `retained_bytes` (total), `table_bytes` and `payload_bytes`. Eviction means re-evaluation; at-most-once holds only while points are retained.
+- **Fallible callback:** infallible in step 0; if needed, add it once for both entry sets (scalar and matrix), not only here.
+- **`_on_session`:** not now (parity with the scalar set later).
+- **Readout loops:** documented on `evaluate` as a choice: not the hot path yet, and the session `mat_mul` would tie readout cost to a backend step 0 does not otherwise touch; move to the session when it becomes hot.
+- **Split batches:** the callback may be called more than once for one logical batch; stated in the contract of both entry points. The split-equals-unsplit unit test stays.
+- **Layout bit-identity test:** at `rows = cols = 1` the matrix written through the callback layout and read through `evaluate` is compared bit for bit with the scalar path (see the PR for the chain it is compared with).
