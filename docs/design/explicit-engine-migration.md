@@ -228,7 +228,7 @@ match exec {
     Exec::Cuda(_) => tensor4all_core::matrix_luci_row_interpolation_owned_in(
         matrix,
         Some(options),
-        &tensor4all_tensorbackend::default_cpu_execution_context(),   // <-- :118
+        &tensor4all_core::legacy::default_cpu_execution_context().map_err(TreeRsiError::numerical)?,   // <-- :118 (the call was wrapped in `Exec::Cuda(_) => { let context = ...; ... &context }`)
     ),
 }
 ```

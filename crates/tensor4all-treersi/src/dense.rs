@@ -21,7 +21,7 @@ pub(crate) enum Exec<'a, 'session> {
     /// A caller-held CPU session; nothing else is entered.
     Session(&'a mut Session<'session>),
     /// A CUDA context, entered per contraction, with the CPU context that runs
-    /// the host-side rank decision (second field). The CPU context is owned by
+    /// the solve step of the host-side rank decision (second field). The CPU context is owned by
     /// the run that built this value, never looked up from a process-global.
     #[cfg(feature = "tenferro-cuda")]
     Cuda(

@@ -97,11 +97,11 @@ fn host_core_values<T: TreeRsiScalar>(
 /// The local rank decision: a host LU pivot search with a lower-triangular solve.
 ///
 /// On a session the solve runs on that session. A CUDA run has no device twin
-/// for it, so it runs on the CPU context carried by [`Exec::Cuda`], which
+/// for it, so its lower-triangular solve runs on the CPU context carried by [`Exec::Cuda`], which
 /// `run_in` creates for that run: host dependency 1 of 2 of a CUDA run (the
 /// other is the input-core readback in [`host_core_values`]). See #1158 step 2
 /// for the device-resident sketch. This arm never reads a process-global
-/// context for the rank decision, so it never contends with another thread
+/// context for the solve, so it never contends with another thread
 /// holding the global backend. (A CUDA run as a whole still needs
 /// `global-defaults` for the readback in [`host_core_values`].)
 fn row_interpolation<T: TreeRsiScalar>(
@@ -714,8 +714,9 @@ pub(crate) fn run_in<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
         #[cfg(feature = "tenferro-cuda")]
         ExecutionContext::Cuda(cuda) => {
             validate()?;
-            // A run-owned single-thread CPU context for the host rank decision
-            // (an LU pivot search on small matrices); dropped with the run.
+            // A run-owned single-thread CPU context for the lower-triangular
+            // solve of the rank decision (the pivot search itself is host-only
+            // and enters no context); dropped with the run.
             let cpu = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
                 tensor4all_tensorbackend::CpuBackend::with_threads(1)
                     .map_err(TreeRsiError::numerical)?,
