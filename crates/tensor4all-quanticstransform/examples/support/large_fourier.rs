@@ -153,14 +153,21 @@ pub(crate) fn run_case(
     let mut axes = Vec::with_capacity(dimensions);
     let mut tensors = Vec::with_capacity(bits * dimensions);
     for (axis, &shift) in shifts.iter().take(dimensions).enumerate() {
-        let (factor, sites) = interpolate_single_scale(
-            |x| gaussian(x, shift) / (n as f64).sqrt(),
-            0.0,
-            1.0,
-            bits,
-            48,
-            &InterpolativeQttOptions::default(),
-        )?;
+        // The example binary owns its context and lends the engine to the builder.
+        let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+            tensor4all_tensorbackend::CpuBackend::with_threads(1)?,
+        );
+        let (factor, sites) = context.with_session(|exec| {
+            interpolate_single_scale(
+                exec,
+                |x| gaussian(x, shift) / (n as f64).sqrt(),
+                0.0,
+                1.0,
+                bits,
+                48,
+                &InterpolativeQttOptions::default(),
+            )
+        })??;
         for bit in 0..sites.len() {
             let node = factor.node_index(&bit).ok_or("missing Gaussian node")?;
             let mut tensor = factor

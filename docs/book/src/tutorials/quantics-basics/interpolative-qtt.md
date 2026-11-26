@@ -19,14 +19,18 @@ with all bits zero evaluates the left endpoint of the sampled interval.
 use tensor4all_interpolativeqtt::{interpolate_single_scale, InterpolativeQttOptions};
 
 let options = InterpolativeQttOptions::default().with_tolerance(1e-12);
-let (tree, sites) = interpolate_single_scale(
+let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+    tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+);
+let (tree, sites) = context
+    .with_session(|exec| interpolate_single_scale(exec,
     |x| (-x * x).exp(),
     -1.0,
     1.0,
     5,
     12,
     &options,
-)?;
+))??;
 
 let value = tree.evaluate_point(&sites, &[0, 0, 0, 0, 0])?.real();
 assert!((value - (-1.0_f64).exp()).abs() < 1e-10);
@@ -45,7 +49,11 @@ use tensor4all_interpolativeqtt::{interpolate_multi_scale, InterpolativeQttOptio
 let epsilon = 0.2_f64;
 let inverse_square = |x: f64| 1.0 / (x.abs() + epsilon).powi(2);
 let options = InterpolativeQttOptions::default().with_tolerance(1e-12);
-let (tree, sites) = interpolate_multi_scale(
+let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+    tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+);
+let (tree, sites) = context
+    .with_session(|exec| interpolate_multi_scale(exec,
     inverse_square,
     -1.0,
     1.0,
@@ -53,7 +61,7 @@ let (tree, sites) = interpolate_multi_scale(
     16,
     &[0.0],
     &options,
-)?;
+))??;
 
 let value = tree.evaluate_point(&sites, &[0, 0, 0, 0, 0])?.real();
 assert!((value - inverse_square(-1.0)).abs() < 1e-8);
@@ -75,7 +83,11 @@ let radial_inverse_square = |x: &[f64]| {
     1.0 / (x[0] * x[0] + x[1] * x[1] + epsilon * epsilon)
 };
 let options = InterpolativeQttOptions::default().with_tolerance(1e-12);
-let (tree, sites) = interpolate_multi_scale_nd(
+let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+    tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+);
+let (tree, sites) = context
+    .with_session(|exec| interpolate_multi_scale_nd(exec,
     radial_inverse_square,
     &[-1.0, -1.0],
     &[1.0, 1.0],
@@ -83,7 +95,7 @@ let (tree, sites) = interpolate_multi_scale_nd(
     8,
     &[vec![0.0, 0.0]],
     &options,
-)?;
+))??;
 
 let value = tree.evaluate_point(&sites, &[0, 0, 0, 0])?.real();
 assert!((value - radial_inverse_square(&[-1.0, -1.0])).abs() < 1e-8);

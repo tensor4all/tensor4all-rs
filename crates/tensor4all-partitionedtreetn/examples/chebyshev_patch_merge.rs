@@ -92,14 +92,21 @@ fn embed(
     target: &SiteIndexNetwork<usize, DynIndex>,
 ) -> Result<SubDomainTreeTN<usize>, Box<dyn Error>> {
     let depth = patch.prefix[0].len();
-    let (mut tree, local_sites) = interpolate_single_scale_nd(
-        |x: &[f64]| patch_polynomial(patch, basis, x),
-        &patch.lower,
-        &patch.upper,
-        bits - depth,
-        degree,
-        &InterpolativeQttOptions::default().with_tolerance(1e-14),
-    )?;
+    // The example binary owns its context and lends the engine to the builder.
+    let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+        tensor4all_tensorbackend::CpuBackend::with_threads(1)?,
+    );
+    let (mut tree, local_sites) = context.with_session(|exec| {
+        interpolate_single_scale_nd(
+            exec,
+            |x: &[f64]| patch_polynomial(patch, basis, x),
+            &patch.lower,
+            &patch.upper,
+            bits - depth,
+            degree,
+            &InterpolativeQttOptions::default().with_tolerance(1e-14),
+        )
+    })??;
     // Attach the prefix as one-hot sites so that every physical site exists.
     let mut first = tree.node_index(&0).ok_or("missing first QTT node")?;
     for level in (0..depth).rev() {

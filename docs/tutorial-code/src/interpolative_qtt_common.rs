@@ -100,6 +100,17 @@ pub fn interpolation_options(config: &InterpolativeQttTutorialConfig) -> Interpo
         .with_max_bond_dim(config.max_bond_dim)
 }
 
+/// The tutorial binary owns its execution context and lends the engine to each
+/// builder (tensor4all-rs#1379).
+fn with_tutorial_engine<R>(
+    body: impl FnOnce(&mut dyn tensor4all_tensorbackend::ExecutionEngine) -> R,
+) -> Result<R, Box<dyn Error>> {
+    let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+        tensor4all_tensorbackend::CpuBackend::with_threads(1)?,
+    );
+    Ok(context.with_session(|engine| body(engine))?)
+}
+
 /// Build the smooth one-dimensional single-scale QTT.
 /// # Errors
 ///
@@ -111,14 +122,17 @@ pub fn build_single_scale_smooth_qtt(
     config: &InterpolativeQttTutorialConfig,
 ) -> Result<InterpolativeQtt, Box<dyn Error>> {
     let options = interpolation_options(config);
-    Ok(interpolate_single_scale(
-        smooth_target,
-        config.lower_bound,
-        config.upper_bound,
-        config.bits_1d,
-        config.single_scale_degree,
-        &options,
-    )?)
+    Ok(with_tutorial_engine(|exec| {
+        interpolate_single_scale(
+            exec,
+            smooth_target,
+            config.lower_bound,
+            config.upper_bound,
+            config.bits_1d,
+            config.single_scale_degree,
+            &options,
+        )
+    })??)
 }
 
 /// Build the one-dimensional multiscale inverse-square QTT.
@@ -133,15 +147,18 @@ pub fn build_multi_scale_inverse_square_1d_qtt(
 ) -> Result<InterpolativeQtt, Box<dyn Error>> {
     let options = interpolation_options(config);
     let epsilon = config.epsilon;
-    Ok(interpolate_multi_scale(
-        move |x| softened_inverse_square_1d(x, epsilon),
-        config.lower_bound,
-        config.upper_bound,
-        config.bits_1d,
-        config.multi_scale_degree_1d,
-        &[0.0],
-        &options,
-    )?)
+    Ok(with_tutorial_engine(|exec| {
+        interpolate_multi_scale(
+            exec,
+            move |x| softened_inverse_square_1d(x, epsilon),
+            config.lower_bound,
+            config.upper_bound,
+            config.bits_1d,
+            config.multi_scale_degree_1d,
+            &[0.0],
+            &options,
+        )
+    })??)
 }
 
 /// Build the two-dimensional multiscale radial inverse-square QTT.
@@ -160,15 +177,18 @@ pub fn build_multi_scale_inverse_square_2d_qtt(
     let upper = [config.upper_bound, config.upper_bound];
     let cusp_locations = vec![vec![0.0, 0.0]];
 
-    Ok(interpolate_multi_scale_nd(
-        move |coords| softened_inverse_square_2d(coords, epsilon),
-        &lower,
-        &upper,
-        config.bits_2d,
-        config.multi_scale_degree_2d,
-        &cusp_locations,
-        &options,
-    )?)
+    Ok(with_tutorial_engine(|exec| {
+        interpolate_multi_scale_nd(
+            exec,
+            move |coords| softened_inverse_square_2d(coords, epsilon),
+            &lower,
+            &upper,
+            config.bits_2d,
+            config.multi_scale_degree_2d,
+            &cusp_locations,
+            &options,
+        )
+    })??)
 }
 
 fn grid_1d(bits: usize, lower: f64, upper: f64) -> Result<DiscretizedGrid, Box<dyn Error>> {
