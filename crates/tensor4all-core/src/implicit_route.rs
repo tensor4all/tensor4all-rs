@@ -71,6 +71,16 @@ pub fn default_cpu_execution_context(
     }
 }
 
+/// Run `f` on the engine of the context owning `runtime`, or, with
+/// `global-defaults`, on the process-global CPU context when no live context
+/// owns it (tensor4all-rs#1378).
+///
+/// The strict [`tensor4all_tensorbackend::with_runtime_engine`] refuses an
+/// owner-less runtime; this bridge is the one explicit place where an implicit
+/// entry still accepts the process-global engine. Without `global-defaults` it
+/// refuses with `ExecutionContextEntryError::NoContext`.
+pub use tensor4all_tensorbackend::with_runtime_engine_or_global;
+
 /// Whether this build of `tensor4all-core` has the process-global route.
 ///
 /// A crate cannot read another crate's Cargo features with `cfg`, so a test or

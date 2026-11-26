@@ -13,7 +13,7 @@ use tensor4all_tensorbackend::{
     BackendScalar, ScalarTensorElement, ScalarValue, Storage, SumFromStorage,
 };
 
-use crate::defaults::eager_session::{with_eager_session, with_eager_session_typed};
+use crate::defaults::eager_session::{with_eager_session, with_eager_session_typed, EngineRoute};
 use crate::defaults::idx_tensor::IdxTensor;
 
 #[cfg(test)]
@@ -220,11 +220,12 @@ impl AnyScalar {
     {
         let lhs_inner = lhs.as_tensor()?.as_inner()?;
         let rhs_inner = rhs.as_tensor()?.as_inner()?;
-        let result = with_eager_session_typed(lhs_inner.runtime(), None, |session| {
-            f(session, lhs_inner, rhs_inner)
-        })
-        .map_err(|error| operation_error(op, error))?
-        .map_err(|error| operation_error(op, error))?;
+        let result =
+            with_eager_session_typed(lhs_inner.runtime(), EngineRoute::Legacy, |session| {
+                f(session, lhs_inner, rhs_inner)
+            })
+            .map_err(|error| operation_error(op, error))?
+            .map_err(|error| operation_error(op, error))?;
         Self::from_tensor_result(IdxTensor::from_inner(vec![], result), op)
     }
 
@@ -240,9 +241,11 @@ impl AnyScalar {
         E: From<tenferro_ad::Error> + std::error::Error + Send + Sync + 'static,
     {
         let inner = input.as_tensor()?.as_inner()?;
-        let result = with_eager_session_typed(inner.runtime(), None, |session| f(session, inner))
-            .map_err(|error| operation_error(op, error))?
-            .map_err(|error| operation_error(op, error))?;
+        let result = with_eager_session_typed(inner.runtime(), EngineRoute::Legacy, |session| {
+            f(session, inner)
+        })
+        .map_err(|error| operation_error(op, error))?
+        .map_err(|error| operation_error(op, error))?;
         Self::from_tensor_result(IdxTensor::from_inner(vec![], result), op)
     }
 
@@ -638,9 +641,11 @@ impl AnyScalar {
     /// ```
     pub fn backward(&self) -> std::result::Result<(), AnyScalarError> {
         let inner = self.as_tensor()?.as_inner()?;
-        with_eager_session(inner.runtime(), None, |session| session.backward(inner))
-            .map(|_| ())
-            .map_err(|error| AnyScalarError::from(anyhow::Error::new(error)))
+        with_eager_session(inner.runtime(), EngineRoute::Legacy, |session| {
+            session.backward(inner)
+        })
+        .map(|_| ())
+        .map_err(|error| AnyScalarError::from(anyhow::Error::new(error)))
     }
 
     /// Returns a detached copy of this scalar.
@@ -670,8 +675,10 @@ impl AnyScalar {
     pub fn detach(&self) -> std::result::Result<Self, AnyScalarError> {
         let tensor = self.as_tensor()?;
         let inner = tensor.as_inner()?;
-        let detached = with_eager_session(inner.runtime(), None, |session| session.detach(inner))
-            .map_err(|error| AnyScalarError::from(anyhow::Error::new(error)))?;
+        let detached = with_eager_session(inner.runtime(), EngineRoute::Legacy, |session| {
+            session.detach(inner)
+        })
+        .map_err(|error| AnyScalarError::from(anyhow::Error::new(error)))?;
         Self::from_tensor(IdxTensor::from_inner(vec![], detached)?).map_err(AnyScalarError::from)
     }
 

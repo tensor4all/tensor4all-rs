@@ -252,3 +252,109 @@ mod shared_runtime {
         assert!(!ran.load(Ordering::SeqCst), "refused before any work");
     }
 }
+
+// ---------------------------------------------------------------------------
+// #1378: every entry names its engine route; no `None` that silently means the
+// process-global context.
+// ---------------------------------------------------------------------------
+
+mod engine_route {
+    use std::sync::Arc;
+
+    use tenferro_tensor::Engine;
+    use tensor4all_tensorbackend::{
+        CpuBackend, CpuExecutionContext, ExecutionContext, ExecutionContextEntryError,
+    };
+
+    use super::super::{with_engine, EngineRoute};
+    use crate::IdxTensorError;
+
+    fn context() -> Arc<CpuExecutionContext> {
+        Arc::new(CpuExecutionContext::from_backend(
+            CpuBackend::with_threads(1).unwrap(),
+        ))
+    }
+
+    fn engine_address(engine: &mut dyn Engine) -> usize {
+        std::ptr::from_mut(engine).cast::<()>() as usize
+    }
+
+    /// The engine address a context's own session entry hands out.
+    fn own_engine(context: &CpuExecutionContext) -> usize {
+        context
+            .with_session(|engine| {
+                let engine: &mut dyn Engine = engine;
+                engine_address(engine)
+            })
+            .unwrap()
+    }
+
+    /// The engine address `route` selects for an operand of `runtime`.
+    fn selected(
+        runtime: &Arc<tenferro_ad::EagerRuntime>,
+        route: EngineRoute<'_>,
+    ) -> Result<usize, IdxTensorError> {
+        with_engine(runtime, route, |engine| {
+            Ok::<_, std::io::Error>(engine_address(engine))
+        })
+    }
+
+    /// A caller's context is used exactly, even when the operand's runtime is
+    /// owned by another live context.
+    #[test]
+    fn context_route_runs_on_that_exact_engine() {
+        let caller = context();
+        let owner = context();
+        let runtime = owner.eager_runtime().unwrap();
+        let caller_context = ExecutionContext::Cpu(Arc::clone(&caller));
+
+        let used = selected(&runtime, EngineRoute::Context(&caller_context)).unwrap();
+        assert_eq!(used, own_engine(&caller));
+        assert_ne!(used, own_engine(&owner));
+
+        // An optional context that is present is the same exact route.
+        let forwarded = selected(
+            &runtime,
+            EngineRoute::context_or_legacy(Some(&caller_context)),
+        )
+        .unwrap();
+        assert_eq!(forwarded, own_engine(&caller));
+    }
+
+    /// The legacy bridge takes the live owner's engine, and only once the owner
+    /// is gone the process-global one (or a refusal without `global-defaults`).
+    #[test]
+    fn legacy_route_is_the_only_route_to_the_global_engine() {
+        let owner = context();
+        let runtime = owner.eager_runtime().unwrap();
+        let owner_engine = own_engine(&owner);
+        assert_eq!(
+            selected(&runtime, EngineRoute::Legacy).unwrap(),
+            owner_engine
+        );
+        assert_eq!(
+            selected(&runtime, EngineRoute::context_or_legacy(None)).unwrap(),
+            owner_engine
+        );
+
+        drop(owner);
+        // The strict runtime entry no longer substitutes the global context.
+        assert!(matches!(
+            tensor4all_tensorbackend::with_runtime_engine(&runtime, |_| ()),
+            Err(ExecutionContextEntryError::NoLiveOwner)
+        ));
+        let legacy = selected(&runtime, EngineRoute::Legacy);
+        #[cfg(feature = "global-defaults")]
+        assert_eq!(
+            legacy.unwrap(),
+            own_engine(&tensor4all_tensorbackend::default_cpu_execution_context())
+        );
+        #[cfg(not(feature = "global-defaults"))]
+        assert!(matches!(
+            legacy,
+            Err(IdxTensorError::EngineEntry {
+                source: ExecutionContextEntryError::NoContext
+            })
+        ));
+    }
+}

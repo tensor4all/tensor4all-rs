@@ -32,7 +32,7 @@
 //! # }
 //! ```
 
-use super::eager_session::with_eager_session;
+use super::eager_session::{with_eager_session, EngineRoute};
 use crate::defaults::idx_tensor::unfold_split_inner;
 use crate::defaults::DynIndex;
 use crate::{contract_pair, unfold_split, AnyScalar, IdxTensor, IdxTensorError};
@@ -413,9 +413,11 @@ fn factorize_gram(
         .eigenvectors
         .as_inner()
         .map_err(FactorizeError::ComputationError)?;
-    let basis_inner = with_eager_session(eigenvectors_inner.runtime(), None, |session| {
-        session.take_cols(eigenvectors_inner, &retained_columns)
-    })
+    let basis_inner = with_eager_session(
+        eigenvectors_inner.runtime(),
+        EngineRoute::Legacy,
+        |session| session.take_cols(eigenvectors_inner, &retained_columns),
+    )
     .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
     let bond_index = DynIndex::new_bond(rank)
         .map_err(|error| FactorizeError::ComputationError(anyhow::anyhow!(error)))?;
@@ -511,7 +513,7 @@ fn reshape_factor(tensor: IdxTensor, indices: Vec<DynIndex>) -> Result<IdxTensor
     let inner = tensor
         .as_inner()
         .map_err(FactorizeError::ComputationError)?;
-    let inner = with_eager_session(inner.runtime(), None, |session| {
+    let inner = with_eager_session(inner.runtime(), EngineRoute::Legacy, |session| {
         session.reshape(inner, &dims)
     })
     .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;

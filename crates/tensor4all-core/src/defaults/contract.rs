@@ -24,7 +24,7 @@ use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use super::eager_session::with_eager_session;
+use super::eager_session::{with_eager_session, EngineRoute};
 use anyhow::Result;
 use petgraph::algo::connected_components;
 use petgraph::prelude::*;
@@ -735,7 +735,7 @@ fn contract_owned_with_options_impl(
                     Ok((
                         {
                             let inner = tensor.as_inner()?;
-                            with_eager_session(inner.runtime(), None, |session| {
+                            with_eager_session(inner.runtime(), EngineRoute::Legacy, |session| {
                                 session.duplicate_value(inner)
                             })?
                         },
@@ -1068,7 +1068,7 @@ fn execute_contraction_plan(
             .first()
             .map(|operand| operand.runtime())
             .ok_or_else(|| anyhow::anyhow!("No tensors to contract"))?;
-        let result = with_eager_session(runtime, None, |session| {
+        let result = with_eager_session(runtime, EngineRoute::Legacy, |session| {
             session.einsum(&operands, &subscripts)
         })?;
         return IdxTensor::from_inner_with_axis_classes(
@@ -1118,7 +1118,7 @@ fn execute_contraction_plan(
             .first()
             .map(|operand| operand.runtime())
             .ok_or_else(|| anyhow::anyhow!("No tensors to contract"))?;
-        let result = with_eager_session(runtime, None, |session| {
+        let result = with_eager_session(runtime, EngineRoute::Legacy, |session| {
             session.einsum(&operands, &subscripts)
         })?;
         return IdxTensor::from_inner_with_axis_classes(

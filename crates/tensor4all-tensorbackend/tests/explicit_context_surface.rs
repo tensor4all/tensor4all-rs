@@ -92,9 +92,9 @@ fn implicit_route_runs_on_the_owning_context_engine() {
     assert_eq!(threads, Some(1));
 }
 
-/// With no process-global context, a runtime whose owning context is gone has
-/// no engine to run on: the entry is refused instead of choosing one.
-#[cfg(not(feature = "global-defaults"))]
+/// A runtime whose owning context is gone has no engine to run on: the strict
+/// entry refuses with `NoLiveOwner` in every build instead of choosing one
+/// (#1378).
 #[test]
 fn implicit_route_refuses_a_runtime_without_a_live_owner() {
     use tensor4all_tensorbackend::{with_runtime_engine, ExecutionContextEntryError};
@@ -104,6 +104,22 @@ fn implicit_route_refuses_a_runtime_without_a_live_owner() {
         ctx.eager_runtime().unwrap()
     };
     let error = with_runtime_engine(&runtime, |_| ()).unwrap_err();
+    assert!(matches!(error, ExecutionContextEntryError::NoLiveOwner));
+    assert!(error.to_string().contains("no live owner"));
+}
+
+/// With no process-global context, even the explicitly named legacy bridge has
+/// nothing to fall back to and refuses.
+#[cfg(not(feature = "global-defaults"))]
+#[test]
+fn legacy_bridge_refuses_without_global_defaults() {
+    use tensor4all_tensorbackend::{with_runtime_engine_or_global, ExecutionContextEntryError};
+
+    let runtime = {
+        let ctx = context();
+        ctx.eager_runtime().unwrap()
+    };
+    let error = with_runtime_engine_or_global(&runtime, |_| ()).unwrap_err();
     assert!(matches!(error, ExecutionContextEntryError::NoContext));
     assert!(error.to_string().contains("no execution context"));
 }
