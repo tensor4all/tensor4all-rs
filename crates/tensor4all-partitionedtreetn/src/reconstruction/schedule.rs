@@ -172,8 +172,8 @@ pub struct MergeRefineOptions<V> {
     ///
     /// `None` computes every region at [`Self::output_depth`]. `Some(regions)`
     /// computes only the regions that intersect one of `regions`, and a region
-    /// that intersects none of them is never restricted, merged, retained or
-    /// counted, so both the work and the result shrink with the selection. Each
+    /// that intersects none of them is never restricted, merged, retained, or
+    /// counted as a result, so both the work and the result shrink with the selection. Each
     /// [`OutputRegion`] is a static bit prefix per coordinate group: it fixes the
     /// leading output bits of that group and leaves the rest free, so a region at
     /// the full output depth names one single output coordinate and a shallower
