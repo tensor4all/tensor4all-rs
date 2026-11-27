@@ -15,7 +15,12 @@ def main():
     parser.add_argument("--binaries", action="store_true")
     args = parser.parse_args()
     manifest = json.loads((HERE / "raw/manifest.json").read_text())
-    for field, filename in [("protocol", "protocol.json"), ("controller", "run.py"),
+    controllers = [HERE / "run.py", HERE / "run-recorded.py"]
+    controller = next((p for p in controllers if p.is_file()
+                       and diagnostic.sha(p) == manifest["controller_sha256"]), None)
+    assert controller is not None, "controller"
+    print(f"Controller pin: {controller.name}")
+    for field, filename in [("protocol", "protocol.json"),
                             ("instrument", "instrument.py"), ("profiler", "profiler.rs"),
                             ("patch", "profiling.patch")]:
         assert diagnostic.sha(HERE / filename) == manifest[field + "_sha256"], filename

@@ -1,4 +1,5 @@
 #![cfg(feature = "partitioned")]
+use tensor4all_partitionedtreetn::reconstruction::MergePolicy;
 mod support;
 use num_complex::Complex64;
 use std::collections::{HashMap, HashSet};
@@ -151,6 +152,95 @@ fn nonuniform_patches_match_constructed_operator_and_dft() {
         }
     }
 }
+#[test]
+fn tolerance_full_depth_refines_two_axis_outputs_onto_a_shared_layout() {
+    let mut sites: Vec<_> = (0..5).map(|_| DynIndex::new_dyn(2)).collect();
+    sites[4] = sites[0].prime();
+    let axes = vec![
+        vec![sites[0].clone(), sites[2].clone()],
+        vec![sites[1].clone(), sites[3].clone()],
+    ];
+    let prefixes: Vec<_> = asym(&axes)
+        .into_iter()
+        .flat_map(|prefix| {
+            (0..2)
+                .map(|bit| {
+                    let mut prefix = prefix.clone();
+                    prefix.push((sites[4].clone(), bit));
+                    prefix
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    // Output significance reverses within each axis. Include spectator cells
+    // so this layout refines every constraint in either transformed partition.
+    let layout: Vec<_> = (0..8)
+        .map(|cell| {
+            Projector::from_pairs([
+                (sites[2].clone(), cell & 1),
+                (sites[3].clone(), (cell >> 1) & 1),
+                (sites[4].clone(), (cell >> 2) & 1),
+            ])
+            .unwrap()
+        })
+        .collect();
+    let expected_keys: HashSet<_> = layout.iter().cloned().collect();
+    for complex in [false, true] {
+        let input: Vec<_> = values(sites.len())
+            .into_iter()
+            .map(|value| {
+                if complex {
+                    value
+                } else {
+                    Complex64::new(value.re, 0.0)
+                }
+            })
+            .collect();
+        let tree = chain(&sites, &input, &[0, 1, 2, 3, 4]);
+        let state = partition(&tree, &prefixes);
+        let mut options = PatchedFourierOptions::default();
+        options.merge_refine.merge_policy = MergePolicy::Tolerance;
+        // Execute every input-merge level, even if output splitting stops early.
+        options.merge_refine.output_depth = Some(2);
+        let result =
+            patched_fourier_transform(&state, &0, &axes, FourierOptions::forward(), &options)
+                .unwrap();
+        let report = result.report().clone();
+        assert_eq!(report.level_count, 2);
+        assert_eq!(report.term_count, report.region_count);
+        assert!(report.error_bound <= report.absolute_tolerance);
+        let output = result.into_partition().unwrap();
+        let before = output.to_treetn().unwrap().to_dense().unwrap();
+        let aligned = output.refine_to(&layout).unwrap();
+        assert_eq!(
+            aligned.projectors().cloned().collect::<HashSet<_>>(),
+            expected_keys
+        );
+        let after = aligned.to_treetn().unwrap().to_dense().unwrap();
+        let refinement_error = after.sub(&before).unwrap().maxabs().unwrap();
+        assert!(
+            refinement_error <= ROUND_OFF,
+            "refinement error={refinement_error:e}"
+        );
+        let oracle = IdxTensor::from_dense(
+            sites.clone(),
+            dft(&input, &logical_layout(&sites, &axes), -1.0, true),
+        )
+        .unwrap();
+        let residual = after.sub(&oracle).unwrap().norm().unwrap();
+        assert!(
+            residual <= report.error_bound + ROUND_OFF,
+            "L2 residual={residual:e}, {report:?}"
+        );
+        // Refinement cannot remove existing boundaries to make a coarser layout.
+        let coarse = aligned.refine_to(&[Projector::default()]).unwrap();
+        assert_eq!(
+            coarse.projectors().cloned().collect::<HashSet<_>>(),
+            expected_keys
+        );
+    }
+}
+
 #[test]
 fn fourier_operator_applies_through_adaptive_contraction() {
     let operator = quantics_fourier_operator(3, FourierOptions::forward()).unwrap();
@@ -408,7 +498,8 @@ fn spectator_refinement_on_chains_and_degree_three_trees_matches_dft_and_bounds(
                 let mut policy = PatchedFourierOptions::default();
                 if adaptive {
                     policy.tolerance.rtol = 0.05;
-                    policy.merge_refine.target_bond_dim = Some(1);
+                    policy.merge_refine.merge_policy =
+                        MergePolicy::RankGoal(1_usize.try_into().unwrap());
                 }
                 let result = patched_fourier_transform(
                     &state,
@@ -552,7 +643,7 @@ fn reversed_axes_inverse_restores_input_and_same_order_does_not() {
     let state = partition(&tree, &asym(&axes));
     let mut bounded = PatchedFourierOptions::default();
     bounded.tolerance.rtol = 1e-12;
-    bounded.merge_refine.target_bond_dim = Some(4);
+    bounded.merge_refine.merge_policy = MergePolicy::RankGoal(4_usize.try_into().unwrap());
     let forward = patched_fourier_transform(&state, &0, &axes, FourierOptions::forward(), &bounded)
         .unwrap()
         .into_partition()
@@ -614,7 +705,7 @@ fn adaptive_bound_covers_constructed_operator_error() {
     let state = partition(&tree, &prefixes);
     let mut options = PatchedFourierOptions::default();
     options.tolerance.rtol = 0.3;
-    options.merge_refine.target_bond_dim = Some(2);
+    options.merge_refine.merge_policy = MergePolicy::RankGoal(2_usize.try_into().unwrap());
     let result =
         patched_fourier_transform(&state, &0, &axes, FourierOptions::forward(), &options).unwrap();
     let report = result.report();

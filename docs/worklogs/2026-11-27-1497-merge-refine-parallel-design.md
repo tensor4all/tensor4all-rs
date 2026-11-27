@@ -5,7 +5,8 @@
 - The [design](../design/merge-refine-parallel-execution.md) defines incoming
   region jobs as incoming `(spectator, per-axis prefix)` map entries, not final
   outputs, leaves or terms. The smallest single-root/no-spectator two-bit Exact
-  fixture has widths `[1,2]`, four final regions and known DFT values `[0.5;4]`.
+  fixture asserts work-item counts `[1,2,4]`, four final regions and known DFT
+  values `[0.5;4]`; its diagnostic trace records incoming widths `[1,2]`.
   It validates the definition, not a performance need.
 - The [original baseline](../experiments/1497-baseline/README.md) has whole-region
   width one in every completed case. Defer that executor until a relevant
@@ -23,7 +24,7 @@
   counter replay, canonical errors, child/admission barriers, engine ownership
   and aggregate memory. Review that contract before extracting a serial seam
   or implementing lanes. Fixed engine teams cannot borrow idle peer engines.
-- #1511 is merged and #1407 integrates its typed output-region API. All three
+- #1407 merged as `9ddffd17`, including #1511's typed output-region API. All three
   merge policies are tested through both scheduler and Fourier frontend;
   selected coverage counters share one private seam, and rejected probes do
   not add selected cuts. Tolerance retains canonical `RetainedWork` admission.
@@ -59,6 +60,17 @@
   and source/binary hashes. Both independent patch application and generation
   reproduce all eight captured source hashes at `5fbd73e5`. Owned disposable
   checkouts are removed after verification; the active build cache is retained.
-- The review branch includes later main updates through `62c3b606`. Historical
+- The review branch includes later main updates through `9ddffd17`. Historical
   baseline evidence remains tied to `8ce72e4e`; it is not re-timed evidence for
   those interpolation/evaluator/cache changes.
+
+
+## Cross-provider review follow-up
+
+The measured `5fbd73e5` and merged #1407 have identical consumed crates,
+benchmarks and lockfile. The plan now inherits that settled policy contract.
+All completed cases retain one final region: no split was selected, and output
+keys never re-join. Wider cases require selected splits or initial spectator
+cells; their realistic repeated cost remains unmeasured. The synthetic test's
+work-item/final-value assertions are distinguished from the direct width trace.
+The IR source repository is private, limiting public reproduction.

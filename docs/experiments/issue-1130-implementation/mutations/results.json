@@ -1,0 +1,237 @@
+[
+  {
+    "mutation": "forecast-collisions",
+    "source": "crates/tensor4all-partitionedtreetn/src/reconstruction/schedule/tolerance.rs",
+    "before": "active = true;",
+    "after": "active = false;",
+    "tests": [
+      "forecast_truncates_depth_and_skips_inactive_levels"
+    ],
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "tensor4all-partitionedtreetn",
+      "--lib",
+      "forecast_truncates_depth_and_skips_inactive_levels"
+    ],
+    "exit_code": 101,
+    "killed": true,
+    "log": "docs/experiments/issue-1130-implementation/mutations/forecast-collisions-1.txt"
+  },
+  {
+    "mutation": "forecast-collisions",
+    "source": "crates/tensor4all-partitionedtreetn/src/reconstruction/schedule/tolerance.rs",
+    "before": "active = true;",
+    "after": "active = false;",
+    "tests": [
+      "tolerance_merges_report_inactive_levels_early_stops_and_zero_budget"
+    ],
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "tensor4all-quanticstransform",
+      "--features",
+      "partitioned",
+      "--test",
+      "qft_reconstruction",
+      "tolerance_merges_report_inactive_levels_early_stops_and_zero_budget"
+    ],
+    "exit_code": 101,
+    "killed": true,
+    "log": "docs/experiments/issue-1130-implementation/mutations/forecast-collisions-2.txt"
+  },
+  {
+    "mutation": "joint-tie-order",
+    "source": "crates/tensor4all-partitionedtreetn/src/reconstruction/schedule/tolerance.rs",
+    "before": "Self::Joint => (0, 0),",
+    "after": "Self::Joint => (3, 0),",
+    "tests": [
+      "candidate_order_chooses_cheaper_singles_and_deterministic_ties"
+    ],
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "tensor4all-partitionedtreetn",
+      "--lib",
+      "candidate_order_chooses_cheaper_singles_and_deterministic_ties"
+    ],
+    "exit_code": 101,
+    "killed": true,
+    "log": "docs/experiments/issue-1130-implementation/mutations/joint-tie-order-1.txt"
+  },
+  {
+    "mutation": "joint-tie-order",
+    "source": "crates/tensor4all-partitionedtreetn/src/reconstruction/schedule/tolerance.rs",
+    "before": "Self::Joint => (0, 0),",
+    "after": "Self::Joint => (3, 0),",
+    "tests": [
+      "serial_joint_probes_keep_the_chosen_partition_and_its_ledger"
+    ],
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "tensor4all-partitionedtreetn",
+      "--lib",
+      "serial_joint_probes_keep_the_chosen_partition_and_its_ledger"
+    ],
+    "exit_code": 101,
+    "killed": true,
+    "log": "docs/experiments/issue-1130-implementation/mutations/joint-tie-order-2.txt"
+  },
+  {
+    "mutation": "child-cap-off-by-one",
+    "source": "crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs",
+    "before": "if next.len() >= max_children {",
+    "after": "if next.len() > max_children {",
+    "tests": [
+      "child_planning_bounds_allocation_and_prunes_before_expansion"
+    ],
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "tensor4all-partitionedtreetn",
+      "--lib",
+      "child_planning_bounds_allocation_and_prunes_before_expansion"
+    ],
+    "exit_code": 101,
+    "killed": true,
+    "log": "docs/experiments/issue-1130-implementation/mutations/child-cap-off-by-one-1.txt"
+  },
+  {
+    "mutation": "ignore-term-cap",
+    "source": "crates/tensor4all-partitionedtreetn/src/reconstruction/schedule/tolerance.rs",
+    "before": "let terms_left = context.options.max_terms.saturating_sub(used_terms);",
+    "after": "let terms_left = context.options.max_work_items.saturating_sub(used_terms);",
+    "tests": [
+      "candidate_limits_cover_work_terms_and_empty_shapes"
+    ],
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "tensor4all-partitionedtreetn",
+      "--lib",
+      "candidate_limits_cover_work_terms_and_empty_shapes"
+    ],
+    "exit_code": 101,
+    "killed": true,
+    "log": "docs/experiments/issue-1130-implementation/mutations/ignore-term-cap-1.txt"
+  },
+  {
+    "mutation": "maximum-bond-only",
+    "source": "crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs",
+    "before": "logical_parameter_count(&candidate)? < logical_parameter_count(sum)?",
+    "after": "candidate.max_bond_dim() < sum.max_bond_dim()",
+    "tests": [
+      "tolerance_compression_reduces_other_bonds_when_the_maximum_stays_fixed"
+    ],
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "tensor4all-partitionedtreetn",
+      "--lib",
+      "tolerance_compression_reduces_other_bonds_when_the_maximum_stays_fixed"
+    ],
+    "exit_code": 101,
+    "killed": true,
+    "log": "docs/experiments/issue-1130-implementation/mutations/maximum-bond-only-1.txt"
+  },
+  {
+    "mutation": "skip-tolerance-compression",
+    "source": "crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs",
+    "before": "compress_item(&sum, context.center, None, context.share, counters)?;",
+    "after": "(sum.clone(), 0.0);",
+    "tests": [
+      "tolerance_merges_compress_without_a_rank_goal"
+    ],
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "tensor4all-quanticstransform",
+      "--features",
+      "partitioned",
+      "--test",
+      "qft_reconstruction",
+      "tolerance_merges_compress_without_a_rank_goal"
+    ],
+    "exit_code": 101,
+    "killed": true,
+    "log": "docs/experiments/issue-1130-implementation/mutations/skip-tolerance-compression-1.txt"
+  },
+  {
+    "mutation": "skip-tolerance-compression",
+    "source": "crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs",
+    "before": "compress_item(&sum, context.center, None, context.share, counters)?;",
+    "after": "(sum.clone(), 0.0);",
+    "tests": [
+      "tolerance_merges_bound_cancellation_and_charge_only_kept_candidates"
+    ],
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "tensor4all-quanticstransform",
+      "--features",
+      "partitioned",
+      "--test",
+      "qft_reconstruction",
+      "tolerance_merges_bound_cancellation_and_charge_only_kept_candidates"
+    ],
+    "exit_code": 101,
+    "killed": true,
+    "log": "docs/experiments/issue-1130-implementation/mutations/skip-tolerance-compression-2.txt"
+  },
+  {
+    "mutation": "skip-tolerance-compression",
+    "source": "crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs",
+    "before": "compress_item(&sum, context.center, None, context.share, counters)?;",
+    "after": "(sum.clone(), 0.0);",
+    "tests": [
+      "tolerance_merges_handle_selected_multiaxis_sparse_spectator_cells"
+    ],
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "tensor4all-quanticstransform",
+      "--features",
+      "partitioned",
+      "--test",
+      "qft_reconstruction",
+      "tolerance_merges_handle_selected_multiaxis_sparse_spectator_cells"
+    ],
+    "exit_code": 101,
+    "killed": true,
+    "log": "docs/experiments/issue-1130-implementation/mutations/skip-tolerance-compression-3.txt"
+  },
+  {
+    "mutation": "omit-application-ledger",
+    "source": "crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs",
+    "before": "application_error_bound: application_error,",
+    "after": "application_error_bound: 0.0,",
+    "tests": [
+      "tolerance_merges_charge_application_before_the_level_budget"
+    ],
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "tensor4all-quanticstransform",
+      "--features",
+      "partitioned",
+      "--test",
+      "qft_reconstruction",
+      "tolerance_merges_charge_application_before_the_level_budget"
+    ],
+    "exit_code": 101,
+    "killed": true,
+    "log": "docs/experiments/issue-1130-implementation/mutations/omit-application-ledger-1.txt"
+  }
+]

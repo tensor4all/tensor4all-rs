@@ -1,8 +1,10 @@
 use super::*;
 use crate::batch::{pointwise_components_batch, pointwise_coordinate_batch};
+use crate::quanticscrossinterpolate_batch_with_rng;
 use crate::QtciOptions;
 use quanticsgrids::DiscretizedGrid;
-use std::sync::Arc;
+
+mod shared_sampling;
 use tensor4all_simplett::AbstractTensorTrain;
 
 #[test]
@@ -267,12 +269,11 @@ fn batched_tci_rejects_oversized_callback_results() {
 
 #[test]
 fn test_batched_tci_caching_reduces_evaluations() {
-    // Verify that the shared cache reduces function evaluations.
-    // Use Arc<Mutex<usize>> counter to track how many times f is actually called.
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    let call_count = Arc::new(AtomicUsize::new(0));
-    let call_count_clone = call_count.clone();
+    // The callback answers both components of a point at once, so a point any
+    // component run evaluated is not requested again: the callback sees exactly
+    // the union of the points the components sample, once each.
+    use std::cell::RefCell;
+    use std::collections::BTreeSet;
 
     let grid = DiscretizedGrid::builder(&[3])
         .with_variable_names(&["x"])
@@ -280,39 +281,71 @@ fn test_batched_tci_caching_reduces_evaluations() {
         .with_upper_bound(&[1.0])
         .build()
         .unwrap();
-
     let options = QtciOptions::default()
         .with_tolerance(1e-8)
         .with_nrandominitpivot(0); // no random pivots for determinism
 
-    // Use functions that are non-zero at x=0 (the default initial pivot).
-    let (result, _, _) = quanticscrossinterpolate_multicomponent::<f64, _>(
+    // Non-zero at x=0 (the default initial pivot).
+    let components = |x: f64| [x + 1.0, x * x + 1.0];
+
+    // The points each component samples when it runs alone.
+    let mut sampled: Vec<BTreeSet<u64>> = Vec::new();
+    for component in 0..2 {
+        let seen = RefCell::new(BTreeSet::new());
+        let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0);
+        quanticscrossinterpolate_batch_with_rng::<f64, _, _>(
+            &grid,
+            |batch: QuanticsBatch<'_, f64>| {
+                let x = |p| batch.get(0, p).unwrap();
+                seen.borrow_mut()
+                    .extend((0..batch.n_points()).map(|p| x(p).to_bits()));
+                Ok((0..batch.n_points())
+                    .map(|p| components(x(p))[component])
+                    .collect())
+            },
+            None,
+            options.clone(),
+            &mut rng,
+        )
+        .unwrap();
+        sampled.push(seen.into_inner());
+    }
+    let union: BTreeSet<u64> = sampled.iter().flatten().copied().collect();
+
+    let received = RefCell::new(Vec::new());
+    let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0);
+    let (result, _, _) = quanticscrossinterpolate_multicomponent_with_rng::<f64, _, _>(
         &grid,
-        pointwise_components_batch(move |x: &[f64]| {
-            call_count_clone.fetch_add(1, Ordering::Relaxed);
-            vec![x[0] + 1.0, x[0] * x[0] + 1.0]
-        }),
+        |batch: QuanticsBatch<'_, f64>| {
+            let mut values = Vec::new();
+            for p in 0..batch.n_points() {
+                let x = batch.get(0, p).unwrap();
+                received.borrow_mut().push(x.to_bits());
+                values.extend(components(x));
+            }
+            Ok(values)
+        },
         &[2],
         None,
         options,
+        &mut rng,
     )
     .unwrap();
-
     assert_eq!(result.tensor_train().len(), 4); // 3 grid sites + 1 component
 
-    // The number of function calls should be less than 2 * (max possible unique points)
-    // because the cache is shared across components.
-    let total_calls = call_count.load(Ordering::Relaxed);
-    let max_grid_points = 1usize << 3; // 8
-
-    // Without caching, we'd expect up to 2 * max_grid_points calls (one per component).
-    // With caching, we should see at most max_grid_points calls.
-    // (In practice it could be less if TCI doesn't sample all points.)
+    let received = received.into_inner();
+    assert_eq!(
+        received.iter().copied().collect::<BTreeSet<_>>(),
+        union,
+        "the callback must see exactly the union of the components' sampled points"
+    );
+    assert_eq!(received.len(), union.len(), "a point was requested twice");
     assert!(
-        total_calls <= max_grid_points,
-        "expected at most {} calls with caching, got {}",
-        max_grid_points,
-        total_calls
+        union.len() < sampled[0].len() + sampled[1].len(),
+        "sharing saved nothing: {} points for {} + {} sampled per component",
+        union.len(),
+        sampled[0].len(),
+        sampled[1].len()
     );
 }
 

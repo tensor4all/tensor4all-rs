@@ -379,8 +379,8 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   bit `r_t`, restricting to the child region before adding, so no sum over the
   whole output domain is assembled and each object is reused by its descendants.
   `MergeRefineOptions::output_depth` stops early; `None` refines every selected
-  bit. `target_bond_dim` is a soft rank goal: `None` keeps the trajectory uniform
-  and exact, and `Some(goal)` makes it adaptive — a region is merged without
+  bit. `merge_policy: MergePolicy::Exact` keeps the trajectory uniform and
+  exact; `MergePolicy::RankGoal(NonZeroUsize)` makes it adaptive — a region is merged without
   splitting first and stops as soon as that candidate fits the goal, and a candidate
   above the goal is refined only when the children store no more parameters in total
   than the candidate they replace. A region that stops refining keeps its output
@@ -397,7 +397,12 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   four input children and produce four output children), and the transform is never
   padded. `error_bound` records every measured
   component once, at the level and region where it was measured, so it does not grow
-  with the number of refined regions. `MergeRefineOptions::application` opts into a truncating operator
+  with the number of refined regions. `MergePolicy::Tolerance` compresses without
+  a rank goal, serially comparing unsplit, single-axis and joint candidates by
+  storage. `report().levels` exposes absolute allocations and retained errors;
+  unused allowance carries between potentially merging levels. The original
+  application charge is `application_error_bound`.
+  `MergeRefineOptions::application` opts into a truncating operator
   application: `OperatorApplication::Measured` applies both exactly and with the
   caller's options, measures each leaf's deviation, and charges the sum before any
   compression, rejecting an application error above the allowance;

@@ -8,7 +8,9 @@ and the [whole-region](../experiments/1497-baseline/README.md) and
 for maintainer review, not authorization to implement the lanes variant.
 
 The original inspected baseline is `8ce72e4e`; the finer diagnostic uses
-`5fbd73e5`, integrating #1407 and merged #1511 over main `62c3b606`. The [symbol inventory](../experiments/1497-baseline/dependency-inventory.json)
+`5fbd73e5`, merged by #1407 as `9ddffd17`, including #1511.
+All consumed crates, benchmarks and the lockfile are identical at the measured
+head and that merge. The [symbol inventory](../experiments/1497-baseline/dependency-inventory.json)
 records baseline source locations, not instrumentation-shifted line numbers.
 The scope is the numerical call chain consumed by patched Fourier; unrelated
 parts of the workspace's engine migration need not be completed for their own
@@ -22,7 +24,7 @@ No CLEAN run can substitute for those missing performance criteria.
 
 | Order | Owner / seam | Required change or decision | Evidence before advancing |
 | --- | --- | --- | --- |
-| 0 | Maintainers, #1497 / #1407 | Review input-parent job design as the next scope; keep leaf-only execution optional; settle numerical profiles, memory semantics and final merge-policy admission rules | Explicit design review; current PR's source and ledger read after its final update |
+| 0 | Maintainers, #1497 / #1407 | Review input-parent job design as the next scope; keep leaf-only execution optional; settle numerical profiles and memory semantics while preserving the merged policy admission rules | Explicit design review; merged #1407 source/ledger at `9ddffd17` plus review of this new seam |
 | 1 | Benchmark owner | Use the repeated M6a parent-work screen for further design; obtain repeated IR evidence before claiming an IR need; recheck affected costs if the consumed policy changes | Declared valid inputs, complete CLEAN samples, the 20% need screen and useful independent width; a feasibility observation alone cannot pass the median gate |
 | 2 | tensorbackend / core, #1376 | Carry a borrowed engine and compatible runtime/placement through the canonical tensor operations used here | Routing tests with global defaults unavailable; typed mismatch errors; no new implicit-engine site |
 | 3 | TreeTN numerical owners | Propagate that engine through exact/certified/measured application, restructuring, projection, canonicalization, sums, truncation and residual/norm operations | High-level operation tests on the consumed paths; no downstream storage access or duplicated algorithm |
@@ -70,7 +72,7 @@ direct downstream tenferro dependency is needed.
   `CertifiedApplication::estimated_bytes` is returned after work; it is not an
   existing preflight reservation API for a patch scheduler.
 
-## Dependency on the evolving tolerance policy
+## Contract inherited from the merged tolerance policy
 
 The optional-candidate resource failure at the earlier inspected `ddc0c617`
 head is fixed in #1407 and covered by the nonuniform two-bit reproduction,
@@ -91,9 +93,10 @@ one-/two-axis tests exercise Exact, RankGoal and Tolerance through both the
 scheduler and public Fourier frontend, including unselected output, retained
 error bounds and Tolerance's per-level ledger. Discarded probes are not added
 to selected coverage cuts. The two-bit Exact fan-out fixture additionally
-asserts the smallest multi-region trajectory. #1407 remains under review;
-freeze the consumed seam after that review, without waiting for unrelated
-engine migrations elsewhere in the workspace.
+asserts its work-item trajectory and final output, while the tiny diagnostic
+records incoming widths `[1,2]`. #1407 merged as `9ddffd17`; the measured
+`5fbd73e5` has the same consumed source. The policy/admission contract is now
+settled there. Unrelated workspace engine migrations need not finish first.
 
 Tolerance also charges only the kept candidate's error; the baseline rank-goal
 schedule conservatively spends on discarded probes. Parallel integration
@@ -184,8 +187,8 @@ with agreed numerical, runtime and resource acceptance thresholds.
   and canonical errors, including discarded probes and resource early exits.
 - Confirm engine profiles, lane/window CPU budgets and the memory contract;
   bounded windows alone provide no aggregate byte limit.
-- Confirm #1407's final reviewed integration point before signatures or
-  report semantics are frozen. Whole-region lanes remain deferred until a
+- Preserve #1407's merged integration point `9ddffd17` when reviewing new
+  signatures or report semantics. Whole-region lanes remain deferred until a
   relevant repeated workload actually has both region cost and width.
 
 The original R=10 process cap and invalid R=6 IR inputs limit the evidence.

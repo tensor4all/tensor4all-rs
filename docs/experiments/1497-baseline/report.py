@@ -153,9 +153,14 @@ The count is not a final output-region, leaf, term or child-probe count, nor
 does "whole" mean the tensors cover the full output domain. Completed cases
 are processes that finish the transform; it is not a special region type.
 
-The [design's asserted two-bit example](../../design/merge-refine-parallel-execution.md#what-the-baseline-establishes)
+The [design's two-bit test and diagnostic](../../design/merge-refine-parallel-execution.md#what-the-baseline-establishes)
 has incoming widths `[1, 2]` and four final regions. It validates the
-definition, without establishing useful parallel cost.
+definition, without establishing useful parallel cost. Every completed measured
+process ends with one final output region. From one root with no selected
+splits, incoming width remains one: R4 meets the own rank goal, R6 probes axes
+but retains own, and IR also ends in one region. Output keys never re-join.
+Selected splits or initial spectator cells can widen a schedule; no repeated
+realistic multi-region case was established by this matrix.
 
 """ + "\n".join(timing) + """
 
@@ -231,8 +236,8 @@ failures; the underlying Fourier result is allowed to be a superposition.
 
 ## Reproduction and next decisions
 
-Use a disposable checkout of the baseline and the pinned `lingrui96/gw-rs`
-source recorded in the protocol. [prepare.py](./prepare.py) applies the two
+Use a disposable checkout of the baseline and the pinned private
+`lingrui96/gw-rs` source recorded in the protocol. [prepare.py](./prepare.py) applies the two
 diagnostic patches, copies the IR source and portable manifests/lockfile, and
 copies the controller into that checkout. It does not build or run anything.
 
@@ -248,7 +253,8 @@ ai-run build --mem 6G -- cargo build --locked --release \\
 taskset -c 0-7 python3 docs/experiments/1497-baseline/run.py
 ```
 
-The IR source is not vendored; access to that pinned repository is required.
+The IR source is private and not vendored; access to that pinned repository
+is required, so the IR cells cannot be reproduced from public material alone.
 The shared-machine `ai-run` tool is external and was not versioned or hashed
 during this campaign. Its original CLEAN reports are retained, but reproducing
 that exact guard implementation/verdict is outside the repository's evidence.
@@ -269,7 +275,8 @@ hashes and guard reports describe this host's actual execution paths.
 
 Before implementation, review the [design](../../design/merge-refine-parallel-execution.md)
 and [dependency/rollout plan](../../design/merge-refine-parallel-integration-plan.md),
-especially #1376, M7 determinism and #1407's evolving retained-work admission.
+especially #1376, M7 determinism and the retained-work admission contract
+merged by #1407 as `9ddffd17`.
 The baseline supports rejecting complete-region jobs as the initial merge
 strategy. It does not establish that application fan-out solves the motivating
 solver's bottleneck or that finer merge parallelism is worth its extra machinery.

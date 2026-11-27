@@ -4,12 +4,16 @@
 //! interpolates vector- or tensor-valued functions by interpolating each output
 //! component independently and combining the results into a single
 //! [`SimpleTensorTrain`] with an additional component site.
-
-use std::rc::Rc;
+//!
+//! The component runs share one memo of the target's answers, keyed by the
+//! quantics multi-index and living for one call: the callback returns all
+//! components of a point, so a point one component evaluated is served to the
+//! others without another callback call. Each component's fit is unchanged by
+//! this (#1463); only the callback's traffic is.
 
 use anyhow::{anyhow, Result};
 use quanticsgrids::DiscretizedGrid;
-use tensor4all_core::TensorElement;
+use tensor4all_core::{TensorElement, DEFAULT_RETAINED_BYTE_LIMIT};
 use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar};
 use tensor4all_simplett::{Tensor3, Tensor3Ops};
 use tensor4all_tensorbackend::FullPivLuScalar;
@@ -17,13 +21,29 @@ use tensor4all_tensorbackend::FullPivLuScalar;
 use crate::batch::QuanticsBatch;
 use crate::error::{QuanticsTCIError, Result as QtciResult};
 use crate::options::QtciOptions;
-use crate::quantics_tci::quanticscrossinterpolate_batch_with_rng;
+use crate::quantics_tci::SharedSampling;
+
+/// Retained-byte limit of the memo the component runs of one multicomponent call
+/// share (tables and payload together): the default 256 MiB of
+/// [`MultiIndexCache`](tensor4all_core::MultiIndexCache). Not caller-tunable.
+pub(crate) const MULTICOMPONENT_SHARED_MEMO_BYTES: usize = DEFAULT_RETAINED_BYTE_LIMIT;
 
 /// Interpolate a multi-component function with an explicitly named seed.
 ///
 /// Builds a `ChaCha8Rng` from `QtciOptions::rng_seed` (OS entropy when unset)
 /// and delegates to [`quanticscrossinterpolate_multicomponent_with_rng`], so one
-/// stream drives every component.
+/// stream drives every component. Components share their sampled points, which
+/// makes the callback's contract stricter than for a single component:
+///
+/// * `f` must be a pure function of the point **and independent of batching and
+///   call order**: the shared memo sends one batch for several components, so a
+///   callback that branches on `n_points` or on how often it was called behaves
+///   differently from before;
+/// * the memo retains at most 256 MiB (`MULTICOMPONENT_SHARED_MEMO_BYTES`, the
+///   default retained-byte limit of the cache) and the limit is not tunable.
+///
+/// See [`quanticscrossinterpolate_multicomponent_with_rng`] for the details,
+/// including the number of values `f` evaluates.
 ///
 /// # Errors
 /// Returns [`QuanticsTCIError::InvalidConfiguration`] when `output_dims` is
@@ -226,12 +246,52 @@ where
 /// caller-owned random stream.
 ///
 /// Each output component is interpolated with
-/// [`quanticscrossinterpolate_batch_with_rng`] on the *same* stream, in
+/// [`quanticscrossinterpolate_batch_with_rng`](crate::quanticscrossinterpolate_batch_with_rng) on the *same* stream, in
 /// component order, and the per-component tensor trains are
 /// combined into a single [`SimpleTensorTrain`] with an additional component
-/// site at the end. Every component run memoizes the points it evaluates, so a
-/// point is evaluated once per component; reusing one evaluation across
-/// components needs a caller-owned cache and is tracked on issue #747.
+/// site at the end.
+///
+/// # Shared sampling
+///
+/// The component runs share one memo, created for this call and dropped with
+/// it, keyed by the quantics multi-index (never by float coordinates). The
+/// callback answers all components of a point, so the memo keeps all
+/// `n_components` values per point; a run asks `f` only for the distinct points
+/// no earlier run (or earlier request of its own) evaluated, in one batch per
+/// request, and a request that is all hits does not call `f` at all. The
+/// first component's calls are the same as without sharing; later components
+/// send fewer batches, possibly none, and never a point already evaluated.
+///
+/// Tensor trains, ranks, errors and the final position of `rng` are identical
+/// to running the components one after the other with separate memos: only the
+/// callback's traffic changes.
+///
+/// **Cost.** Every call of `f` evaluates all `n_components` values of each
+/// requested point. Without sharing, each component run `i` requests the set
+/// `S_i` of points it samples and discards the other components' values, so `f`
+/// evaluates `n_components * Σ|S_i|` values. With the memo it evaluates
+/// `n_components * |∪ S_i|` values (while nothing is evicted).
+///
+/// **Precondition:** `f` must be a pure function of the point **and independent
+/// of batching and call order**. A value computed for one component is reused
+/// for the others and the memo sends one batch for several components, so a
+/// stateful or noisy callback (one that answers the same point differently on
+/// different calls), or one that branches on `n_points` or on how often it has
+/// been called, is called less often than before, with different batches, and
+/// can give different fits.
+///
+/// The memo retains at most 256 MiB (`MULTICOMPONENT_SHARED_MEMO_BYTES`, the
+/// default retained-byte limit of the cache) of table and payload bytes together; the payload is
+/// `n_components * size_of::<V>()` plus the allocation header of each point's
+/// value block. The limit is not tunable by the caller. When it is reached the
+/// oldest entries are evicted and an evicted point is simply evaluated again if
+/// requested later, so evictions change the number of callback calls but never
+/// a value. For large `n_components` (about 64 `f64` components per point, a
+/// few hundred bytes each) the limit holds a few hundred thousand points.
+/// Counters of the memo are internal and not part of the return value.
+///
+/// A grid whose quantics key is wider than 1024 bits is rejected before any
+/// callback call.
 ///
 /// # Arguments
 ///
@@ -258,7 +318,13 @@ where
 /// empty or has a zero factor, or when the grid or options are invalid.
 /// Returns [`QuanticsTCIError::Operation`] when `f` returns a value count that
 /// does not equal `n_points * product(output_dims)`, or when the underlying
-/// component interpolation fails.
+/// component interpolation fails. An error in any component, also one raised
+/// after sampling (for example initial pivots that all evaluate to zero for one
+/// component), aborts all components and no partial result is returned. The
+/// error variant is the component run's own, and its message is prefixed with
+/// `component <index> of <n_components>` to name the failing component (the
+/// original error stays in the source chain). A wrong value count or an error
+/// returned by `f` inserts nothing into the memo.
 ///
 /// # Examples
 ///
@@ -300,6 +366,53 @@ where
 /// assert!(!ranks.is_empty());
 /// assert!(!errors.is_empty());
 /// ```
+///
+/// The callback is asked for each point at most once, however many components
+/// the target has:
+///
+/// ```
+/// use std::cell::RefCell;
+/// use std::collections::BTreeSet;
+///
+/// use rand::SeedableRng as _;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_quanticstci::{
+///     quanticscrossinterpolate_multicomponent_with_rng, DiscretizedGrid, QtciOptions,
+///     QuanticsBatch,
+/// };
+///
+/// let grid = DiscretizedGrid::builder(&[4])
+///     .with_lower_bound(&[0.0])
+///     .with_upper_bound(&[1.0])
+///     .build()
+///     .unwrap();
+///
+/// let requested = RefCell::new(Vec::new());
+/// let f = |batch: QuanticsBatch<'_, f64>| -> anyhow::Result<Vec<f64>> {
+///     let mut values = Vec::new();
+///     for point in 0..batch.n_points() {
+///         let x = batch.get(0, point).unwrap();
+///         requested.borrow_mut().push(x.to_bits());
+///         values.extend([x + 1.0, x * x + 1.0, 2.0 * x + 1.0]);
+///     }
+///     Ok(values)
+/// };
+///
+/// let mut rng = ChaCha8Rng::seed_from_u64(0);
+/// quanticscrossinterpolate_multicomponent_with_rng::<f64, _, _>(
+///     &grid,
+///     f,
+///     &[3],
+///     None,
+///     QtciOptions::default().with_tolerance(1e-8),
+///     &mut rng,
+/// ).unwrap();
+///
+/// let requested = requested.into_inner();
+/// let distinct: BTreeSet<u64> = requested.iter().copied().collect();
+/// assert_eq!(requested.len(), distinct.len()); // no point requested twice
+/// assert!(distinct.len() <= 16); // 2^4 grid points
+/// ```
 pub fn quanticscrossinterpolate_multicomponent_with_rng<V, F, R>(
     grid: &DiscretizedGrid,
     f: F,
@@ -308,6 +421,51 @@ pub fn quanticscrossinterpolate_multicomponent_with_rng<V, F, R>(
     options: QtciOptions,
     rng: &mut R,
 ) -> QtciResult<(QuanticsTensorCI2Batched<V>, Vec<usize>, Vec<f64>)>
+where
+    F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
+    V: TTScalar
+        + Default
+        + Clone
+        + 'static
+        + TensorElement
+        + tensor4all_core::MatrixLuciScalar
+        + FullPivLuScalar
+        + tensor4all_treetci::globalpivot::ScalarParts,
+    R: rand::Rng + ?Sized,
+{
+    let (result, ranks, errors, _sampling) = multicomponent_with_sampling(
+        grid,
+        f,
+        output_dims,
+        initial_pivots,
+        options,
+        rng,
+        MULTICOMPONENT_SHARED_MEMO_BYTES,
+    )?;
+    Ok((result, ranks, errors))
+}
+
+/// Result, aggregated ranks, aggregated errors and the shared memo of one run.
+type MulticomponentRun<V> = (
+    QuanticsTensorCI2Batched<V>,
+    Vec<usize>,
+    Vec<f64>,
+    SharedSampling<V>,
+);
+
+/// The multicomponent run with an explicit memo limit, returning the shared
+/// memo so tests can read its source-call and byte accounting.
+///
+/// The public entry point calls this with the default limit and drops the memo.
+fn multicomponent_with_sampling<V, F, R>(
+    grid: &DiscretizedGrid,
+    f: F,
+    output_dims: &[usize],
+    initial_pivots: Option<Vec<Vec<usize>>>,
+    options: QtciOptions,
+    rng: &mut R,
+    retained_byte_limit: usize,
+) -> QtciResult<MulticomponentRun<V>>
 where
     F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
     V: TTScalar
@@ -338,55 +496,33 @@ where
         });
     }
 
-    // Each component run memoizes its own quantics points, so the callback is
-    // called once per (component run, point). A cross-component cache keyed by
-    // original coordinates is deliberately not kept here: float coordinates are
-    // not a mixed-radix index space, and sharing one discrete-keyed cache
-    // across components needs the caller-owned cache seam tracked in #747.
-    let f = Rc::new(f);
+    // One memo for the whole call: the callback answers every component of a
+    // point at once, so a point any component run evaluated is served to the
+    // later runs without calling `f` again. Built before the first callback
+    // call, so a grid whose quantics key is too wide is rejected up front.
+    let sampling =
+        SharedSampling::<V>::new(&grid.local_dimensions(), n_components, retained_byte_limit)?;
 
     let mut component_tts: Vec<SimpleTensorTrain<V>> = Vec::with_capacity(n_components);
     let mut all_ranks: Vec<Vec<usize>> = Vec::with_capacity(n_components);
     let mut all_errors: Vec<Vec<f64>> = Vec::with_capacity(n_components);
 
     for component in 0..n_components {
-        let f = Rc::clone(&f);
-        let adapter = move |batch: QuanticsBatch<'_, f64>| -> Result<Vec<V>> {
-            let n_points = batch.n_points();
-            if n_points == 0 {
-                return Ok(Vec::new());
-            }
-            let returned = f(batch)?;
-            let expected = n_points.checked_mul(n_components).ok_or_else(|| {
-                anyhow!(
-                    "expected value count overflows usize: {n_points} points x {n_components} components"
-                )
-            })?;
-            if returned.len() != expected {
-                return Err(anyhow!(
-                    "callback returned {} values for {n_points} points, expected exactly {n_components} components per point ({expected} values)",
-                    returned.len()
-                ));
-            }
-            Ok((0..n_points)
-                .map(|point| returned[point * n_components + component])
-                .collect())
-        };
-
         // One stream serves every component, so the second component continues
         // the caller's sequence instead of restarting it.
         // Erase the caller's RNG type once so every component instantiates the
         // batch pipeline a single time.
         let mut stream: &mut R = rng;
-        let (qtci, ranks, errors) = quanticscrossinterpolate_batch_with_rng(
+        let (tt, ranks, errors) = sampling.run_component(
             grid,
-            adapter,
+            &f,
+            component,
             initial_pivots.clone(),
-            options.clone(),
+            &options,
             &mut stream,
         )?;
 
-        component_tts.push(qtci.tensor_train());
+        component_tts.push(tt);
         all_ranks.push(ranks);
         all_errors.push(errors);
     }
@@ -417,7 +553,7 @@ where
         grid: grid.clone(),
     };
 
-    Ok((result, max_bond_dims, max_errors))
+    Ok((result, max_bond_dims, max_errors, sampling))
 }
 
 /// Interpolate a vector/tensor-valued function, one point at a time.

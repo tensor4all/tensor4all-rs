@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -92,8 +93,11 @@ def main():
                relative + "/tolerance.rs", relative + "/profiling1497.rs",
                "crates/tensor4all-quanticstransform/tests/qft_reconstruction/output_selection.rs"]
     hashes = {name: sha(checkout / name) for name in sources}
+    ai_run_path = shutil.which("ai-run")
+    if ai_run_path is None:
+        raise SystemExit("Install ai-run and add it to PATH before reproducing this campaign")
     environment = dict(os.environ, CARGO_BUILD_JOBS="2", CARGO_TARGET_DIR=str(target))
-    build = ["ai-run", "build", "--mem", "6G", "--", "cargo"]
+    build = [ai_run_path, "build", "--mem", "6G", "--", "cargo"]
     raw.mkdir()
     with (raw / "build.log").open("w") as log:
         subprocess.run(build + ["build", "--locked", "--release", "-p", "tensor4all-benchmarks",
@@ -110,7 +114,7 @@ def main():
              and a.get("target", {}).get("name") == "qft_reconstruction" and a.get("executable")]
     assert len(tests) == 1
     binaries = {"m6a": target / "release/examples/benchmark_m6a_fourier", "tiny": tests[0]}
-    compiler = subprocess.check_output(["ai-run", "build", "--mem", "1G", "--", "rustc", "-Vv"], text=True)
+    compiler = subprocess.check_output([ai_run_path, "build", "--mem", "1G", "--", "rustc", "-Vv"], text=True)
     for name, digest in hashes.items():
         assert sha(checkout / name) == digest, name
     patch = git("diff", "--", "crates", "benchmarks")
@@ -123,7 +127,7 @@ def main():
                 "source_sha256": hashes, "protocol_sha256": sha(HERE / "protocol.json"),
                 "controller_sha256": sha(Path(__file__)), "instrument_sha256": sha(HERE / "instrument.py"),
                 "profiler_sha256": sha(HERE / "profiler.rs"), "patch_sha256": sha(HERE / "profiling.patch"),
-                "ai_run_sha256": sha(Path("/root/.local/bin/ai-run")),
+                "ai_run_sha256": sha(Path(ai_run_path)),
                 "binaries": {k: {"path": str(p), "sha256": sha(p)} for k, p in binaries.items()}}
     (raw / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     env = dict(os.environ, **protocol["thread_environment"])
@@ -137,7 +141,7 @@ def main():
         binary = [str(binaries[family]), *params]
         if family == "m6a":
             binary = [sys.executable, str(Path(__file__).resolve()), "--prime-exec", *binary]
-        command = ["ai-run", "measure", "--mem", "8G", "--cpus", "8-15", "--report", str(directory / "ai-run.json"),
+        command = [ai_run_path, "measure", "--mem", "8G", "--cpus", "8-15", "--report", str(directory / "ai-run.json"),
                    "--", "timeout", "--kill-after=5", "300", "taskset", "-c", "8", *binary]
         (directory / "command.json").write_text(json.dumps(command, indent=2) + "\n")
         with (directory / "stdout.txt").open("w") as out, (directory / "stderr.txt").open("w") as err:

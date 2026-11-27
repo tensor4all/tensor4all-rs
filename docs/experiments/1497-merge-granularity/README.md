@@ -79,6 +79,12 @@ contains per-process aggregates and the same hotspot selection.
 - m6a-r4-cap8: axis-candidate width 0; same-region multi-axis candidate work 0.0% of Fourier time.
 - m6a-r6-cap16: axis-candidate width 2; same-region multi-axis candidate work 33.1% of Fourier time.
 
+All formal processes finish with `region_count = 1` and `pruned_regions = 0`.
+No refinement was selected: R4 meets the own goal; R6 probes two axes but keeps
+own. Output keys never re-join. Starting with one root, this explains width one;
+a selected split or multiple initial spectator cells can change that conclusion.
+No repeated realistic multi-region case was measured here.
+
 Both cells pass the declared parent-work need screen. Prioritize a design of
 input-parent jobs within one child probe: that opportunity includes the own
 candidate as well as axis probes. R6 also has a narrower axis-candidate option;
@@ -102,9 +108,11 @@ parent fraction describes a cost distribution, not an ideal speedup prediction.
 Thread counts at region boundaries and actual command affinities are recorded;
 OS thread counts are not a numerical worker budget. One logical CPU was used.
 
-The new serial source includes the reviewed policy/API integration, which is
-still under review. These numbers do not re-time the old `8ce72e4e` or `d60f0751`
-campaigns and do not promise production-resolution or IR performance.
+The new serial source `5fbd73e5` is the head merged by #1407 as `9ddffd17`.
+All consumed crates, benchmarks and the lockfile match at those revisions.
+These numbers do not re-time the original `8ce72e4e` baseline or the separate
+[#1130 acceptance campaign](../issue-1130-implementation/acceptance-2026-11-20/README.md), and do not
+promise production-resolution or IR performance.
 
 ## Reproduction
 
@@ -119,6 +127,10 @@ Run `taskset -c 0-7 python3 run.py --checkout /path/to/detached-checkout
 copy without existing `raw`. Builds use `ai-run build --mem 6G`; all finished
 binary executions use exclusive `ai-run measure --mem 8G`, CPU 8, with 300-second
 process caps. `ai-run` is external; its entry-point hash is in the manifest.
+The current controller resolves it through `PATH` before building. The exact
+controller used for these records is retained as [run-recorded.py](run-recorded.py);
+its bytes still match the historical controller hash. Raw paths remain the
+original execution provenance; no measurement record or pin was rewritten.
 Choose and declare appropriate CPU sets before a campaign on another host.
 
 `python3 report.py` regenerates tables and derived per-process summaries from

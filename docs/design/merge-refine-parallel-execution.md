@@ -36,9 +36,10 @@ establishes what the count means, not a reason to implement parallelism.
 
 The [integration plan](./merge-refine-parallel-integration-plan.md) lists
 owners, blocking contracts and acceptance evidence. In particular,
-[#1407](https://github.com/tensor4all/tensor4all-rs/pull/1407) changes merge
-policy, accounting and resource admission. Its final semantics must be
-integrated before freezing a parallel merge seam.
+[#1407](https://github.com/tensor4all/tensor4all-rs/pull/1407) merged as `9ddffd17` with merge policy, accounting and resource admission.
+Its head `5fbd73e5` is the measured source; all consumed crates, benchmarks
+and the lockfile are identical at that head and merge. Preserve those settled
+semantics when designing the parallel merge seam.
 
 ## What the baseline establishes
 
@@ -59,15 +60,26 @@ generally different from `W_t`; `report.region_count` counts final outputs.
 
 The smallest example in the single-axis, single-root, no-spectator family is
 the two-bit Exact transform at depth two: one input leaf with dense values
-`[1, 0, 0, 0]` has unitary DFT `[0.5, 0.5, 0.5, 0.5]`. Incoming widths are
-`[1, 2]`, while four output regions remain. One bit has only one transition
+`[1, 0, 0, 0]` has unitary DFT `[0.5, 0.5, 0.5, 0.5]`. The tiny diagnostic directly records incoming widths `[1, 2]`, while the
+test asserts four final regions and `work_items_per_level = [1,2,4]`.
+With one original input item per region in this fixture, those work-item
+counts imply the same widths; this equivalence does not hold generally. One bit has only one transition
 from its sole root, so it cannot have two incoming jobs in this family.
 Multiple initial spectator cells can instead provide several first-level
 jobs; these are separate keys in the same definition.
-The asserted fixture is
+The numerical/work-item fixture is
 [`minimal_two_bit_exact_fanout_has_two_second_level_region_jobs`](https://github.com/tensor4all/tensor4all-rs/blob/c3b08cb08fd2d44459d4476ca8e806a090d3bfd1/crates/tensor4all-quanticstransform/tests/qft_reconstruction/output_selection.rs).
 It is in scope for correctness/definition, with one original leaf and no
 genuine input-sibling additions; it is not a representative performance case.
+
+Every completed measured process ends with `region_count = 1`; the finer
+M6a records also report zero output pruning. Starting from one root, selected
+splits add output keys and those keys are never re-joined, so here width one
+means no refinement was selected. R4's own candidate meets the goal; R6 probes
+two axes and retains own; the single IR observation also ends in one region.
+A goal that causes a selected split, or several initial spectator cells,
+can provide wider levels. No repeated realistic multi-region case is
+established by these runs, and a tighter goal need not make a split pay.
 
 The six-case diagnostic retained all fourteen processes, including failures;
 every process received `verdict=CLEAN`. The report distinguishes repeated
@@ -95,8 +107,8 @@ The owners are
 [`target.rs`](../../crates/tensor4all-partitionedtreetn/src/reconstruction/target.rs),
 [`engine.rs`](../../crates/tensor4all-partitionedtreetn/src/reconstruction/engine.rs)
 and the [Fourier front end](../../crates/tensor4all-quanticstransform/src/patched_fourier.rs).
-These facts describe the baseline's exact/rank-goal schedule; the prospective
-Tolerance policy in #1407 has a different ledger.
+These facts describe the baseline's exact/rank-goal schedule; the merged
+Tolerance policy from #1407 has a different ledger.
 
 Preparation validates full indices, dyadic coverage and spectator geometry,
 restructures the operator, and pins the reference scale. It applies once per
