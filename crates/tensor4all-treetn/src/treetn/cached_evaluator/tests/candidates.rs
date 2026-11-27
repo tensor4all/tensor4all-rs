@@ -494,12 +494,9 @@ fn mixed_real_and_complex_nodes_are_promoted() {
 }
 
 /// Edge 0 - 1 needs the message 1 -> 0, where the real node 1 receives the
-/// complex child message 2 -> 1. The message path fails there for every
-/// caller (#1501), flat batches included. Enable this test (remove the
-/// `#[ignore]`) with the fix of #1501; it then checks both orientations, `All`
-/// and `Pairs`, against `TreeTN::evaluate`.
+/// complex child message 2 -> 1 (#1501). Both orientations, `All` and
+/// `Pairs`, against `TreeTN::evaluate`.
 #[test]
-#[ignore = "blocked by #1501: a real node receiving a complex child message fails in the message path"]
 fn mixed_kinds_where_a_real_node_receives_a_complex_message() {
     assert_mixed_edge(&[0], &[1, 2]);
     assert_mixed_edge(&[1, 2], &[0]);
