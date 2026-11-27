@@ -118,5 +118,5 @@ pub use patched_fourier::{patched_fourier_transform, PatchedFourierOptions};
 #[cfg(feature = "partitioned")]
 pub use tensor4all_partitionedtreetn::reconstruction::{
     CoordinateGroup, CoverageContract, MergeRefineOptions, MergeRefineReport, MergeRefineResult,
-    ReconstructionTolerance,
+    OutputRegion, ReconstructionTolerance,
 };

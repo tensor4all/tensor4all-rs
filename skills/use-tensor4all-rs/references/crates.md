@@ -405,7 +405,8 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   image and charges proved bounds within `share` of the allowance. All other entry points apply exactly. The `MergeRefineReport` reports `level_count`,
   `applied_operator_count`, `additions`, `projections`, `compression_attempts`,
   `compressions`, `work_items_per_level`, `peak_work_items`, `refined_regions`,
-  `stopped_regions`, region/term counts, `max_bond_dim`,
+  `stopped_regions`, `pruned_regions` (the coverage count under an `output_regions`
+  selection, separate from `error_bound`), region/term counts, `max_bond_dim`,
   `max_transient_bond_dim`, stored parameters, the pinned reference scale, the
   allowance, and the measured bound.
 
