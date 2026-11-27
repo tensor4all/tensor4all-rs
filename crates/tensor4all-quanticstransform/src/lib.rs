@@ -117,6 +117,6 @@ pub use multiaxis_fourier::{quantics_fourier_operator_multiaxis, AxisBit};
 pub use patched_fourier::{patched_fourier_transform, PatchedFourierOptions};
 #[cfg(feature = "partitioned")]
 pub use tensor4all_partitionedtreetn::reconstruction::{
-    CoordinateGroup, CoverageContract, MergeRefineOptions, MergeRefineReport, MergeRefineResult,
-    OutputRegion, ReconstructionTolerance,
+    CoordinateGroup, CoverageContract, MergePolicy, MergeRefineLevelReport, MergeRefineOptions,
+    MergeRefineReport, MergeRefineResult, OutputRegion, ReconstructionTolerance,
 };

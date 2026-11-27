@@ -32,6 +32,7 @@
 use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::time::Instant;
+use tensor4all_partitionedtreetn::reconstruction::MergePolicy;
 
 use anyhow::{bail, Context, Result};
 use num_complex::Complex64;
@@ -646,7 +647,7 @@ fn run_arm(
             let axes: Vec<Vec<DynIndex>> = grid.variables().into_iter().take(2).collect();
             let mut options = PatchedFourierOptions::default();
             options.tolerance.rtol = args.rtol;
-            options.merge_refine.target_bond_dim = Some(args.cap);
+            options.merge_refine.merge_policy = MergePolicy::RankGoal(args.cap.try_into()?);
             if let Some(share) = args.certified_share {
                 options.merge_refine.application =
                     tensor4all_partitionedtreetn::reconstruction::OperatorApplication::certified(

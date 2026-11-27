@@ -359,11 +359,16 @@ existing `LinearOperator`, ordered coordinate groups, and the explicit dyadic
 geometry. QFT construction stays in `tensor4all-quanticstransform`, which remains
 a path-only cross-layer dev-dependency: this crate keeps no simplett-stack
 runtime dependency. `MergeRefineOptions` selects the output depth, the work
-limit, the soft rank goal, and the retained term budget; `MergeRefineReport`
+limit, the merge policy (`Exact`, `RankGoal`, or `Tolerance`), and the retained
+term budget; `MergeRefineReport`
 carries the pinned scale, the allowance, the measured bound, and the structural
 counters, including the refinement stops. Exact scheduling
 algebra is shared with any operator, while Fourier-specific rank and performance
 expectations are not claimed for arbitrary operators.
+
+Tolerance-driven refinement and its level allocation/reporting follow the
+[merge policy contract](partitioned-treetn.md#merge-refine-tolerance-mode-1130).
+The rank-goal policy below keeps its existing behavior.
 
 ### Adaptive refinement
 
