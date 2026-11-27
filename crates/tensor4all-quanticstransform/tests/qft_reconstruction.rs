@@ -3167,3 +3167,6 @@ mod tolerance_merges;
 
 #[path = "qft_reconstruction/output_selection.rs"]
 mod output_selection;
+
+#[path = "qft_reconstruction/golden_decisions.rs"]
+mod golden_decisions;
