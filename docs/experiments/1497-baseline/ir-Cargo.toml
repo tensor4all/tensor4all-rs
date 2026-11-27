@@ -3,9 +3,9 @@ name = "g_ir_patching"
 version = "0.1.0"
 edition = "2021"
 
-# Standalone package with its own lockfile and target directory (issue #19).
-# tensor4all-rs comes from `main` through git, the same source as the other
-# packages of this repo; `Cargo.lock` pins the revision.
+# Standalone diagnostic package with its own lockfile, copied under target/.
+# tensor4all-rs is resolved through local paths into the detached, pinned
+# baseline checkout; Cargo.lock pins its registry and git dependencies.
 [workspace]
 
 [dependencies]

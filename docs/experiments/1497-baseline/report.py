@@ -90,7 +90,8 @@ def main():
 
 All fourteen processes in the declared six-case matrix are retained, and all
 fourteen have `verdict=CLEAN`. Seven complete the transform and emit existing
-accuracy/norm observations; six IR inputs are rejected by the producer; one M6a process reaches
+accuracy/norm observations; six IR processes across two configurations are rejected
+by the producer; one M6a process reaches
 application and times out at its declared wall cap. Failures remain failures.
 There is no parallel candidate, speedup claim or candidate acceptance result.
 
@@ -134,8 +135,9 @@ leaf/region durations by the front end's own timer, then take the median of
 per-process shares. Remaining time includes construction, target scale,
 initialization, report and diagnostic overhead.
 
-Three repeats are used for each bounded cell. The IR R=8/cap-64 case is one
-feasibility observation; its single value is **not** a timing distribution.
+Three repeats are used for M6a R=4/R=6 and both IR R=6 configurations.
+M6a R=10 and IR R=8/cap-64 each have one feasibility process; neither is a
+timing distribution.
 No candidate runs, selective retries, omitted failures or tolerance changes
 occurred. Only attempt 1 was needed; the entire matrix was CLEAN.
 
@@ -143,8 +145,9 @@ occurred. Only attempt 1 was needed; the entire matrix was CLEAN.
 
 """ + "\n".join(timing) + """
 
-M6a R=4 uses the original G0 generator at T=0.1, cap 8, and full 4096-point DFT
-checking. R=6 uses T=0.1, cap 16, and 4096 sampled points on four exact FFT
+M6a R=4 uses the original G0 generator at T=0.1, G0 cap 8 and transform goal 16,
+with full 4096-point DFT checking. R=6 uses T=0.1, G0 cap 16 and transform goal
+64, with 4096 sampled points on four exact FFT
 slices. These are downscaled diagnostics, not evidence of production-resolution
 efficiency at T=0.01. The existing independent relative L2 errors are about
 1.75e-8 and 4.94e-8 respectively, with unchanged transform/input tolerances.
@@ -153,7 +156,8 @@ rtol=1e-6 and certified share 0.5. Its existing Parseval discrepancy is 4.26e-12
 this is not a full DFT error check.
 
 The declared need screen is a 20% median front-end share plus usable independent
-work. Application passes on the small repeated M6a cell, not the larger repeated
+work (at least two independent numerical jobs in the same dispatch wave).
+Application passes on the small repeated M6a cell, not the larger repeated
 one. The single IR observation cannot establish that median gate. The complete
 region scheduling unit has width one in all completed cells, so even its large
 time share does not pass a parallel-width screen.
@@ -231,6 +235,19 @@ taskset -c 0-7 python3 docs/experiments/1497-baseline/run.py
 ```
 
 The IR source is not vendored; access to that pinned repository is required.
+The shared-machine `ai-run` tool is external and was not versioned or hashed
+during this campaign. Its original CLEAN reports are retained, but reproducing
+that exact guard implementation/verdict is outside the repository's evidence.
+A new run must record its installed guard version or hash before measuring.
+
+The reviewed [portable manifest](./ir-Cargo.toml) uses local path dependencies
+into the detached baseline checkout, not git dependencies on moving `main`.
+Its inherited source comment was corrected after measurement. The measured
+harness manifest used machine-local absolute paths; the portable copy changes
+those path spellings and comments, so it does not reproduce that manifest's
+recorded byte hash. It resolves the same pinned baseline crates and lockfile.
+The recorded Rust sources, workspace lock, standalone IR lock, protocol,
+profiling/reader patches and controller remain byte-for-byte reproducible.
 Choose appropriate observer/measurement CPU sets for another host, declare
 that new protocol before running, and record its different environment. Do
 not format or edit instrumented sources during a run. The raw command files,

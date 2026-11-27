@@ -12,6 +12,12 @@ The scope is the numerical call chain consumed by patched Fourier; unrelated
 parts of the workspace's engine migration need not be completed for their own
 sake before this work.
 
+This step has no speedup acceptance gate. The 20% phase share is a baseline
+need screen; useful independent width means at least two numerical jobs in
+one dispatch wave. A later candidate campaign requires maintainer-approved
+numeric speedup, non-regression and resource thresholds before measurements.
+No CLEAN run can substitute for those missing performance criteria.
+
 | Order | Owner / seam | Required change or decision | Evidence before advancing |
 | --- | --- | --- | --- |
 | 0 | Maintainers, #1497 / #1407 | Agree on the initial leaf-only scope, numerical profiles, memory semantics and final merge-policy admission rules | Explicit design review; current PR's source and ledger read after its final update |
@@ -84,6 +90,12 @@ confirms the workspace migration is confined to the two defining/consuming
 crates. External-consumer evidence, named performance cases and their benefit
 trade-off remain requested there, along with the same regression test. That
 reply does not change the inspected remote head or settle its admission rule.
+
+The separate [#1511 output-region API correction](https://github.com/tensor4all/tensor4all-rs/pull/1511)
+also changes the same options/report and scheduler integration points. Settle
+its landing order with #1407, then test output selection and coverage counters
+under every merge policy before freezing the lane seam. Textual conflict
+resolution alone does not establish those combined semantics.
 
 Tolerance also charges only the kept candidate's error; the baseline rank-goal
 schedule conservatively spends on discarded probes. Parallel integration

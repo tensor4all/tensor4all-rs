@@ -248,6 +248,14 @@ lane service or aggregate allocator for the initial leaf-only candidate.
 
 ## Acceptance and rollout
 
+This design/baseline step sets no numerical speedup or aggregate-memory
+acceptance gate. CLEAN means an uncontaminated observation, not a performance
+pass. Before a lane implementation is measured, maintainers must approve a
+separate protocol with numeric speedup/non-regression and resource thresholds;
+without that protocol no candidate can pass performance acceptance. Useful
+independent width here means at least two numerical jobs available in one wave,
+not a guarantee that their cost amortizes dispatch.
+
 The integration plan separates these steps into reviewable changes:
 
 1. Settle policy/admission integration and complete only the numerical engine

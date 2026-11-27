@@ -20,5 +20,7 @@
   "standalone_IR_lock_identical": true,
   "production_diff_empty": true,
   "profiling_off_on_reported_metrics_identical": true,
-  "helper_python_compile": "pass"
+  "helper_python_compile": "pass",
+  "review_followup_recorded_hashes_verified": 20,
+  "portable_IR_manifest": "Equivalent dependencies through relative paths; machine-local measured manifest hash is intentionally not reproduced. Comment correction changes no declaration."
 }
