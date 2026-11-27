@@ -87,6 +87,47 @@ Follow the repository vocabulary documented in the [architecture guide](docs/boo
 
 Use `max_bond_dim: Option<usize>` for bond caps and `SvdTruncationPolicy` for SVD truncation. Dense flat buffers are column-major. Do not add scalar-specific Rust entry points when a generic API works; scalar-specific names belong at the C FFI boundary.
 
+## Changelog entries
+
+`CHANGELOG.md` is what a user reads before upgrading, so a pull request that changes
+user-visible behavior, public API, diagnostics, or performance adds an entry. Do not edit
+`CHANGELOG.md` for it: every PR inserting at the same place made the file conflict on
+nearly every merge. Add one fragment file instead (#1503):
+
+```text
+changelog.d/<PR-number>-<kind>.md
+```
+
+- **`<PR-number>`** is this pull request's number. Open the PR first, then add the file.
+  A second entry for the same PR and kind is `<PR-number>-<kind>-2.md` (`-3`, ...; never `-1`).
+- **`<kind>`** picks the section: `behavior` (Behavior changes), `added` (Added),
+  `breaking` (Breaking Rust API changes), `diagnostics` (Diagnostics), `performance`
+  (Performance), or `fixed` (Fixed). A new heading is a separate decision, not a new kind —
+  and a heading that already exists in `CHANGELOG.md` is not new, so add it to `KINDS` and to
+  this list rather than inventing a section.
+- **The body is one entry**, in the prose style of `CHANGELOG.md`: a single `- ` bullet,
+  continuation lines indented two spaces, no headings. It describes the change for a *user*
+  upgrading (what now behaves differently, what to do about it), not the diff.
+
+```markdown
+- `tensor4all-treeaci`: `TreeAciError::RollbackFailed { error, rollback }` (#1464).
+  When a step fails and undoing its partial state fails too, the step's own error
+  is returned in `error`; before, the rollback error replaced it.
+```
+
+`python3 scripts/changelog_fragments.py check --base origin/main --pr <N>` runs what CI
+runs: it fails an unknown kind, a missing or mismatched PR number, an empty body, more than
+one entry in a file, any `## Unreleased` section in `CHANGELOG.md`, and any other direct edit of
+`CHANGELOG.md` (only a release, which consumes fragments, changes it).
+
+At release, `python3 scripts/changelog_fragments.py release <version>` concatenates the
+fragments into a `## <version>` section (grouped by kind, newest PR first) and deletes them.
+`changelog.d/legacy-order.txt` pins the order of the entries migrated from the old
+`## Unreleased` section for that first release and is deleted with them; it may only lose
+entries. Migrated fragments keep the number cited in their original commit subject (often the
+issue), so the PR-number match does not apply to them. A fragment ending in
+a blank line keeps it; only migrated entries need that.
+
 ## Validate locally
 
 Choose checks by the changed surface and risk, rather than duplicating hosted
