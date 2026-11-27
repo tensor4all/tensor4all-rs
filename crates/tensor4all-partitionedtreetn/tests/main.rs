@@ -19,6 +19,7 @@ mod adaptive_patch_size;
 mod adaptive_rounding_calibration;
 mod heavy_adaptive_l2_corner_miss;
 mod heavy_project_first_add;
+mod map;
 mod operator_state_network;
 mod output_region_contract;
 mod partitioned_tree_tn;
