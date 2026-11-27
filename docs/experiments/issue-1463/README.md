@@ -2,7 +2,7 @@
 
 Pilot for the review discussion on #1463, **not** an acceptance threshold:
 synthetic targets, one Apple M3, no universal factor is claimed, x86 numbers
-are welcome. Folding (`L+2 -> L` cores) is not implemented and not measured.
+are welcome. Folding (`L+2 -> L` cores) is measured in the addendum at the end.
 
 ## Setup
 
@@ -113,3 +113,29 @@ Synthetic targets; one machine and compiler; the 50 us callback is a busy loop,
 not a real source; the stop error is sampled, not a bound (final errors land at
 `1e-9` to `1.3e-8` of `max|F|`); 3 timed repetitions, so differences of a few
 percent are noise; x86 pending.
+
+## Addendum: folded layout (`MatrixTCI2Result::to_folded`)
+
+Folding contracts the row core into the first and the column core into the last
+physical core (`L+2 -> L` cores; same function, no new samples, no truncation, one
+contraction per end at conversion). Measured on the four step-0 cases at `f64`,
+Full pivoting, cheap callback, fit A, `L = 12`
+([folding.csv](folding.csv); `python3 docs/experiments/issue-1463/run.py fold`,
+same host and flags as above, release, one thread, `nice`). Bytes are core data
+only (`retained_bytes()` of each layout). Readout is the whole matrix at 1024
+points (every fourth of the 4096), median of 3 rounds after one warm-up round;
+both layouts agree on all 1024 points (checked outside the timing).
+
+| target | shape | max bond | bytes L+2 | bytes folded | folded / L+2 | readout ms L+2 | readout ms folded |
+|---|---|---|---|---|---|---|---|
+| corr r=2 | 2x3 | 12 | 12320 | 12304 | 0.999 | 7.04 | 3.22 |
+| corr r=2 | 8x8 | 12 | 12688 | 13200 | 1.040 | 8.98 | 5.65 |
+| unrel | 2x3 | 25 | 40008 | 39904 | 0.997 | 18.48 | 8.59 |
+| unrel | 8x8 | 78 | 387712 | 386688 | 0.997 | 309.83 | 182.69 |
+
+Storage barely moves here (end cores are a small part of 12 interior cores) and
+grows by 4% for corr 8x8, where `rows * d_1 * r_1` exceeds `rows * r_0 + r_0 * d_1 * r_1`;
+the rustdoc says folding may grow storage, and `L+2` stays the default. Readout is
+1.6-2.2x faster, since two of the `L+2` slab products disappear (corr 2x3: 6.9 us
+to 3.1 us per point). One machine, three repetitions, a plain-loop readout: treat the
+readout factor as indicative, not as a rule.

@@ -4,7 +4,13 @@
 //! One run = one case. Checks A == B and C == D exactly, prints one CSV row per
 //! variant: `case,variant,source_calls,max_bond,err,tt_bytes,median_ms`.
 //!
-//! Usage: matrix_tci2 <corr|unrel> <rows> <cols> <rank> <full|rook> <cheap|burn> <reps>
+//! Usage: matrix_tci2 <corr|unrel> <rows> <cols> <rank> <full|rook> <cheap|burn> <reps> [fold]
+//!
+//! With the optional ninth argument `fold`, only fit A is run and the folded
+//! layout (`to_folded`) is measured against the `L + 2` layout: core bytes of
+//! both and the readout time of the whole matrix at 1024 points (every fourth
+//! point of the 4096), median of `reps` rounds after one warm-up round. One
+//! row: `FOLD,case,L,max_bond,bytes_L+2,bytes_folded,ms_L+2,ms_folded`.
 
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -209,7 +215,7 @@ fn bits(mut idx: usize) -> Vec<usize> {
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
-    assert!(a.len() == 8, "usage: matrix_tci2 <corr|unrel> rows cols rank <full|rook> <cheap|burn> reps");
+    assert!(a.len() == 8 || a.len() == 9 && a[8] == "fold", "usage: matrix_tci2 <corr|unrel> rows cols rank <full|rook> <cheap|burn> reps");
     let (rows, cols, rank, reps): (usize, usize, usize, usize) =
         (a[2].parse().unwrap(), a[3].parse().unwrap(), a[4].parse().unwrap(), a[7].parse().unwrap());
     let burn = if a[6] == "burn" {
@@ -251,6 +257,56 @@ fn main() {
     let s = Setup { pivot_joint, x0, opts };
     let mut rng = ChaCha8Rng::seed_from_u64(99);
     let sample: Vec<Vec<usize>> = (0..2048).map(|_| bits(rng.gen_range(0..1usize << L))).collect();
+
+    if a.len() == 9 {
+        let fit = crossinterpolate2_matrix::<f64, _>(
+            |pts: &[Vec<usize>], out: &mut [f64]| {
+                let len = rows * cols;
+                for (p, x) in pts.iter().enumerate() {
+                    t.source(x, &mut out[p * len..(p + 1) * len]);
+                }
+            },
+            MatrixShape { rows, cols },
+            vec![2; L],
+            vec![s.pivot_joint.clone()],
+            s.opts.clone(),
+        )
+        .unwrap();
+        let folded = fit.to_folded().unwrap();
+        let points: Vec<Vec<usize>> = (0..1usize << L).step_by(4).map(bits).collect();
+        assert_eq!(points.len(), 1024);
+        // The two layouts agree on every readout point (checked outside timing).
+        for x in &points {
+            let (u, f) = (fit.evaluate(x).unwrap(), folded.evaluate(x).unwrap());
+            for (p, q) in u.as_col_major_slice().iter().zip(f.as_col_major_slice()) {
+                assert!((p - q).abs() <= 1e-10 * max_f, "layouts differ");
+            }
+        }
+        let (mut tu, mut tf) = (vec![], vec![]);
+        for round in 0..=reps {
+            let t0 = Instant::now();
+            for x in &points {
+                black_box(fit.evaluate(black_box(x)).unwrap());
+            }
+            let du = t0.elapsed().as_secs_f64() * 1e3;
+            let t0 = Instant::now();
+            for x in &points {
+                black_box(folded.evaluate(black_box(x)).unwrap());
+            }
+            let df = t0.elapsed().as_secs_f64() * 1e3;
+            if round > 0 {
+                tu.push(du);
+                tf.push(df);
+            }
+        }
+        for v in [&mut tu, &mut tf] {
+            v.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        }
+        let bond = fit.to_tensor_train().unwrap().link_dims().into_iter().max().unwrap();
+        let case = format!("{},{}x{},{},{},{}", a[1], rows, cols, if t.corr { rank } else { 0 }, a[5], a[6]);
+        println!("FOLD,{case},{L},{bond},{},{},{:.2},{:.2}", fit.retained_bytes(), folded.retained_bytes(), tu[reps / 2], tf[reps / 2]);
+        return;
+    }
 
     // Warm-up round, also the source of counts and errors.
     let outs: Vec<Out> = "ABCD".chars().map(|v| run(v, &t, &s)).collect();

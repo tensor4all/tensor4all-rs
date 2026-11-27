@@ -1,0 +1,5 @@
+target,shape,rank,pivot,cost,L,max_bond,bytes_l2,bytes_folded,ms_l2,ms_folded
+corr,2x3,2,full,cheap,12,12,12320,12304,7.04,3.22
+corr,8x8,2,full,cheap,12,12,12688,13200,8.98,5.65
+unrel,2x3,0,full,cheap,12,25,40008,39904,18.48,8.59
+unrel,8x8,0,full,cheap,12,78,387712,386688,309.83,182.69
