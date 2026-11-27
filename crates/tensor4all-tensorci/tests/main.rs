@@ -5,6 +5,7 @@
 
 mod global_pivot_coordinate_search;
 mod issue1358_chain_global_residual;
+mod matrix_tci2;
 mod rng_stream_contract;
 mod rook_four_site_ridge;
 mod rook_zero_fibers;

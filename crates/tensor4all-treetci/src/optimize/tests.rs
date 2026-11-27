@@ -72,6 +72,7 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
             tolerance: 1e-12,
             stop_rule,
             max_iter: 4,
+            rank_slack: 0.03,
             enable_global_pivots,
             nsearch: 20,
             seed: Some(7),
@@ -104,6 +105,15 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
             vec![0.0; iterations]
         };
         assert_eq!(result.errors, expected_errors, "{stop_rule:?}");
+        assert_eq!(result.nglobal_pivots.len(), iterations);
+        if enable_global_pivots {
+            assert!(result.nglobal_pivots[..iterations - 1]
+                .iter()
+                .all(|&n| n > 0));
+            assert_eq!(result.nglobal_pivots[iterations - 1], 0);
+        } else {
+            assert_eq!(result.nglobal_pivots, vec![0; iterations]);
+        }
         assert_eq!(
             observed
                 .0
@@ -150,6 +160,26 @@ fn optimize_rejects_invalid_options_before_callback() {
 
     for options in [
         TreeTciOptions {
+            ncheck_history: 0,
+            ..TreeTciOptions::default()
+        },
+        TreeTciOptions {
+            rank_slack: -0.01,
+            ..TreeTciOptions::default()
+        },
+        TreeTciOptions {
+            rank_slack: f64::NAN,
+            ..TreeTciOptions::default()
+        },
+        TreeTciOptions {
+            rank_slack: f64::INFINITY,
+            ..TreeTciOptions::default()
+        },
+        TreeTciOptions {
+            rank_slack: f64::NEG_INFINITY,
+            ..TreeTciOptions::default()
+        },
+        TreeTciOptions {
             max_iter: 0,
             ..TreeTciOptions::default()
         },
@@ -176,11 +206,21 @@ fn optimize_rejects_invalid_options_before_callback() {
     ] {
         let mut tci = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
         tci.add_global_pivots(&[vec![0, 0]]).unwrap();
-        let error = optimize_default(&mut tci, |_| Ok(vec![1.0]), &options).unwrap_err();
+        let calls = std::cell::Cell::new(0);
+        let error = optimize_default(
+            &mut tci,
+            |_| {
+                calls.set(calls.get() + 1);
+                Ok(vec![1.0])
+            },
+            &options,
+        )
+        .unwrap_err();
         assert!(matches!(
             error,
             crate::TreeTciError::InvalidConfiguration { .. }
         ));
+        assert_eq!(calls.get(), 0);
     }
 }
 
@@ -1088,48 +1128,52 @@ fn local_threshold_floor_ends_a_run_the_local_updates_cannot_fix() {
     // rank 2 across every bond, but the proposer keeps every bond at the
     // rank-1 initial cross, so the global search measures the same residual
     // in every iteration and no local threshold can remove it (#1371).
-    let mut state =
-        TreeTCI2::<f64>::new(vec![2; 4], TreeTciGraph::linear_chain(4).unwrap()).unwrap();
-    state.add_global_pivots(&[vec![0; 4]]).unwrap();
-    state.max_sample_value = 1.0;
-    let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
-        Ok(batch
-            .data()
-            .chunks_exact(batch.n_sites())
-            .map(|point| (1 + point.iter().sum::<usize>()) as f64)
-            .collect())
-    };
-    let options = TreeTciOptions {
-        tolerance: 1e-12,
-        max_iter: 20,
-        nsearch: 20,
-        seed: Some(7),
-        stop_rule: StopRule::Sampled,
-        ..Default::default()
-    };
-    let result = crate::optimize_with_proposer(
-        &mut state,
-        evaluate,
-        &options,
-        &InitialCrossOnly,
-        &crate::AllEdges,
-        &mut (),
-    )
-    .unwrap();
-    assert_eq!(result.termination, TreeTciTermination::LocalThresholdFloor);
-    // Sweeps at factors 1 and 1/2, then three at the floor 1/3; the factor is
-    // clamped there rather than halved to 1/4.
-    assert_eq!(result.ranks, vec![1; 5]);
-    assert_eq!(result.local_threshold_factor, 1.0 / 3.0);
-    assert!(result
-        .errors
-        .iter()
-        .all(|&error| error >= options.tolerance));
-    // The floor stop does not inject that iteration's pivots: the state is
-    // swept and materializes.
-    assert_swept_pivot_sets(&state, usize::MAX);
-    let network = crate::to_treetn(&state, evaluate, None).unwrap();
-    assert_eq!(network.node_count(), 4);
+    for window in [1, 2, 3, 4] {
+        let mut state =
+            TreeTCI2::<f64>::new(vec![2; 4], TreeTciGraph::linear_chain(4).unwrap()).unwrap();
+        state.add_global_pivots(&[vec![0; 4]]).unwrap();
+        state.max_sample_value = 1.0;
+        let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+            Ok(batch
+                .data()
+                .chunks_exact(batch.n_sites())
+                .map(|point| (1 + point.iter().sum::<usize>()) as f64)
+                .collect())
+        };
+        let options = TreeTciOptions {
+            tolerance: 1e-12,
+            max_iter: 20,
+            ncheck_history: window,
+            nsearch: 20,
+            seed: Some(7),
+            stop_rule: StopRule::Sampled,
+            ..Default::default()
+        };
+        let result = crate::optimize_with_proposer(
+            &mut state,
+            evaluate,
+            &options,
+            &InitialCrossOnly,
+            &crate::AllEdges,
+            &mut (),
+        )
+        .unwrap();
+        assert_eq!(result.termination, TreeTciTermination::LocalThresholdFloor);
+        // Two tightening sweeps followed by the configured window at the floor.
+        assert_eq!(result.ranks, vec![1; 2 + window]);
+        assert_eq!(result.nglobal_pivots.len(), 2 + window);
+        assert!(result.nglobal_pivots.iter().all(|&count| count > 0));
+        assert_eq!(result.local_threshold_factor, 1.0 / 3.0);
+        assert!(result
+            .errors
+            .iter()
+            .all(|&error| error >= options.tolerance));
+        // The floor stop does not inject that iteration's pivots: the state is
+        // swept and materializes.
+        assert_swept_pivot_sets(&state, usize::MAX);
+        let network = crate::to_treetn(&state, evaluate, None).unwrap();
+        assert_eq!(network.node_count(), 4);
+    }
 }
 
 #[test]
@@ -1270,4 +1314,70 @@ fn bond_cap_takes_precedence_over_the_local_threshold_floor() {
     // complete too.
     assert_eq!(result.local_threshold_factor, 0.5);
     assert_swept_pivot_sets(&state, 2);
+}
+
+#[test]
+fn rank_slack_preserves_every_zero_slack_verdict() {
+    for a in 0..8 {
+        for b in 0..8 {
+            for c in 0..8 {
+                let history = [a, b, c];
+                assert_eq!(super::ranks_stable(&history, 0.0), c == a.min(b).min(c));
+            }
+        }
+    }
+    assert!(super::ranks_stable(&[220, 218, 217], 0.0));
+    assert!(!super::ranks_stable(&[217, 218, 220], 0.0));
+    // Avoid changing exact zero-slack semantics through f64 rounding.
+    assert!(!super::ranks_stable(&[usize::MAX - 1, usize::MAX], 0.0));
+    assert!(!super::ranks_stable(&[], 0.03));
+}
+
+#[test]
+fn rank_slack_accepts_noise_but_not_unbounded_growth() {
+    assert!(super::ranks_stable(&[216, 213, 219], 0.03));
+    assert!(!super::ranks_stable(&[216, 212, 219], 0.03));
+    assert!(super::ranks_stable(&[3, 5], 0.4)); // equality is accepted
+    assert!(!super::ranks_stable(&[3, 5], 0.39));
+    assert!(super::ranks_stable(&[0, 0, 0], 0.03));
+    assert!(super::ranks_stable(&[7], 0.0));
+}
+
+#[test]
+fn history_window_controls_convergence_cap_and_short_calls() {
+    for (window, max_iter, cap, expected_len, expected_reason) in [
+        (1, 5, None, 1, TreeTciTermination::Converged),
+        (1, 1, None, 1, TreeTciTermination::Converged),
+        (usize::MAX, 5, None, 5, TreeTciTermination::MaxIterations),
+        (2, 5, None, 2, TreeTciTermination::Converged),
+        (4, 5, None, 4, TreeTciTermination::Converged),
+        (6, 5, None, 5, TreeTciTermination::MaxIterations),
+        (3, 1, None, 1, TreeTciTermination::MaxIterations),
+        (1, 5, Some(1), 1, TreeTciTermination::MaxBondDimension),
+        (2, 5, Some(1), 2, TreeTciTermination::MaxBondDimension),
+        (6, 5, Some(1), 5, TreeTciTermination::MaxIterations),
+    ] {
+        for (enabled, limit) in [(false, 5), (true, 0), (true, 5)] {
+            let mut state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+            state.add_global_pivots(&[vec![0, 0]]).unwrap();
+            let result = optimize_default(
+                &mut state,
+                |batch| Ok(vec![2.0; batch.n_points()]),
+                &TreeTciOptions {
+                    ncheck_history: window,
+                    max_iter,
+                    max_bond_dim: cap,
+                    enable_global_pivots: enabled,
+                    max_nglobal_pivot: limit,
+                    seed: Some(0),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(result.termination, expected_reason);
+            assert_eq!(result.ranks, vec![1; expected_len]);
+            assert_eq!(result.errors, vec![0.0; expected_len]);
+            assert_eq!(result.nglobal_pivots, vec![0; expected_len]);
+        }
+    }
 }

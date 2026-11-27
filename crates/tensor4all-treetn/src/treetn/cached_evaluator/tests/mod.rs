@@ -7,6 +7,7 @@ use super::*;
 use num_complex::{Complex32, Complex64};
 use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, TensorElement};
 
+mod candidates;
 mod chunking;
 mod components;
 mod edge_cut;
@@ -15,6 +16,7 @@ mod grouped_contraction;
 mod heavy_measurements;
 mod measurements;
 mod message_cache;
+mod mixed_scalar_kinds;
 mod parallelism;
 mod raw_center_kernel;
 mod raw_messages;

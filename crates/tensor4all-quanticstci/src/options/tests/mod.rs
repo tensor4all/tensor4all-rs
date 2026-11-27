@@ -32,5 +32,7 @@ fn test_to_treetci_options() {
     assert!((tree_opts.tolerance - 1e-6).abs() < 1e-15);
     assert_eq!(tree_opts.max_bond_dim, Some(100));
     assert_eq!(tree_opts.max_iter, 200);
+    assert_eq!(tree_opts.ncheck_history, 3);
+    assert_eq!(tree_opts.rank_slack, 0.0);
     assert!(tree_opts.scale_tolerance);
 }

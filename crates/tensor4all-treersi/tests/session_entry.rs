@@ -3,8 +3,7 @@
 //! Value parity alone would also hold for a route that entered the process-global
 //! context, so the dispatch test holds the process-global backend while the session
 //! entry runs on a worker thread: a numerical step that consulted the global session
-//! (the default CPU context a CUDA run falls back to for its rank decision, or the
-//! global eager readback) would block there, and the timeout turns that into a failure.
+//! (the global eager readback of a CUDA run, or any other global fallback) would block there, and the timeout turns that into a failure.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -273,7 +272,7 @@ fn session_entry_runs_while_the_process_global_backend_is_held() {
             Err(_) => panic!(
                 "the session entry did not finish while the process-global backend was held: a \
                  numerical step on this route still consulted the global session (for example \
-                 the default CPU context of the CUDA rank-decision fallback)"
+                 the global eager readback of a CUDA run)"
             ),
         }
     })

@@ -18,8 +18,8 @@
 //! `tenferro-cuda` feature a caller-supplied CUDA context runs the contractions
 //! on the device and transfers each operand and result explicitly. Two host
 //! dependencies remain for a CUDA run: the input-core readback enters the
-//! process-global CPU eager context, and the rank decision uses the
-//! process-global CPU context. Automatic differentiation through this operation
+//! process-global CPU eager context, and the solve of the rank decision runs on
+//! a CPU context the run owns. Automatic differentiation through this operation
 //! is not supported.
 //!
 //! [`hadamard_many_with_rng_on_session`] runs the same implementation on a

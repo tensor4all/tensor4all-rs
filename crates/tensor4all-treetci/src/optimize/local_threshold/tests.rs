@@ -167,3 +167,15 @@ fn per_bond_never_tightens_or_reaches_the_floor() {
         }
     }
 }
+
+#[test]
+fn floor_stop_uses_the_configured_history_window() {
+    let mut threshold = super::LocalThreshold::new(2, 1.0, crate::StopRule::Sampled);
+    threshold.record(2.0, 1.0);
+    threshold.record(2.0, 1.0);
+    assert!(threshold.floor_window_failed(&[2.0, 2.0], 1.0, 1));
+    assert!(!threshold.floor_window_failed(&[2.0, 2.0], 1.0, 2));
+    threshold.record(2.0, 1.0);
+    assert!(threshold.floor_window_failed(&[2.0, 2.0, 2.0], 1.0, 2));
+    assert!(!threshold.floor_window_failed(&[2.0, 2.0, 2.0], 1.0, 4));
+}

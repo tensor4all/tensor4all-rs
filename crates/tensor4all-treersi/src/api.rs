@@ -55,8 +55,8 @@ pub fn hadamard_many<T: TreeRsiScalar, V: TreeRsiNode>(
 /// downloads its result. Expect the transfer cost of that naive route. A CUDA
 /// run also keeps two host dependencies: each input core is downloaded and
 /// rebuilt in the process-global CPU eager context, whose session `to_vec`
-/// enters, and the local rank decision uses the process-global CPU context. A
-/// caller that already holds a session of that same process-global context
+/// enters, while the solve of the local rank decision runs on a CPU context
+/// the run owns. A caller that already holds a session of that same process-global context
 /// therefore fails at the readback instead of nesting into it.
 ///
 /// # Errors

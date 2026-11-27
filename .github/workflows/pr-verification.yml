@@ -8,6 +8,10 @@ on:
   pull_request:
     types: [opened, edited, reopened, synchronize]
   merge_group:
+# A new push or description edit supersedes the run in flight.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
   pull-requests: read

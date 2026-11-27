@@ -233,7 +233,6 @@
   {"path": "crates/tensor4all-treersi/src/dense.rs", "pattern": "context-ref-param", "scope": "cuda_einsum_host", "site": "cuda:&tensor4all_tensorbackend::CudaExecutionContext", "count": 1},
   {"path": "crates/tensor4all-treersi/src/dense.rs", "pattern": "session-call", "scope": "cuda_einsum_host", "site": ".with_session(", "count": 1},
   {"path": "crates/tensor4all-treersi/src/engine.rs", "pattern": "context-ref-param", "scope": "run_in", "site": "context:&ExecutionContext", "count": 1},
-  {"path": "crates/tensor4all-treersi/src/engine.rs", "pattern": "global-accessor", "scope": "row_interpolation", "site": "default_cpu_execution_context()", "count": 1},
   {"path": "crates/tensor4all-treersi/src/engine.rs", "pattern": "session-call", "scope": "run_in", "site": "with_concrete_session(", "count": 1},
   {"path": "crates/tensor4all-treetci/src/api.rs", "pattern": "context-ref-param", "scope": "crossinterpolate2_in", "site": "context:&tensor4all_tensorbackend::CpuExecutionContext", "count": 1},
   {"path": "crates/tensor4all-treetci/src/api.rs", "pattern": "context-ref-param", "scope": "crossinterpolate2_with_rng_in", "site": "context:&tensor4all_tensorbackend::CpuExecutionContext", "count": 1},
