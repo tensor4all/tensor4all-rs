@@ -2,6 +2,7 @@
 
 mod coverage;
 mod evaluate;
+mod map;
 mod restrict;
 mod summaries;
 
