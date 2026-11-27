@@ -34,10 +34,16 @@ pub(crate) struct Inserted {
 /// During a growth the outgoing table is alive next to the new one: both tables
 /// fit the limit afterwards and the outgoing one is half the new one plus half a
 /// group, so the transient peak is at most 1.5 × limit + `GROUP_WIDTH` / 2.
+///
+/// A declared per-value `payload` (heap bytes every value carries, 0 by default)
+/// adds `len() × payload` to [`Self::bytes`] and is bounded by the same limit,
+/// so a payload-dominated table evicts by generation like a table-dominated one.
 #[derive(Debug, Clone)]
 pub(crate) struct MemoTable<K, V> {
     current: FxHashMap<K, V>,
     previous: FxHashMap<K, V>,
+    /// Declared bytes every stored value carries beyond its table slot.
+    payload: usize,
 }
 
 impl<K, V> Default for MemoTable<K, V> {
@@ -45,6 +51,7 @@ impl<K, V> Default for MemoTable<K, V> {
         Self {
             current: FxHashMap::default(),
             previous: FxHashMap::default(),
+            payload: 0,
         }
     }
 }
@@ -93,8 +100,18 @@ impl<K: Hash + Eq, V> MemoTable<K, V> {
         self.current.len() + self.previous.len()
     }
 
-    /// Bytes of both tables.
+    /// Declare the heap bytes each stored value carries (call before inserting).
+    pub(crate) fn set_payload(&mut self, payload: usize) {
+        self.payload = payload;
+    }
+
+    /// Bytes of both tables plus the declared payload of every entry.
     pub(crate) fn bytes(&self) -> usize {
+        self.table_bytes_now()
+            .saturating_add(self.len().saturating_mul(self.payload))
+    }
+
+    fn table_bytes_now(&self) -> usize {
         map_bytes(&self.current).saturating_add(map_bytes(&self.previous))
     }
 
@@ -103,7 +120,7 @@ impl<K: Hash + Eq, V> MemoTable<K, V> {
         self.previous = FxHashMap::default();
     }
 
-    /// Bytes of both tables once one more new key is stored.
+    /// Bytes (tables and payload) once one more new key is stored.
     fn bytes_after_new_key(&self) -> usize {
         // INVARIANT: entries are never removed from a live map, so a new key
         // grows `current` exactly when it is at capacity.
@@ -112,13 +129,15 @@ impl<K: Hash + Eq, V> MemoTable<K, V> {
         } else {
             map_bytes(&self.current)
         };
-        map_bytes(&self.previous).saturating_add(current)
+        map_bytes(&self.previous)
+            .saturating_add(current)
+            .saturating_add((self.len() + 1).saturating_mul(self.payload))
     }
 
     /// Store `value` under `key` so that both tables stay within `limit` bytes:
     /// first by making the current generation the previous one (dropping the
     /// older), then by dropping that one too; refused only when the limit is below
-    /// the smallest table. A lowered limit thus takes effect at the next new key.
+    /// the smallest table plus one value's payload. A lowered limit thus takes effect at the next new key.
     pub(crate) fn insert(&mut self, key: K, value: V, limit: usize) -> Inserted {
         if let Some(slot) = self.current.get_mut(&key) {
             *slot = value;

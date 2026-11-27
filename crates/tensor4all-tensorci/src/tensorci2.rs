@@ -2647,5 +2647,11 @@ where
     }
 }
 
+mod matrix;
+pub use matrix::{
+    crossinterpolate2_matrix, crossinterpolate2_matrix_with_rng, MatrixSamplingStats, MatrixShape,
+    MatrixTCI2Result,
+};
+
 #[cfg(test)]
 mod tests;
