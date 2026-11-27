@@ -17,8 +17,11 @@ The two prerequisites: the frozen M2 golden outputs were committed before the
 refactor ([Tests](#tests)); the evaluator fix of
 [Determinism](#determinism) is still open, with its order decided (open
 question 8). Issue [#795](https://github.com/tensor4all/tensor4all-rs/issues/795)
-closed the tracking and test gap through PR #816, while the planner fix remains
-open upstream in [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
+closed the tracking and test gap through PR #816, and the upstream planner fix
+([tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963)) was
+closed by [tenferro-rs#2014](https://github.com/tensor4all/tenferro-rs/pull/2014),
+so the planner tie is no longer a prerequisite for the patched Fourier path (a
+code-reading argument, see [Determinism](#determinism)).
 The cross-thread determinism test ran early: it passes on trees whose nodes
 carry one site each and fails, as predicted, on the generic path, where it is
 kept as an ignored test with that reason.
@@ -1235,8 +1238,9 @@ done then, and is now a prerequisite of M7. The order is decided
 ([open question 8](#open-questions-for-the-user)). Issue
 [#795](https://github.com/tensor4all/tensor4all-rs/issues/795) closed the
 tracking/test gap through #816; the following local prerequisites remain
-unimplemented, and the upstream planner fix is tracked by
-[tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963):
+unimplemented; the upstream planner fix, tracked by
+[tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963), was
+closed by [tenferro-rs#2014](https://github.com/tensor4all/tenferro-rs/pull/2014):
 
 - (c) first: extend the raw kernels of `TreeTNCachedEvaluator` to site-free
   nodes. Driver patches keep at most one site per node, but the trees in use
@@ -1250,9 +1254,20 @@ unimplemented, and the upstream planner fix is tracked by
   node and `f32`/`c32` data;
 - (b) long term: upstream, deterministic tie-breaking in omeco or in the
   tenferro-einsum planner, which also covers every other N-ary contraction in
-  the workspace.
+  the workspace. Closed by
+  [tenferro-rs#2014](https://github.com/tensor4all/tenferro-rs/pull/2014): the
+  pinned tenferro `5df83672` plans the default (non-annealing) N-ary path
+  with a deterministic greedy.
 
 The driver does not work around it.
+
+For the patched Fourier transform and merge-refine level zero the planner tie
+is no longer a live prerequisite: that path contracts through the zip-up's
+N-ary `T::contract` (`contract_zipup` in `tensor4all-treetn`), not
+`TreeTNCachedEvaluator`. This is a code-reading argument until the cross-lane
+test of [#1497](https://github.com/tensor4all/tensor4all-rs/issues/1497) runs.
+Steps (c) and (a) remain the M7 prerequisite for the generic cached-evaluator
+path.
 
 **Scope (decided, [open question 9](#open-questions-for-the-user); narrowed to
 one tier 2026-11-09, owner decision after #1202).** There is one promise:
@@ -1851,8 +1866,10 @@ defaults reproduce M3 exactly.
    `tensor4all-treetn` work and a prerequisite of M7. Issue
    [#795](https://github.com/tensor4all/tensor4all-rs/issues/795) closed the
    tracking/test gap through #816; it did not implement these steps. The
-   upstream step is tracked by
-   [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
+   upstream step was tracked by
+   [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963),
+   which [tenferro-rs#2014](https://github.com/tensor4all/tenferro-rs/pull/2014)
+   closed.
    - (c), new and first: extend the raw kernels of `TreeTNCachedEvaluator`
      to site-free nodes. Driver patches keep at most one site per node, but
      the trees in use have site-free nodes (the site-free root, the junction

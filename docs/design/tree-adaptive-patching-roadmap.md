@@ -323,7 +323,8 @@ commit:
   `skills/audit-performance/`;
 - one list of the recorded but unresolved issues, each with its owner
   milestone, distinguishing closed tracking history (#795, #791) from
-  remaining work (#797, #670, upstream tenferro-rs#1963).
+  remaining work (#797, #670); upstream tenferro-rs#1963 was closed by
+  tenferro-rs#2014.
 
 Process: independent review, a fix round if needed, and a re-review; if the
 re-review finds new problems, stop and report instead of starting another
@@ -518,8 +519,16 @@ Scope:
 Prerequisite: deterministic cached-evaluator contraction paths, in the order
 decided under M3 open question 8: (c) raw kernels of `TreeTNCachedEvaluator`
 for site-free nodes, then (a) pairwise positional contraction on the generic
-path; (b), upstream tie-breaking in omeco or tenferro, is long term and tracked by
-[tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
+path; (b), upstream tie-breaking in omeco or tenferro, was tracked by
+[tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963),
+which [tenferro-rs#2014](https://github.com/tensor4all/tenferro-rs/pull/2014)
+closed; the pinned tenferro `5df83672` plans the default N-ary path with a
+deterministic greedy. The planner tie is therefore no longer a prerequisite
+for the patched Fourier transform and merge-refine level zero, which contract
+through the zip-up's N-ary `T::contract`, not `TreeTNCachedEvaluator` (a
+code-reading argument until the cross-lane test of
+[#1497](https://github.com/tensor4all/tensor4all-rs/issues/1497) runs). (c)
+and (a) remain the prerequisite for the generic path.
 Issue #795 closed the tracking/test gap through #816, not this prerequisite. Until
 then, L2 measurements on trees with a site-free or multi-site node, or with
 `f32`/`c32` data, are not reproducible across threads.
