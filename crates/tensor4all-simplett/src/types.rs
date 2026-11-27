@@ -4,6 +4,7 @@ use crate::error::{Result, SimpleTensorTrainError};
 use crate::tensor::Tensor;
 pub use crate::tensor::Tensor3;
 use tenferro_tensor::{TensorScalar, TypedTensor as TfTensor};
+use tensor4all_tensorbackend::invariant_violated;
 
 /// Local index type (index within a single tensor site)
 pub type LocalIndex = usize;
@@ -138,15 +139,8 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
     }
 
     fn slice_site(&self, s: usize) -> Vec<T> {
-        let left_dim = self.left_dim();
-        let right_dim = self.right_dim();
-        let mut result = Vec::with_capacity(left_dim * right_dim);
-        for r in 0..right_dim {
-            for l in 0..left_dim {
-                result.push(self[[l, s, r]]);
-            }
-        }
-        result
+        self.try_slice_site(s)
+            .unwrap_or_else(|error| invariant_violated("site slice failed", error))
     }
 
     fn try_slice_site(&self, s: usize) -> Result<Vec<T>> {
@@ -164,11 +158,18 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
                 message: "site slice shape product overflowed usize".to_string(),
             }
         })?;
+        // The tensor is column-major `[left, site, right]`, so fixing the site
+        // leaves `right_dim` contiguous runs of `left_dim` elements. Copying
+        // those runs is one memcpy per right bond instead of `len` indexed
+        // reads; the layout and the result order are unchanged.
+        let host = self.as_inner().host_data().unwrap_or_else(|error| {
+            invariant_violated("host-backed tensor data is unavailable", error)
+        });
+        let site_dim = self.site_dim();
         let mut result = Vec::with_capacity(len);
         for r in 0..right_dim {
-            for l in 0..left_dim {
-                result.push(self[[l, s, r]]);
-            }
+            let start = left_dim * (s + site_dim * r);
+            result.extend_from_slice(&host[start..start + left_dim]);
         }
         Ok(result)
     }
