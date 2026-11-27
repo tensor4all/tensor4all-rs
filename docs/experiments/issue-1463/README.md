@@ -75,6 +75,10 @@ Rook pivoting:
   and 22-25x (8x8, about `rows*cols`) with identical fits. It pays in wall time
   only when the callback is expensive: C/D is 1.0-1.2 for a cheap callback and
   2.1-2.2 (2x3) / 7.0-9.3 (8x8) with 50 us.
+  **Both numbers matter for guidance:** the saving grows with the number of
+  entries (at most `rows*cols`), so it is large at 8x8 (22-25x) but modest at
+  2x3 (2.4x), which is also where the joint fit is cheap. For small matrices,
+  shared sampling alone buys little; the case for it is wide matrices.
 - **Joint fit (D to A).** Ranks are higher (12 vs 8 for corr, 25 / 78 vs 9 for
   unrel). For correlated entries it still wins: 8x8 storage 22x smaller, fit
   time 4.8-20x (Full) and 5.9-22x (Rook) faster than D; 2x3 storage 1.9x smaller,
