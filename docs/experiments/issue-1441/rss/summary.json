@@ -1,0 +1,22 @@
+{
+  "all_clean": true,
+  "processes": 6,
+  "point_streams_identical": true,
+  "peak_rss": {
+    "baseline": {
+      "median_mib": 239.99609375,
+      "range_mib": [
+        239.9296875,
+        240.0078125
+      ]
+    },
+    "candidate": {
+      "median_mib": 10.1796875,
+      "range_mib": [
+        10.16015625,
+        10.20703125
+      ]
+    }
+  },
+  "platform": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.35"
+}

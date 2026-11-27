@@ -1,0 +1,1 @@
+ai-run: measure done exit=0 wall=0.3s peak_mem=0.2G/2.0G verdict=CLEAN (foreign 0.0% on cpus 8-15, 0.2 busy CPUs elsewhere) report=/root/projects/tensor4all-rust/tensor4all-rs-1441/docs/experiments/issue-1441/rss/raw/attempt-1/0-baseline/ai-run.json

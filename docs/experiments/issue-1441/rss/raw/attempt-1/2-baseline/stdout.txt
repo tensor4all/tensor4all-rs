@@ -1,0 +1,1 @@
+{"points":30877,"checksum":15356029994682581386,"chunk_points":1047}

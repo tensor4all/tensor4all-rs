@@ -31,8 +31,9 @@ Build through `ai-run build --mem 6G`; run the finished test binary through
 `ai-run build --mem 6G` because this campaign counts points and checks values,
 not time. Set `RAYON_NUM_THREADS=1`, `OMP_NUM_THREADS=1`,
 `OPENBLAS_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, and `BLAS_NUM_THREADS=1`,
-with `--test-threads=1 --nocapture --include-ignored`. No runtime or RSS
-speedup claim is made. Logical storage bounds are distinguished from the
+with `--test-threads=1 --nocapture --include-ignored`. That point-count
+campaign makes no runtime or RSS claim; the separate RSS diagnostic below
+measures only enumeration storage. Logical storage bounds are distinguished from the
 unmodified topology metadata and evaluator/memo storage.
 
 ## Results
@@ -75,3 +76,39 @@ with 1,000 borrowed-anchor cursors and 5,000 varied-coordinate descriptors,
 and can return its first two points with that same sparse cursor count.
 This is a structural storage check, not an RSS measurement or a full
 interpolation on a 200-arm tree.
+
+
+## Peak RSS on the motivating point-enumeration workload
+
+The separate [declared protocol](rss/protocol.json) uses the exact production
+point generators from baseline `f3d0df4c` and candidate `11e2f5c7`, extracted
+without edits by [measure_rss.py](measure_rss.py). It fully consumes the
+200-arm / 1,001-site / five-anchor workload above with the production
+1,047-point batch length. The baseline retains its full vector and reads
+borrowed chunks; the candidate collects and releases one batch at a time.
+
+| Arm | Whole-process peak RSS median | Range, three fresh processes |
+| --- | ---: | ---: |
+| Baseline | 240.00 MiB | 239.93–240.01 MiB |
+| Streaming candidate | 10.18 MiB | 10.16–10.21 MiB |
+
+All six processes are CLEAN, with no retry or omitted cell. Every process
+emits 30,877 points and the same whole ordered-stream checksum
+`15356029994682581386`. The fixed-order checksum is supplementary to the
+existing exhaustive production tests for ordering and deduplication.
+
+This isolates the issue's point-storage mechanism. It includes dimensions,
+anchors, side lists, enumeration, batch storage and checksum readout; it
+excludes TreeTN evaluation, evaluator/memo storage and topology construction.
+It is not full-interpolation peak RSS or a runtime speedup measurement.
+The single-thread standard-library-only harness uses exact copied production
+code, not a substitute tensor implementation.
+
+The [summary](rss/summary.json), [all observations](rss/raw/attempts.json),
+per-process GNU-time output and ai-run reports are retained. The
+[manifest](rss/raw/manifest.json) pins compiler, source/controller/binary hashes
+and the installed ai-run hash. Reproduce with
+`taskset -c 0-7 python3 docs/experiments/issue-1441/measure_rss.py`
+in a disposable copy without the existing `rss/raw` directory; it builds
+through `ai-run build` and runs only the finished binary through exclusive
+`ai-run measure`. No numerical tolerance was changed.

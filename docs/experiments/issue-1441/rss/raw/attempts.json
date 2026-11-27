@@ -1,0 +1,82 @@
+[
+  {
+    "attempt": 1,
+    "clean": true,
+    "success": true,
+    "same_observations": true,
+    "samples": [
+      {
+        "arm": "baseline",
+        "pair": 0,
+        "exit": 0,
+        "verdict": "CLEAN",
+        "peak_rss_kib": 245688,
+        "observations": {
+          "points": 30877,
+          "checksum": 15356029994682581386,
+          "chunk_points": 1047
+        }
+      },
+      {
+        "arm": "candidate",
+        "pair": 0,
+        "exit": 0,
+        "verdict": "CLEAN",
+        "peak_rss_kib": 10404,
+        "observations": {
+          "points": 30877,
+          "checksum": 15356029994682581386,
+          "chunk_points": 1047
+        }
+      },
+      {
+        "arm": "candidate",
+        "pair": 1,
+        "exit": 0,
+        "verdict": "CLEAN",
+        "peak_rss_kib": 10424,
+        "observations": {
+          "points": 30877,
+          "checksum": 15356029994682581386,
+          "chunk_points": 1047
+        }
+      },
+      {
+        "arm": "baseline",
+        "pair": 1,
+        "exit": 0,
+        "verdict": "CLEAN",
+        "peak_rss_kib": 245768,
+        "observations": {
+          "points": 30877,
+          "checksum": 15356029994682581386,
+          "chunk_points": 1047
+        }
+      },
+      {
+        "arm": "baseline",
+        "pair": 2,
+        "exit": 0,
+        "verdict": "CLEAN",
+        "peak_rss_kib": 245756,
+        "observations": {
+          "points": 30877,
+          "checksum": 15356029994682581386,
+          "chunk_points": 1047
+        }
+      },
+      {
+        "arm": "candidate",
+        "pair": 2,
+        "exit": 0,
+        "verdict": "CLEAN",
+        "peak_rss_kib": 10452,
+        "observations": {
+          "points": 30877,
+          "checksum": 15356029994682581386,
+          "chunk_points": 1047
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,32 @@
+{
+  "mode": "measure",
+  "cmd": "/usr/bin/time -v -o /root/projects/tensor4all-rust/tensor4all-rs-1441/docs/experiments/issue-1441/rss/raw/attempt-1/2-baseline/time.txt timeout --kill-after=5 120 taskset -c 8 /root/projects/tensor4all-rust/tensor4all-rs-1441/target/1496-rss/enumeration baseline",
+  "cwd": "/root/projects/tensor4all-rust/tensor4all-rs-1441",
+  "label": null,
+  "unit": "ai-run-measure-1420526-1795769700.scope",
+  "cpus": "8-15",
+  "mem_limit": 2147483648,
+  "started": "2026-11-27T09:55:00+0100",
+  "pre_guard": {
+    "ok": true,
+    "mean_busy": 0.0005,
+    "peak_busy": 0.02
+  },
+  "exit": 0,
+  "wall_sec": 0.32,
+  "mem_peak": 258134016,
+  "mem_peak_anon_sampled": null,
+  "oom_kills": 0,
+  "verdict": "CLEAN",
+  "reasons": [],
+  "job_cpu_sec": 0.24,
+  "foreign_cpu_sec_on_measure_cpus": 0.0,
+  "foreign_frac": 0.0007,
+  "others_busy_cpus": 0.16,
+  "mem_stall_frac": 0.0,
+  "thresholds": {
+    "foreign_frac": 0.03,
+    "others_busy_cpus": 1.0,
+    "mem_stall_frac": 0.01
+  }
+}
