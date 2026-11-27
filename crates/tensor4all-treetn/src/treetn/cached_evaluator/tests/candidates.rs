@@ -408,8 +408,8 @@ fn candidate_messages_go_through_the_shared_message_caches() {
     }
 }
 
-#[test]
-fn mixed_real_and_complex_nodes_are_promoted() {
+/// The chain `0 - 1 - 2` with real nodes 0 and 1 and a complex leaf 2.
+fn mixed_chain() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
     let (tree, physical) = typed_tree_from_edges::<f64>(&[(0, 1), (1, 2)], &[2, 3]);
     let complex = IdxTensor::from_dense(
         tree.tensor(tree.node_index(&2).unwrap())
@@ -430,29 +430,79 @@ fn mixed_real_and_complex_nodes_are_promoted() {
         .collect::<Vec<_>>();
     tensors.push(complex);
     let mixed = TreeTN::<_, usize>::from_tensors(tensors, vec![0, 1, 2]).unwrap();
-    let a = vec![vec![0], vec![1]];
-    let b = vec![vec![0, 0], vec![1, 0], vec![1, 1]];
-    // The complex node is the left leaf, so the right message (1 -> 2, fed by
-    // 0 -> 1) is real and the product promotes a real and a complex column.
-    // Directions where a real node receives a complex child message fail in
-    // the existing message path for flat batches as well, so they are not
-    // exercised here.
+    (mixed, physical)
+}
+
+/// `All` and `Pairs` across the edge that `left_sites` splits off, checked
+/// against the uncached `TreeTN::evaluate` at the assembled points (the cached
+/// flat path shares the message path under test).
+fn assert_mixed_edge(left_sites: &[usize], right_sites: &[usize]) {
+    let (mixed, physical) = mixed_chain();
+    let odometer = |n_sites: usize| {
+        (0..1usize << n_sites)
+            .map(|code| (0..n_sites).map(|k| (code >> k) & 1).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+    };
+    let (a, b) = (odometer(left_sites.len()), odometer(right_sites.len()));
     let left = CandidateSide {
-        sites: &[2],
+        sites: left_sites,
         candidates: &a,
     };
     let right = CandidateSide {
-        sites: &[0, 1],
+        sites: right_sites,
         candidates: &b,
     };
+    let full = all_pairs(a.len(), b.len());
+    let data = assemble(physical.len(), left, right, &full);
+    let shape = [physical.len(), full.len()];
+    let expected = mixed
+        .evaluate(&physical, ColMajorArrayRef::new(&data, &shape).unwrap())
+        .unwrap();
     let mut evaluator =
         TreeTNCachedEvaluator::new(&mixed, &physical, CachedEvaluatorOptions::default()).unwrap();
     let values = evaluator
         .evaluate_candidates_typed::<Complex64>(left, right, CandidateEntries::All)
         .unwrap();
-    let expected = reference::<Complex64>(&mixed, &physical, left, right, &all_pairs(2, 3));
-    assert_close(&values, &expected);
-    assert!(values.iter().any(|value| value.im.abs() > 1e-6));
+    let values = values
+        .into_iter()
+        .map(Complex64::into_any_scalar)
+        .collect::<Vec<_>>();
+    assert_typed_results::<Complex64>(&values, &expected);
+    assert!(values.iter().any(|value| value.imag().abs() > 1e-6));
+    let pairs = [(1, 1), (0, 0), (1, 0), (1, 1)];
+    let some = evaluator
+        .evaluate_candidates_typed::<Complex64>(left, right, CandidateEntries::Pairs(&pairs))
+        .unwrap();
+    let gathered = pairs
+        .iter()
+        .map(|&(i, j)| expected[i + a.len() * j].clone())
+        .collect::<Vec<_>>();
+    let some = some
+        .into_iter()
+        .map(Complex64::into_any_scalar)
+        .collect::<Vec<_>>();
+    assert_typed_results::<Complex64>(&some, &gathered);
+}
+
+#[test]
+fn mixed_real_and_complex_nodes_are_promoted() {
+    // Edge 1 - 2: the complex leaf sends 2 -> 1, and the real side sends
+    // 1 -> 2 fed by 0 -> 1, all real; the product promotes a real and a
+    // complex column. Both orientations.
+    assert_mixed_edge(&[2], &[0, 1]);
+    assert_mixed_edge(&[0, 1], &[2]);
+}
+
+/// Edge 0 - 1 needs the message 1 -> 0, where the real node 1 receives the
+/// complex child message 2 -> 1. The message path fails there for every
+/// caller (#1501), flat batches included. Enable this test (remove the
+/// `#[ignore]`) with the fix of #1501; it then checks both orientations, `All`
+/// and `Pairs`, against `TreeTN::evaluate`.
+#[test]
+#[ignore = "blocked by #1501: a real node receiving a complex child message fails in the message path"]
+fn mixed_kinds_where_a_real_node_receives_a_complex_message() {
+    assert_mixed_edge(&[0], &[1, 2]);
+    assert_mixed_edge(&[1, 2], &[0]);
 }
 
 /// Nodes `0 - 1 - 2` where only the end nodes carry a site, so both edges
