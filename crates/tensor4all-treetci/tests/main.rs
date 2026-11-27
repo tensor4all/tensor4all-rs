@@ -17,6 +17,7 @@ mod heavy_issue1433_box;
 mod issue1078_context_adoption;
 mod issue1153_degenerate_junction;
 mod issue1159_rank1_junction;
+mod issue1264_rank_slack;
 mod issue1352_rank_deficient;
 mod issue1352_unit_site;
 mod issue1371_local_threshold;

@@ -504,3 +504,23 @@ fn run_options_use_the_sampled_stop_rule() {
         StopRule::Sampled
     );
 }
+
+#[test]
+fn constructor_requires_a_complete_configured_history_window() {
+    for (max_iter, ncheck_history, accepted) in
+        [(1, 1, true), (2, 3, false), (3, 4, false), (4, 4, true)]
+    {
+        let result = super::TreeTciInterpolator::new(crate::TreeTciOptions {
+            max_iter,
+            ncheck_history,
+            ..Default::default()
+        });
+        assert_eq!(result.is_ok(), accepted);
+        if let Err(error) = result {
+            assert!(matches!(
+                error,
+                crate::TreeTciError::InvalidConfiguration { .. }
+            ));
+        }
+    }
+}
