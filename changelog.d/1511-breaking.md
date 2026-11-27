@@ -10,7 +10,7 @@
   order. No index identity appears in the option any more; the previous
   "non-contiguous", "foreign index" and "non-binary coordinate" rejections
   cannot be expressed, and the new rejections are a wrong axis count, a depth
-  above the group's output count, and a prefix that does not fit its depth.
+  above the group's output count (or 64 or more), and a prefix that does not fit its depth.
   `MergeRefineReport` gains `pruned_regions`, the number of child regions
   the kept refinements excluded under the selection; it is a coverage count kept apart from `error_bound`.
   `OutputRegion` is re-exported from `tensor4all-quanticstransform`.

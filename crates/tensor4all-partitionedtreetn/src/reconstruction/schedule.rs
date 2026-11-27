@@ -37,7 +37,7 @@
 //! [`MergeRefineOptions::coverage`] decides which input leaves are present. The
 //! retained output is then limited to those regions, and the reported bound
 //! covers the computed regions only; [`MergeRefineReport::pruned_regions`] counts
-//! what was never computed, separately from the bound. The counters do not shrink the same way:
+//! the children the selection cut, separately from the bound. The counters do not shrink the same way:
 //! they count the work that is executed, and the operator is still applied over
 //! the whole output domain once per input leaf (and, with a rank goal, probes are
 //! accumulated before a child is discarded), so `applied_operator_count` and the
@@ -186,9 +186,11 @@ pub struct MergeRefineOptions<V> {
     /// Under a selection the result is not the full transform.
     /// [`MergeRefineReport::error_bound`] is a promise about *accuracy* of the
     /// computed regions only; [`MergeRefineReport::pruned_regions`] is the separate
-    /// promise about *coverage*: it counts the child regions that were never
-    /// computed. A region that was never computed is not a region with zero error,
-    /// so read both fields: `pruned_regions == 0` means nothing was skipped.
+    /// promise about *coverage*: it counts the child regions the selection cut
+    /// from the kept refinements. A region that was never computed is not a region
+    /// with zero error, so read both fields: `pruned_regions == 0` means the
+    /// selection skipped nothing (a region whose terms were all dropped as
+    /// negligible is omitted from the result separately, see `dropped_terms`).
     ///
     /// The trajectory refines prefixes, so this option filters whole work items
     /// instead of re-tiling the output: a region that only partially overlaps a
@@ -1406,7 +1408,7 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// # Errors
 /// Returns [`PartitionedTreeTNError::InvalidOptions`] for a non-binary or empty
 /// selection, an `output_depth` above the selection depth, an empty
-/// [`MergeRefineOptions::output_regions`], an output region that does not fix a
+/// [`MergeRefineOptions::output_regions`], an
 /// [`OutputRegion`] that lists a different number of axes than the coordinate
 /// groups, fixes more bits than its group has output indices (or 64 or more), or
 /// has a prefix that does not fit its depth, a `max_work_items`

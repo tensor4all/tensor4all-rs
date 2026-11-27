@@ -2782,6 +2782,9 @@ fn merge_refine_schedule_selects_an_output_region_across_two_axes_with_sparse_in
     assert_eq!(selected.report().region_count, 1);
     assert_eq!(selected.report().applied_operator_count, 15);
     assert_eq!(selected.report().error_bound, 0.0);
+    // Two axes advance together: 3 of 4 children are cut at each of the 2 levels.
+    assert_eq!(selected.report().pruned_regions, 6);
+    assert_eq!(all.report().pruned_regions, 0);
     assert!(
         selected.report().additions < all.report().additions,
         "a selection must skip work: {} is not below {}",
