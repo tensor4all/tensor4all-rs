@@ -281,6 +281,9 @@ impl QtciOptions {
 
     /// Convert to [`TreeTciOptions`] for the underlying algorithm.
     ///
+    /// The history window and rank slack keep the TreeTCI defaults (`3` and
+    /// `0.0`); this wrapper does not opt into relaxed rank convergence.
+    ///
     /// # Examples
     ///
     /// ```
@@ -293,6 +296,8 @@ impl QtciOptions {
     /// assert!((tree_opts.tolerance - 1e-10).abs() < 1e-18);
     /// assert_eq!(tree_opts.max_bond_dim, Some(64));
     /// assert_eq!(tree_opts.max_iter, 100);
+    /// assert_eq!(tree_opts.ncheck_history, 3);
+    /// assert_eq!(tree_opts.rank_slack, 0.0);
     /// ```
     pub fn to_treetci_options(&self) -> TreeTciOptions {
         TreeTciOptions {
@@ -309,6 +314,7 @@ impl QtciOptions {
             seed: self.rng_seed,
             // The quantics evaluator owns its cache; avoid a second memo layer.
             evaluation_cache_bytes: None,
+            ..TreeTciOptions::default()
         }
     }
 }

@@ -148,6 +148,15 @@ still grow with the point count, and temporary memory depends on bond ranks.
 An automatic contraction center is chosen using the first internal batch;
 pin `center` when the workload has a known favorable contraction direction.
 
+When the points form a candidate matrix across one edge (left candidates on the
+sites behind the edge times right candidates on the rest, as in TreeTCI),
+`evaluate_candidates_typed` takes the two sides directly and returns the whole
+matrix (column-major, left fastest) or selected `(left, right)` pairs. It
+contracts one directed message per distinct candidate on each side and forms the
+entries as their products, instead of building a key per assembled point. The
+messages share the evaluator's message caches and budget, so a large request can
+evict messages that later batches would reuse.
+
 Persistent message payloads default to 64 MiB per evaluator, shared by its
 directed-edge caches rather than split evenly between them, and prepared
 branch slices default to 32 MiB per scalar kind. The existing byte-budget

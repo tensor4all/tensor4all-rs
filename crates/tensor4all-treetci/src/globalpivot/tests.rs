@@ -362,6 +362,8 @@ fn options(enable_global_pivots: bool) -> TreeTciOptions {
         tolerance: 1e-8,
         stop_rule: StopRule::Sampled,
         max_iter: 30,
+        ncheck_history: 3,
+        rank_slack: 0.0,
         max_bond_dim: None,
         scale_tolerance: true,
         enable_global_pivots,

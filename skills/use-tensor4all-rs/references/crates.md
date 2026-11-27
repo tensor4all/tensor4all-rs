@@ -86,6 +86,7 @@ Direct cross interpolation on integer indices. TCI2 is the primary algorithm; TC
   - `tolerance` default 1e-8; 1e-6 explore, 1e-12 high accuracy.
   - `max_bond_dim` cap to prevent runaway on expensive functions.
   - `seed: Some(42)` for reproducibility.
+- `crossinterpolate2_matrix::<T, F>(source, MatrixShape, local_dims, initial_pivots, TCI2Options)` — chain TCI2 for a genuinely matrix-valued function with shared structure (`F(x) = sum_k a_k(x) U_k V_k^T`); `source` returns whole column-major matrices per point. For unrelated entries prefer separate `crossinterpolate2` fits.
 - `opt_first_pivot::<T, F>(&f, &local_dims, &start, n_iters) -> MultiIndex` — local search for a large-`|f|` pivot.
 - `TensorCI2::to_tensor_train() -> Result<SimpleTensorTrain>`. Convergence: check `result.termination == TCI2Termination::Converged` (bond-error, global-pivot history, and rank stability all met). `MaxBondDimension` / `MaxIterations` are stops, **not** convergence — treat them as "not done".
 
@@ -192,16 +193,17 @@ Ports TreeTCI.jl. Cross interpolation on tree-structured graphs → TreeTN.
 
 - `crossinterpolate2()` (tree entry), `TreeTCI2`, `TreeTciGraph`.
 - Tree entry points return `TreeTciRunResult`: access `result.treetn`,
-  `result.ranks`, `result.errors`, and `result.termination`. Optimizers return
+  `result.ranks`, `result.errors`, `result.nglobal_pivots`, and `result.termination`. Optimizers return
   `TreeTciOptimizationResult` with the same diagnostics. `TreeTciTermination`
   distinguishes `Converged`, `MaxBondDimension`, `MaxIterations`,
   `DegenerateCandidateSet` (a bond error could not be measured), and
   `LocalThresholdFloor` (`StopRule::Sampled` only, trees with at least two
-  edges: the local truncation threshold was tightened to `1 / E` and three
+  edges: the local truncation threshold was tightened to `1 / E` and `ncheck_history`
   sweeps there left the sampled error at or above `tolerance`); convergence
   describes sampled errors, not a full-network residual bound.
+- `TreeTciOptions::ncheck_history` defaults to 3 and must be positive; all stopping checks use it. `rank_slack` defaults to 0, preserving `last == min(window)`. Opt-in `0.03` allows rank noise via `last <= min(window) + rank_slack * max(window)`; validate accuracy independently.
 - `tensor4all_treetci::materialize::to_treetn(tci_state, batch_eval, Some(root))` — materialize as TreeTN with a batched evaluator.
-- `optimize_with_proposer` / `optimize_default` return `TreeTciOptimizationResult { ranks, errors, termination, local_threshold_factor, evaluation }`; only `TreeTciTermination::Converged` is convergence (`MaxBondDimension` / `MaxIterations` / `DegenerateCandidateSet` / `LocalThresholdFloor` are stops).
+- `optimize_with_proposer` / `optimize_default` return `TreeTciOptimizationResult { ranks, errors, nglobal_pivots, termination, local_threshold_factor, evaluation }`; only `TreeTciTermination::Converged` is convergence (`MaxBondDimension` / `MaxIterations` / `DegenerateCandidateSet` / `LocalThresholdFloor` are stops).
 - `TreeTciInterpolator` — implements `tensor4all_treetn::interpolation::TreeInterpolator` (validated `InterpolationProblem` with named nodes, several or zero active sites per node, absolute tolerance, bond cap, seed). Accept a result only on `InterpolationTermination::Converged`.
 
 ## tensor4all-interpolativeqtt — interpolative QTT

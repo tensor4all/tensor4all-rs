@@ -4,7 +4,7 @@
 `optimize_with_proposer_with_rng` return `TreeTciOptimizationResult`.
 `crossinterpolate2` and `crossinterpolate2_with_rng` return `TreeTciRunResult`,
 which also owns the materialized `TreeTN`. Both results expose `ranks`,
-`errors`, `termination` and `local_threshold_factor`; callers use fields
+`errors`, `nglobal_pivots`, `termination` and `local_threshold_factor`; callers use fields
 rather than tuple destructuring.
 
 ## Stopping contract
@@ -13,11 +13,57 @@ The reasons describe the existing optimization loop, in its decision order:
 
 | Reason | Condition | Consequence |
 | --- | --- | --- |
-| `MaxBondDimension` | The maximum rank is at the configured cap throughout three trailing iterations. | Checked before global search and convergence, even if the recorded error is small. It does not mean all edges are saturated. |
-| `Converged` | Three trailing errors are strictly below `tolerance`, the final maximum rank equals the minimum in that window, and no global pivots were accepted in that window. | Describes the recorded-error criterion of the stop rule, not an exhaustive error bound. |
+| `MaxBondDimension` | The maximum rank is at the configured cap throughout `ncheck_history` trailing iterations. | Checked before global search and convergence, even if the recorded error is small. It does not mean all edges are saturated. |
+| `Converged` | The trailing `ncheck_history` errors are strictly below `tolerance`, the final maximum rank satisfies the configured `rank_slack` condition, and no global pivots were accepted in that window. | Describes the recorded-error criterion of the stop rule, not an exhaustive error bound. |
 | `DegenerateCandidateSet` | The `Converged` condition holds on the recorded errors, but the most recent update of at least one edge could not measure its bond error. | The run stops where it would have reported `Converged`. The approximation may be inaccurate. |
-| `LocalThresholdFloor` | `Sampled` only, trees with E >= 2 edges only: the local threshold factor was tightened to its floor `1 / E` and stayed there in all three trailing sweeps, and all three recorded errors are at or above `tolerance`. | Never reported under `PerBond`, nor with E <= 1, where the floor would be 1 and the threshold cannot descend. Checked after `MaxBondDimension` and before the convergence test, and before that iteration's pivots are injected, so the returned state is swept. The approximation may be inaccurate. |
+| `LocalThresholdFloor` | `Sampled` only, trees with E >= 2 edges only: the local threshold factor was tightened to its floor `1 / E` and stayed there in all `ncheck_history` trailing sweeps, and all their recorded errors are at or above `tolerance`. | Never reported under `PerBond`, nor with E <= 1, where the floor would be 1 and the threshold cannot descend. Checked after `MaxBondDimension` and before the convergence test, and before that iteration's pivots are injected, so the returned state is swept. The approximation may be inaccurate. |
 | `MaxIterations` | The requested iterations completed without any earlier stopping condition. | A small final error alone does not establish convergence. |
+
+### Configurable confirmation window and rank slack
+
+`TreeTciOptions::ncheck_history` is a positive window length, default 3,
+shared by convergence, cap saturation and the sampled threshold-floor stop.
+A window longer than `max_iter` is valid for raw optimizers and ends in
+`MaxIterations`; `TreeTciInterpolator` rejects that configuration because its
+adapter contract requires a possible convergence window.
+
+`rank_slack` is finite, nonnegative and defaults to 0. The rank test is
+`last <= min(window) + rank_slack * max(window)`. At zero the comparison stays
+in integers and is exactly the old `last == min(window)`, including a shrinking
+history such as `220, 218, 217`. A value of 0.03 permits small rank fluctuations
+near the tolerance without changing the recorded-error or global-pivot checks.
+A larger slack can stop while a new mode is still growing; sampled errors do
+not certify full-network accuracy, so use an independent error check before
+adopting a nonzero slack ([#1264](https://github.com/tensor4all/tensor4all-rs/issues/1264)).
+
+Both result types expose one `nglobal_pivots` entry per completed iteration.
+It counts pivots found by that search, including discoveries discarded at a
+threshold-floor stop; disabled/skipped searches and a zero search limit record
+zero. A zero therefore does not imply an independent residual check occurred.
+
+### Reproducing the rank-slack acceptance families
+
+The `rank_slack` example runs the three-softened-Coulomb-bump target from
+#1264. `chain` defaults to 8 bits per axis (24 sites, tolerance 1e-6), and
+`comb` to 20 bits per axis (60 sites, tolerance 1e-8). Each requested seed
+runs slack 0 and 0.03 against the same 20,000 independent sample points and
+prints histories, termination, evaluation counts and relative L2/max errors.
+It reports no timing or speedup. An optional final argument reduces the bits
+per axis for a smoke check.
+
+```bash
+ai-run build --mem 6G -- cargo build --locked --release -p tensor4all-treetci --example rank_slack
+ai-run build --mem 6G -- env RAYON_NUM_THREADS=1 ./target/release/examples/rank_slack chain 1 20 per-bond
+ai-run build --mem 6G -- env RAYON_NUM_THREADS=1 ./target/release/examples/rank_slack comb 1 1 per-bond
+```
+
+Use the effective Cargo target directory if configured elsewhere. Pass
+`sampled` instead of `per-bond` to exercise the original issue's former stop
+semantics; the current default changed in #1405, so historical iteration
+counts are not promises for either current path. The example intentionally
+keeps expensive acceptance runs outside the ordinary test suite. A small dense
+adversarial regression separately proves that a large slack can stop with a
+missing diagonal mode even though the sampled errors are zero.
 
 ### Stop rules
 
@@ -33,7 +79,7 @@ max_sample_value` in normalized mode and `tolerance` otherwise, and the margin
 | Ordinary walks accepted | Above `threshold` | Above `threshold` first; when none cross it, above `abs_tol` |
 | Fallback stages accepted (probes, restarts, stage-3 enumeration) | Above `threshold` | Above `abs_tol` |
 | Local truncation threshold | `abs_tol` in every sweep (factor exactly 1) | `abs_tol` times a factor that halves after each iteration whose recorded error fails `tolerance`, down to `1 / E` ([#1371](https://github.com/tensor4all/tensor4all-rs/issues/1371), see below) |
-| `LocalThresholdFloor` | Never reported | Reported when three sweeps at `1 / E` all fail `tolerance`, for E >= 2 only |
+| `LocalThresholdFloor` | Never reported | Reported when `ncheck_history` sweeps at `1 / E` all fail `tolerance`, for E >= 2 only |
 
 `PerBond` is the rule of TensorCrossInterpolation.jl, TreeTCI.jl and xfac:
 `tolerance` is a per-bond pivot threshold. `Sampled` adds a pointwise check on
@@ -105,8 +151,8 @@ following hold:
   pivots at edges with such an endpoint; without one there is no anchor.
 - Some edge side has a product of local dimensions between 2 and 32.
 
-`Converged` needs three trailing iterations without an accepted global pivot.
-So when those three iterations all searched with the stage enabled, none of
+`Converged` needs `ncheck_history` trailing iterations without an accepted global pivot.
+So when those iterations all searched with the stage enabled, none of
 their searches saw a residual above the fallback threshold of the rule
 (`threshold` under `PerBond`, `abs_tol` under `Sampled`) inside an enumerated
 side around a retained tail pivot. This is a bounded guarantee: it says
@@ -143,7 +189,7 @@ and the stop all start from the same absolute tolerance,
 spread over several bonds can then sit above `tolerance` while each of its
 per-bond Schur residuals is below it. The local updates drop such a point on
 every sweep, the search finds it again, and the run reaches a fixed point that
-stops only when three consecutive random searches miss every such point
+stops only when `ncheck_history` consecutive random searches miss every such point
 ([#1371](https://github.com/tensor4all/tensor4all-rs/issues/1371)).
 
 Only the local truncation threshold adapts:
@@ -161,14 +207,14 @@ Only the local truncation threshold adapts:
 - A run whose recorded error stays below `tolerance` keeps factor 1 and takes
   the same path as without adaptation. With `tolerance == 0` the factor is not
   used.
-- If the three trailing sweeps all ran at `1 / E` and all three recorded
+- If the `ncheck_history` trailing sweeps all ran at `1 / E` and all their recorded
   errors fail the tolerance, the run ends with `LocalThresholdFloor` instead
   of continuing to `MaxIterations`. That iteration's search pivots are not
   injected. The recorded error history is in `errors`.
 - The floor stop is armed only for E >= 2, where the floor `1 / E` is below 1
   and reaching it takes at least one halving. With one edge (a two-node tree)
   or none (a single node) the floor would be 1: the threshold cannot descend,
-  the factor stays 1, and three failing sweeps are not a reason to stop. Such
+  the factor stays 1, and failing sweeps are not a reason to stop. Such
   a run ends with `MaxIterations` or `Converged` exactly as without the
   adaptation, and keeps injecting its search pivots until the final
   iteration.

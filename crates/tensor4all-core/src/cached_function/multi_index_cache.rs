@@ -171,8 +171,9 @@ pub enum CachedBatchError {
 
 /// Bytes of hash table a [`MultiIndexCache`] may occupy by default.
 ///
-/// The limit bounds the tables themselves (buckets, entries and control bytes),
-/// not a per-entry estimate. When a run needs to keep more distinct points than
+/// The limit bounds the tables themselves (buckets, entries and control bytes)
+/// plus any per-value payload the caller declares
+/// ([`MultiIndexCache::with_value_payload_bytes`], none by default). When a run needs to keep more distinct points than
 /// that, the oldest entries are evicted and re-evaluated if asked again, rather
 /// than memory growing without bound. While a table grows the transient peak is
 /// at most 1.5 × the limit + 8 bytes (see [`MultiIndexCache`]).
@@ -201,8 +202,14 @@ pub const DEFAULT_RETAINED_BYTE_LIMIT: usize = 256 * 1024 * 1024;
 /// allocated generation, so up to 16). While a table grows, the outgoing table
 /// (half the new one's buckets) is alive next to the new one, so the transient
 /// peak is at most 1.5 × the limit + 8 bytes (half a control group); a limit of
-/// 152 bytes peaks at 236 accounted bytes for `f64` values. Allocator overhead and heap payload
-/// owned by values are excluded.
+/// 152 bytes peaks at 236 accounted bytes for `f64` values. Allocator overhead is
+/// excluded, and so is heap payload owned by values unless declared:
+/// [`Self::with_value_payload_bytes`] adds a fixed number of payload bytes per
+/// stored value to [`Self::retained_bytes`], and the limit and the generation
+/// eviction then bound tables and payload together. The default is 0, so a
+/// cache of plain values such as `f64` behaves exactly as before; a value whose
+/// heap size varies from entry to entry is still not counted beyond what is
+/// declared.
 ///
 /// Key width is selected automatically from the index space (up to 1024 bits,
 /// as in [`CachedFunction`](super::CachedFunction)); an index space that needs
@@ -254,6 +261,7 @@ where
     hits: usize,
     misses: usize,
     retained_byte_limit: usize,
+    value_payload_bytes: usize,
     dropped_inserts: usize,
     evicted_entries: usize,
     _phantom: std::marker::PhantomData<I>,
@@ -271,6 +279,7 @@ where
             .field("hits", &self.hits)
             .field("misses", &self.misses)
             .field("retained_byte_limit", &self.retained_byte_limit)
+            .field("value_payload_bytes", &self.value_payload_bytes)
             .field("dropped_inserts", &self.dropped_inserts)
             .field("evicted_entries", &self.evicted_entries)
             .field("key_type", &self.backend.key_type_name())
@@ -310,12 +319,14 @@ where
         Self::with_retained_byte_limit(local_dims, DEFAULT_RETAINED_BYTE_LIMIT)
     }
 
-    /// Create an empty cache with an explicit limit on its hash-table bytes.
+    /// Create an empty cache with an explicit limit on its retained bytes
+    /// (hash tables, plus the per-value payload if one is declared with
+    /// [`Self::with_value_payload_bytes`]).
     ///
     /// At the limit the oldest generation of entries is evicted
     /// ([`Self::evicted_entries`]) and the new entry is stored; an insertion is
     /// skipped ([`Self::dropped_inserts`]) only when the limit is below the
-    /// smallest table that holds one entry. While a table grows, the outgoing
+    /// smallest table that holds one entry (plus one value's declared payload). While a table grows, the outgoing
     /// table is alive next to the new one: see the type-level documentation for
     /// the transient peak (1.5 × the limit + 8 bytes; 236 bytes at a limit of
     /// 152). The limit bounds the retained tables, not the per-call batch
@@ -356,10 +367,71 @@ where
             hits: 0,
             misses: 0,
             retained_byte_limit,
+            value_payload_bytes: 0,
             dropped_inserts: 0,
             evicted_entries: 0,
             _phantom: std::marker::PhantomData,
         })
+    }
+
+    /// Declare a fixed number of heap payload bytes carried by every stored value.
+    ///
+    /// Use this when the value type owns heap data of one known size, for example
+    /// an `Arc<[f64]>` holding a `rows × cols` matrix at every point. Each
+    /// retained entry then adds `bytes_per_value` to [`Self::retained_bytes`]
+    /// (computed as `len() × bytes_per_value`, saturating at `usize::MAX`), and
+    /// the retained-byte limit and the generation eviction bound tables and
+    /// payload together. A single value whose payload alone, with the smallest
+    /// table, exceeds the limit is a dropped insert ([`Self::dropped_inserts`]).
+    ///
+    /// The default is 0, which keeps the accounting of plain values unchanged.
+    /// Call this on the empty cache, before inserts; the payload is applied to
+    /// every retained entry, and [`Self::clear`] keeps it. Only the declared
+    /// fixed size is counted: heap data whose size varies per value, and the
+    /// allocator's own overhead, are not.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::MultiIndexCache;
+    ///
+    /// let mut cache: MultiIndexCache<f64> = MultiIndexCache::new(&[2, 2])
+    ///     .unwrap()
+    ///     .with_value_payload_bytes(1000);
+    /// assert_eq!(cache.value_payload_bytes(), 1000);
+    /// cache.insert(&[0, 0], 1.0).unwrap();
+    /// cache.insert(&[1, 0], 2.0).unwrap();
+    /// // table bytes (4 buckets of u64 key, f64 value, control byte, one group)
+    /// // plus two payloads
+    /// assert_eq!(cache.retained_bytes(), 4 * (8 + 8 + 1) + 16 + 2 * 1000);
+    ///
+    /// // The limit bounds the payload too: one value does not fit a 500-byte limit.
+    /// let mut small: MultiIndexCache<f64> = MultiIndexCache::with_retained_byte_limit(&[2], 500)
+    ///     .unwrap()
+    ///     .with_value_payload_bytes(1000);
+    /// small.insert(&[0], 1.0).unwrap();
+    /// assert_eq!((small.len(), small.dropped_inserts()), (0, 1));
+    /// ```
+    #[must_use]
+    pub fn with_value_payload_bytes(mut self, bytes_per_value: usize) -> Self {
+        self.value_payload_bytes = bytes_per_value;
+        self.backend.set_payload(bytes_per_value);
+        self
+    }
+
+    /// The declared per-value payload in bytes (0 unless set by
+    /// [`Self::with_value_payload_bytes`]).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::MultiIndexCache;
+    ///
+    /// let cache: MultiIndexCache<f64> = MultiIndexCache::new(&[2]).unwrap();
+    /// assert_eq!(cache.value_payload_bytes(), 0);
+    /// ```
+    pub fn value_payload_bytes(&self) -> usize {
+        self.value_payload_bytes
     }
 
     /// Look a multi-index up and count the lookup.
@@ -981,13 +1053,16 @@ where
         }
     }
 
-    /// Bytes of the cache's hash tables: buckets × (key + value + 1 control
-    /// byte) plus one group of control bytes, for both generations.
+    /// Bytes of the cache's hash tables plus the declared payload: buckets ×
+    /// (key + value + 1 control byte) plus one group of control bytes, for both
+    /// generations, plus `len() × `[`Self::value_payload_bytes`] (saturating).
     ///
     /// Computed from the tables' capacities with a 16-byte control group, an
     /// upper bound on the bytes they hold (exact on x86_64; on targets with
-    /// 8-byte groups, 8 bytes over per allocated generation, so up to 16). It excludes allocator overhead and any heap
-    /// payload reachable from a value.
+    /// 8-byte groups, 8 bytes over per allocated generation, so up to 16). It
+    /// excludes allocator overhead and any heap payload reachable from a value
+    /// that was not declared with [`Self::with_value_payload_bytes`]. With the
+    /// default payload of 0 it is the table bytes alone.
     ///
     /// # Examples
     ///

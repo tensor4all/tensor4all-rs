@@ -2,7 +2,7 @@
 //!
 //! [`TreeTciInterpolator`] implements
 //! [`TreeInterpolator`](tensor4all_treetn::interpolation::TreeInterpolator)
-//! on top of [`TreeTCI2`] and [`optimize_with_proposer`].
+//! on top of [`TreeTCI2`] and [`crate::optimize_with_proposer`].
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -116,9 +116,6 @@ pub struct TreeTciInterpolator {
 }
 
 impl TreeTciInterpolator {
-    /// Minimum `max_iter`: convergence needs three sweeps of history.
-    pub const MIN_MAX_ITER: usize = 3;
-
     /// Build an engine from TreeTCI options.
     ///
     /// `tolerance`, `max_bond_dim`, `scale_tolerance`, and `seed` are replaced
@@ -128,8 +125,8 @@ impl TreeTciInterpolator {
     /// # Errors
     ///
     /// Returns [`TreeTciError::InvalidConfiguration`] when the options fail
-    /// the checks of [`optimize_with_proposer`] or when `max_iter` is below
-    /// [`Self::MIN_MAX_ITER`].
+    /// the checks of [`crate::optimize_with_proposer`] or when `max_iter` is below
+    /// `ncheck_history`, leaving no complete convergence window.
     ///
     /// # Examples
     ///
@@ -146,12 +143,11 @@ impl TreeTciInterpolator {
     /// ```
     pub fn new(options: TreeTciOptions) -> TreeTciResult<Self> {
         options.validate()?;
-        if options.max_iter < Self::MIN_MAX_ITER {
+        if options.max_iter < options.ncheck_history {
             return Err(TreeTciError::InvalidConfiguration {
                 message: format!(
                     "max_iter must be at least {} for the interpolation engine, got {}",
-                    Self::MIN_MAX_ITER,
-                    options.max_iter
+                    options.ncheck_history, options.max_iter
                 ),
             });
         }

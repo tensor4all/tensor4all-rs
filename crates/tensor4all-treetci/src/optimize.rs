@@ -35,8 +35,9 @@ mod local_threshold;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TreeTciTermination {
-    /// Three trailing iterations have error strictly below `tolerance`,
-    /// final maximum rank equal to the minimum rank in that window, no newly
+    /// The trailing `ncheck_history` iterations have error strictly below
+    /// `tolerance`, final maximum rank within `rank_slack * max(window)` of
+    /// the minimum rank in that window, no newly
     /// accepted global pivots, and every edge's most recent update measured
     /// its bond error (see [`TreeTciTermination::DegenerateCandidateSet`]).
     ///
@@ -46,7 +47,7 @@ pub enum TreeTciTermination {
     /// contribute zero pivots; this reason does not certify an exhaustive
     /// residual check or a global search after that final iteration.
     Converged,
-    /// The maximum rank reached `max_bond_dim` in three trailing iterations.
+    /// The maximum rank reached `max_bond_dim` in `ncheck_history` trailing iterations.
     ///
     /// This condition is checked before global search and convergence, so
     /// it takes precedence even when the sampled error is below tolerance.
@@ -81,7 +82,7 @@ pub enum TreeTciTermination {
     /// pivots, or offering more candidates on that side can let the bonds grow.
     DegenerateCandidateSet,
     /// The local truncation threshold was tightened down to its floor and the
-    /// recorded error stayed at or above `tolerance` for the three trailing
+    /// recorded error stayed at or above `tolerance` for the `ncheck_history` trailing
     /// iterations at that floor (issue #1371). Reported only under
     /// [`StopRule::Sampled`], and only for trees with at least two edges.
     ///
@@ -91,7 +92,7 @@ pub enum TreeTciTermination {
     /// iteration whose recorded error is not strictly below `tolerance`, down
     /// to `1 / E`, where E is the number of tree edges; see
     /// [`TreeTciOptimizationResult::local_threshold_factor`]. This reason is
-    /// reported when the three trailing iterations all swept with the factor
+    /// reported when the `ncheck_history` trailing iterations all swept with the factor
     /// at `1 / E` and all recorded errors failed the tolerance. The stop is
     /// armed only for E >= 2, where reaching the floor takes at least one
     /// halving. With one edge (or none) the floor would be `1.0`, the
@@ -136,6 +137,7 @@ pub enum TreeTciTermination {
 /// assert_eq!(result.termination, TreeTciTermination::Converged);
 /// assert_eq!(result.ranks, vec![1; 3]);
 /// assert_eq!(result.errors, vec![0.0; 3]);
+/// assert_eq!(result.nglobal_pivots, vec![0; 3]);
 /// // No recorded error reached the tolerance, so the threshold was not tightened.
 /// assert_eq!(result.local_threshold_factor, 1.0);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -151,6 +153,15 @@ pub struct TreeTciOptimizationResult {
     /// includes residuals measured by the global search. Both are sampled,
     /// so these are diagnostics, not bounds on the full-network error.
     pub errors: Vec<f64>,
+    /// Number of global pivots found by each completed iteration's search.
+    ///
+    /// Has the same length as `ranks` and `errors`. Disabled searches, a zero
+    /// search limit, and searches skipped on the final iteration or a bond-cap
+    /// stop contribute zero. On a `LocalThresholdFloor` stop, discoveries are
+    /// counted even though they are not injected into the returned state.
+    /// These counts explain a delayed stop; zero does not certify a residual
+    /// check when the search was disabled or skipped.
+    pub nglobal_pivots: Vec<usize>,
     /// The stopping condition evaluated by this call's optimization loop.
     pub termination: TreeTciTermination,
     /// Factor that the last sweep of this call applied to the local
@@ -191,7 +202,7 @@ pub struct TreeTciOptimizationResult {
 ///   tightens the local truncation threshold after each iteration whose
 ///   recorded error fails `tolerance`, down to `1 / E` of it for E tree edges,
 ///   and, for E >= 2, stops with [`TreeTciTermination::LocalThresholdFloor`]
-///   when three sweeps at that floor all fail (issue #1371; see
+///   when `ncheck_history` sweeps at that floor all fail (issue #1371; see
 ///   [`TreeTciOptimizationResult::local_threshold_factor`]). On the Gaussian
 ///   chain of issue #1371 it takes 1.02 to 1.25 times the evaluations of
 ///   `PerBond`. Under `PerBond` the local threshold is never tightened.
@@ -229,6 +240,8 @@ pub enum StopRule {
 /// |---------------------------|---------------|-----------------------------------------------------|
 /// | `tolerance`               | `1e-8`        | Stopping tolerance, see `stop_rule`                  |
 /// | `stop_rule`               | `PerBond`     | Which error is recorded and compared with `tolerance` |
+/// | `ncheck_history`          | `3`           | Trailing iteration window for all stopping checks    |
+/// | `rank_slack`              | `0.0`         | Opt-in relative slack on the final rank              |
 /// | `max_iter`                | `20`          | Maximum number of edge-order iterations              |
 /// | `max_bond_dim`            | `None`        | Maximum bond dimension (no cap by default)           |
 /// | `scale_tolerance`         | `true`        | Scale tolerance by running max sample magnitude      |
@@ -248,6 +261,8 @@ pub enum StopRule {
 /// let opts = TreeTciOptions::default();
 /// assert!((opts.tolerance - 1e-8).abs() < 1e-15);
 /// assert_eq!(opts.max_iter, 20);
+/// assert_eq!(opts.ncheck_history, 3);
+/// assert_eq!(opts.rank_slack, 0.0);
 /// assert_eq!(opts.max_bond_dim, None);
 /// assert!(opts.scale_tolerance);
 /// assert!(opts.enable_global_pivots);
@@ -258,6 +273,8 @@ pub enum StopRule {
 ///     tolerance: 1e-12,
 ///     stop_rule: StopRule::PerBond,
 ///     max_iter: 50,
+///     ncheck_history: 3,
+///     rank_slack: 0.0,
 ///     max_bond_dim: Some(100),
 ///     scale_tolerance: true,
 ///     enable_global_pivots: true,
@@ -315,11 +332,34 @@ pub struct TreeTciOptions {
     /// pivot sets. Typical values: 10--50. Default: `20`.
     pub max_iter: usize,
 
+    /// Positive number of trailing iterations used by the stopping checks.
+    ///
+    /// Convergence requires every recorded error in this window below
+    /// `tolerance`, no discovered global pivots, and the rank condition of
+    /// [`Self::rank_slack`]. The same window controls bond-cap saturation and
+    /// the sampled local-threshold-floor stop. A larger window confirms the
+    /// state for longer; `1` permits a stop after one iteration. Values above
+    /// `max_iter` are allowed but cannot produce a window-based stop.
+    /// When in doubt, keep the default `3`; zero is rejected.
+    pub ncheck_history: usize,
+
+    /// Finite, nonnegative relative slack on the final rank in the history window.
+    ///
+    /// The rank test is `last <= min(window) + rank_slack * max(window)`.
+    /// Default `0.0` preserves the exact historical test `last == min(window)`,
+    /// including decreasing ranks. Opting into `0.03` can avoid extra sweeps
+    /// when ranks fluctuate by a few percent near the tolerance. This does not
+    /// relax the error or global-pivot checks. A large value can stop while
+    /// ranks still grow and reduce accuracy: the recorded error is sampled,
+    /// not a full-network guarantee. When in doubt, leave this at `0.0` and
+    /// validate any nonzero choice against an independent error check.
+    pub rank_slack: f64,
+
     /// Maximum bond dimension retained by the tcicore LUCI pivot substrate.
     ///
     /// Caps the number of pivots per edge bipartition. Use this to limit
     /// memory and computation for large problems. Once the maximal bond
-    /// dimension has sat at this cap for three consecutive iterations, the
+    /// dimension has sat at this cap for `ncheck_history` consecutive iterations, the
     /// loop stops even if `tolerance` has not been reached: every bond
     /// dimension of the result stays within the cap, but the approximation
     /// may be inaccurate when the cap is below the function's rank.
@@ -446,6 +486,16 @@ impl TreeTciOptions {
                 message: "max_iter must be positive".to_string(),
             });
         }
+        if self.ncheck_history == 0 {
+            return Err(crate::TreeTciError::InvalidConfiguration {
+                message: "ncheck_history must be positive".to_string(),
+            });
+        }
+        if !self.rank_slack.is_finite() || self.rank_slack < 0.0 {
+            return Err(crate::TreeTciError::InvalidConfiguration {
+                message: "rank_slack must be finite and nonnegative".to_string(),
+            });
+        }
         if self.max_bond_dim == Some(0) {
             return Err(crate::TreeTciError::InvalidConfiguration {
                 message: "max_bond_dim must be positive when specified".to_string(),
@@ -466,6 +516,8 @@ impl Default for TreeTciOptions {
             tolerance: 1e-8,
             stop_rule: StopRule::PerBond,
             max_iter: 20,
+            ncheck_history: 3,
+            rank_slack: 0.0,
             max_bond_dim: None,
             scale_tolerance: true,
             enable_global_pivots: true,
@@ -1007,7 +1059,7 @@ where
     // stabilized. Like TensorCI2, the window must also contain no newly added
     // global pivots: an iteration that injected pivots has not yet swept them,
     // so its error estimate is stale with respect to those pivots.
-    const NCHECK_HISTORY: usize = 3;
+    let ncheck_history = options.ncheck_history;
     // Adaptive local threshold of #1371, on the sampled stop path only: under
     // `StopRule::PerBond` the factor stays exactly 1.0 and the floor stop never
     // fires (#1405), so that rule's trajectory is unchanged.
@@ -1069,9 +1121,9 @@ where
         // column counts (and more than `max_bond_dim`) until the next sweep.
         // Stopping right after an injection would hand that unswept state to
         // `to_treetn`, which rejects it ("bond ranks disagree", #692).
-        let bond_dim_saturated = ranks.len() >= NCHECK_HISTORY
+        let bond_dim_saturated = ranks.len() >= ncheck_history
             && options.max_bond_dim.is_some_and(|cap| {
-                ranks[ranks.len() - NCHECK_HISTORY..]
+                ranks[ranks.len() - ncheck_history..]
                     .iter()
                     .all(|&r| r >= cap)
             });
@@ -1142,7 +1194,7 @@ where
         // At the floor, stop before injecting, so no unswept pivot is left.
         // Never true under `PerBond`, nor for a tree with fewer than two
         // edges, whose floor 1.0 is not a tightening.
-        if local_threshold.floor_window_failed(&errors, options.tolerance, NCHECK_HISTORY) {
+        if local_threshold.floor_window_failed(&errors, options.tolerance, ncheck_history) {
             termination = TreeTciTermination::LocalThresholdFloor;
             break;
         }
@@ -1161,15 +1213,14 @@ where
         // (including this iteration's search, so a stop here never leaves
         // unswept injected pivots). The bond-dimension saturation disjunct is
         // checked above, before the search.
-        if errors.len() >= NCHECK_HISTORY {
+        if errors.len() >= ncheck_history {
             let n = errors.len();
-            let last_errors = &errors[n - NCHECK_HISTORY..];
-            let last_ranks = &ranks[n - NCHECK_HISTORY..];
-            let last_ngp = &nglobal_pivots_history[n - NCHECK_HISTORY..];
+            let last_errors = &errors[n - ncheck_history..];
+            let last_ranks = &ranks[n - ncheck_history..];
+            let last_ngp = &nglobal_pivots_history[n - ncheck_history..];
             let errors_converged = last_errors.iter().all(|&e| e < options.tolerance);
             let no_global_pivots = last_ngp.iter().all(|&n| n == 0);
-            let rank_stable = last_ranks.iter().min().copied().unwrap_or(0)
-                == last_ranks.last().copied().unwrap_or(0);
+            let rank_stable = ranks_stable(last_ranks, options.rank_slack);
             if errors_converged && no_global_pivots && rank_stable {
                 // A zero error from exhausted candidates is not evidence of
                 // convergence below the full bipartition rank (#1153, #1352).
@@ -1188,10 +1239,25 @@ where
     Ok(TreeTciOptimizationResult {
         ranks,
         errors,
+        nglobal_pivots: nglobal_pivots_history,
         termination,
         local_threshold_factor: local_threshold.last_applied(),
         evaluation: Default::default(),
     })
+}
+
+/// The caller supplies a nonempty validated history window. Keep the zero
+/// branch in integers so every decreasing-rank history preserves its old verdict.
+fn ranks_stable(window: &[usize], slack: f64) -> bool {
+    let Some(&last) = window.last() else {
+        return false;
+    };
+    let min = window.iter().copied().min().unwrap_or(last);
+    if slack == 0.0 {
+        return last == min;
+    }
+    let max = window.iter().copied().max().unwrap_or(last);
+    (last - min) as f64 <= slack * max as f64
 }
 
 #[cfg(test)]

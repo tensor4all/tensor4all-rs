@@ -28,7 +28,7 @@ use crate::StopRule;
 ///
 /// The floor stop is armed only when the floor is below `1.0`, that is for
 /// E >= 2. With E <= 1 the floor is `1.0`, the factor can never descend, and a
-/// window "at the floor" would only mean three untightened failing sweeps, so
+/// window "at the floor" would only mean untightened failing sweeps, so
 /// [`Self::floor_window_failed`] stays false and the run ends as it did before
 /// the adaptive threshold (`MaxIterations` or `Converged`).
 #[derive(Clone, Debug)]
