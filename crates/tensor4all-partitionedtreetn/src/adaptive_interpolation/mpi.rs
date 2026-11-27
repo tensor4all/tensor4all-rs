@@ -44,7 +44,6 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::num::NonZeroUsize;
-use std::sync::Arc;
 
 use hataori::{broadcast, gather, pmap_lanes, PmapOptions};
 use hataori_tenferro::TenferroLanes;
@@ -53,7 +52,6 @@ use serde::{Deserialize, Serialize};
 use tensor4all_core::{
     ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, IdxTensor, TensorElement,
 };
-use tensor4all_tensorbackend::Storage;
 use tensor4all_treetn::interpolation::{
     ElementwiseInterpolator, ElementwiseOperator, EvalContext, InterpolationTermination,
     Parallelism, TreeInterpolator,
@@ -742,17 +740,18 @@ where
     Ok(WireSubdomain { nodes })
 }
 
-fn decode_storage(
+/// Rebuild one node tensor from its column-major host values and legs.
+fn decode_tensor(
+    legs: Vec<DynIndex>,
     values: WireArray,
-    shape: &[usize],
-) -> Result<Storage, PatchedInterpolationError> {
-    let storage = match values {
-        WireArray::F32(values) => Storage::from_dense_col_major(values, shape),
-        WireArray::F64(values) => Storage::from_dense_col_major(values, shape),
-        WireArray::C32(values) => Storage::from_dense_col_major(values, shape),
-        WireArray::C64(values) => Storage::from_dense_col_major(values, shape),
+) -> Result<IdxTensor, PatchedInterpolationError> {
+    let tensor = match values {
+        WireArray::F32(values) => IdxTensor::from_dense(legs, values),
+        WireArray::F64(values) => IdxTensor::from_dense(legs, values),
+        WireArray::C32(values) => IdxTensor::from_dense(legs, values),
+        WireArray::C64(values) => IdxTensor::from_dense(legs, values),
     };
-    storage.map_err(wire_error)
+    tensor.map_err(wire_error)
 }
 
 /// Rebuild a patch network from its host arrays and metadata.
@@ -798,11 +797,7 @@ where
             };
             legs.push(index);
         }
-        let storage = decode_storage(node.values, &node.shape)?;
-        tensors.push(
-            IdxTensor::from_storage(legs, Arc::new(storage))
-                .map_err(PartitionedTreeTNError::from)?,
-        );
+        tensors.push(decode_tensor(legs, node.values)?);
         names.push(name.clone());
     }
     let data = tensor4all_treetn::TreeTN::from_tensors(tensors, names)

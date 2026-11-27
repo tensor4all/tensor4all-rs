@@ -308,23 +308,6 @@ fn combine_to_complex_reports_invalid_inputs() {
 }
 
 #[test]
-fn contract_storage_reports_invalid_axes_and_dimensions() {
-    let a = Storage::from_dense_col_major(vec![1.0_f64, 2.0], &[2]).unwrap();
-    let b = Storage::from_dense_col_major(vec![3.0_f64, 4.0, 5.0], &[3]).unwrap();
-
-    let dim_err = contract_storage(&a, &[2], &[0], &b, &[3], &[0], &[]).unwrap_err();
-    assert!(matches!(dim_err, StorageError::InvalidStructuredStorage(_)));
-    assert!(dim_err.to_string().contains("contracted dimensions"));
-
-    let axis_err = contract_storage(&a, &[2], &[1], &b, &[3], &[0], &[]).unwrap_err();
-    assert!(matches!(
-        axis_err,
-        StorageError::InvalidStructuredStorage(_)
-    ));
-    assert!(axis_err.to_string().contains("axis"));
-}
-
-#[test]
 fn structured_storage_rejects_noncanonical_axis_classes() {
     let err = StructuredStorage::<f64>::new(
         vec![1.0, 2.0, 3.0, 4.0],
@@ -1008,16 +991,6 @@ fn test_storage_new_structured_c64() {
     assert!(s.is_diag());
 }
 
-// ===== make_mut_storage =====
-
-#[test]
-fn test_make_mut_storage() {
-    let storage = Storage::from_dense_col_major(vec![1.0], &[1]).unwrap();
-    let mut arc = Arc::new(storage);
-    let _mutable = make_mut_storage(&mut arc);
-    // Just verify it doesn't panic and returns a mutable ref
-}
-
 // ===== SumFromStorage coverage for Structured variants =====
 
 #[test]
@@ -1082,64 +1055,6 @@ fn test_sum_from_storage_diag_f64_as_c64() {
     let s = Storage::from_diag_col_major(vec![10.0, 20.0], 2).unwrap();
     let sum_c64: Complex64 = Complex64::sum_from_storage(&s);
     assert!((sum_c64 - Complex64::new(30.0, 0.0)).norm() < 1e-10);
-}
-
-// ===== Contraction via native path =====
-
-#[test]
-fn test_contract_storage_dense_f64_matmul() {
-    // A = [[1,2],[3,4]] col-major: [1, 3, 2, 4]
-    // B = [[5,6],[7,8]] col-major: [5, 7, 6, 8]
-    // C = A @ B = [[19,22],[43,50]] col-major: [19, 43, 22, 50]
-    let a = Storage::from_dense_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
-    let b = Storage::from_dense_col_major(vec![5.0, 7.0, 6.0, 8.0], &[2, 2]).unwrap();
-
-    let result = contract_storage(&a, &[2, 2], &[1], &b, &[2, 2], &[0], &[2, 2]).unwrap();
-
-    let data = result
-        .to_dense_f64_col_major_vec(&[2, 2])
-        .expect("materialization failed");
-    // col-major: [19, 43, 22, 50]
-    assert!((data[0] - 19.0).abs() < 1e-10);
-    assert!((data[1] - 43.0).abs() < 1e-10);
-    assert!((data[2] - 22.0).abs() < 1e-10);
-    assert!((data[3] - 50.0).abs() < 1e-10);
-}
-
-#[test]
-fn test_contract_storage_diag_f64_partial() {
-    // Diag [3, 3] with diag = [1, 2, 3]
-    // Diag [3, 3] with diag = [4, 5, 6]
-    // Contract axis 1 of first with axis 0 of second
-    // Result should be element-wise product: [4, 10, 18] (diagonal)
-    let diag1 = Storage::from_diag_col_major(vec![1.0, 2.0, 3.0], 2).unwrap();
-    let diag2 = Storage::from_diag_col_major(vec![4.0, 5.0, 6.0], 2).unwrap();
-
-    let result = contract_storage(&diag1, &[3, 3], &[1], &diag2, &[3, 3], &[0], &[3, 3]).unwrap();
-
-    // Materialize as dense to verify
-    let dense = result
-        .to_dense_f64_col_major_vec(&[3, 3])
-        .expect("materialization failed");
-    // Col-major [3,3]: diag = [4, 10, 18], rest = 0
-    assert!((dense[0] - 4.0).abs() < 1e-10); // (0,0)
-    assert!((dense[4] - 10.0).abs() < 1e-10); // (1,1) = col-major offset 1 + 1*3 = 4
-    assert!((dense[8] - 18.0).abs() < 1e-10); // (2,2) = col-major offset 2 + 2*3 = 8
-}
-
-#[test]
-fn test_contract_storage_inner_product() {
-    // [1, 2, 3] . [4, 5, 6] = 4 + 10 + 18 = 32
-    let a = Storage::from_dense_col_major(vec![1.0, 2.0, 3.0], &[3]).unwrap();
-    let b = Storage::from_dense_col_major(vec![4.0, 5.0, 6.0], &[3]).unwrap();
-
-    let result = contract_storage(&a, &[3], &[0], &b, &[3], &[0], &[]).unwrap();
-
-    let data = result
-        .to_dense_f64_col_major_vec(&[])
-        .expect("materialization failed");
-    assert_eq!(data.len(), 1);
-    assert!((data[0] - 32.0).abs() < 1e-10);
 }
 
 #[test]
