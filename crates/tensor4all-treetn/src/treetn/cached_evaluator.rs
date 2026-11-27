@@ -199,6 +199,9 @@ use super::TreeTN;
 use crate::interpolation::Parallelism;
 use rayon::prelude::*;
 
+mod candidates;
+pub use candidates::{CandidateEntries, CandidateInputError, CandidateSide};
+
 type KeyId = usize;
 type EnvironmentCache<V> = HashMap<V, StackedMessage>;
 type CacheBuildResult<V> = (Vec<ComponentBatch<V>>, EnvironmentCache<V>);
