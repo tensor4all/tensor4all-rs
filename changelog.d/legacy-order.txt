@@ -56,3 +56,6 @@
 1299-diagnostics-2.md
 1293-performance.md
 1329-performance.md
+1490-behavior.md
+1502-added.md
+1502-breaking.md
