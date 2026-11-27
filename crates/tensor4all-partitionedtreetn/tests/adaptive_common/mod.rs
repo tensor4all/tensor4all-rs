@@ -894,12 +894,16 @@ pub(crate) fn assert_same_run(
 ) {
     let (a, b) = (&first.report, &second.report);
     assert_eq!(a.tolerance, b.tolerance);
+    assert_eq!(a.patch_order, b.patch_order);
+    assert_eq!(a.max_bond_dim, b.max_bond_dim);
     assert_same_norm(&a.norm, &b.norm);
     assert_eq!(a.splits, b.splits);
     assert_eq!(a.function_evaluations, b.function_evaluations);
     assert_eq!(a.cache_hits, b.cache_hits);
     assert_eq!(a.measurement_evaluations, b.measurement_evaluations);
     assert_eq!(a.audit_evaluations, b.audit_evaluations);
+    assert_eq!(a.residual_evaluations, b.residual_evaluations);
+    assert_eq!(a.residual_saturations, b.residual_saturations);
     assert_eq!(a.verification_failures, b.verification_failures);
     assert_eq!(a.engine_retries, b.engine_retries);
     assert_eq!(a.zero_patches, b.zero_patches);
@@ -920,6 +924,7 @@ pub(crate) fn assert_same_run(
         assert_eq!(x.acceptance, y.acceptance);
         assert_eq!(x.audit, y.audit);
         assert_eq!(x.status, y.status);
+        assert_eq!(x.log_norm.map(f64::to_bits), y.log_norm.map(f64::to_bits));
     }
     assert_eq!(first.partition.len(), second.partition.len());
     assert_eq!(fingerprint(first, problem), fingerprint(second, problem));
@@ -964,12 +969,16 @@ pub(crate) fn run_digest(result: PatchedInterpolationResult<Name>, problem: &Pro
 /// as in [`assert_same_norm`].
 pub(crate) fn assert_same_runs_across_problems(first: &RunDigest, second: &RunDigest) {
     let (a, b) = (&first.report, &second.report);
+    assert_eq!(a.tolerance, b.tolerance);
+    assert_eq!(a.max_bond_dim, b.max_bond_dim);
     assert_same_norm(&a.norm, &b.norm);
     assert_eq!(a.splits, b.splits);
     assert_eq!(a.function_evaluations, b.function_evaluations);
     assert_eq!(a.cache_hits, b.cache_hits);
     assert_eq!(a.measurement_evaluations, b.measurement_evaluations);
     assert_eq!(a.audit_evaluations, b.audit_evaluations);
+    assert_eq!(a.residual_evaluations, b.residual_evaluations);
+    assert_eq!(a.residual_saturations, b.residual_saturations);
     assert_eq!(a.verification_failures, b.verification_failures);
     assert_eq!(a.engine_retries, b.engine_retries);
     assert_eq!(first.zero_patches, second.zero_patches);
@@ -994,6 +1003,7 @@ pub(crate) fn assert_same_runs_across_problems(first: &RunDigest, second: &RunDi
         assert_eq!(x.acceptance, y.acceptance);
         assert_eq!(x.audit, y.audit);
         assert_eq!(x.status, y.status);
+        assert_eq!(x.log_norm.map(f64::to_bits), y.log_norm.map(f64::to_bits));
     }
     // Accepted projectors by position, and the stored data.
     assert_eq!(first.patches, second.patches);

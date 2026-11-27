@@ -3,10 +3,13 @@
 //! partial-wave `max_patches` contract, typed error propagation, and the
 //! lane-count identity of both lane entries.
 //!
-//! The fixtures use [`DenseEngine`], whose measurement path is the cached
-//! evaluator's raw kernels on trees with one site per node, so the serial and
-//! lane runs are expected to agree exactly; the generic-path rounding caveat
-//! of the driver documentation is not exercised here.
+//! The driver fixtures use [`DenseEngine`]; the lane-count fixtures use
+//! TreeTCI on a tree with one site per node. Stored-patch measurements use
+//! the cached evaluator's raw kernels. The elementwise engine also evaluates
+//! restricted input networks: removing fixed sites leaves site-free nodes,
+//! which exercise the generic cached-evaluator path. Its bitwise comparison
+//! records evidence for this fixture, not a guarantee for every generic tree
+//! or pooled-evaluator call history.
 
 use crate::adaptive_common;
 
@@ -237,9 +240,9 @@ fn lanes_and_serial_produce_the_same_report() {
     }
 }
 
-/// Every patch is evaluated, measured and published in its lane's child
-/// session: the evaluator issues a real indexed contraction there, and the
-/// context reports serial application parallelism.
+/// Every patch is evaluated, measured and published on its lane's engine
+/// through a session: the evaluator issues a real indexed contraction there,
+/// and the context reports serial application parallelism.
 #[test]
 fn the_evaluator_computes_in_the_lane_session() {
     let problem = chain();
@@ -506,15 +509,17 @@ fn allowed_cpus_split_into_pinned_backends_builds_lanes_and_runs() {
 // docs/design/tree-patching-error-contract.md: at a fixed per-lane engine
 // profile (every lane `CpuEngine::serial()`), a lane entry gives the same
 // report and the same stored node tensors, bit for bit, at every lane count.
-// The fixtures run the TreeTCI engine on the raw-kernel tree (a degree-3
-// junction, one binary site per node). The generic cached-evaluator path
-// (site-free or multi-site nodes) stays excluded: open question 8 of that
-// document.
+// Both fixtures run TreeTCI on a degree-3 tree with one binary site per node.
+// The elementwise fixture additionally covers generic cached evaluation of
+// restricted inputs: restrict_fixed_sites removes their fixed site legs,
+// and raw_centre_route_available then rejects their site-free nodes. This is
+// empirical coverage of one generic-path fixture; open question 8's broader
+// generic-path guarantee remains unestablished.
 
 /// The lane counts compared; one lane is the reference. Four lanes claim the
 /// patches of a wave dynamically, so the order in which patches finish varies
 /// from run to run while the result must not.
-const LANE_COUNTS: [usize; 2] = [1, 4];
+const LANE_COUNTS: [usize; 3] = [1, 2, 4];
 
 /// `count` lanes, each with its own serial engine.
 fn serial_lanes(count: usize) -> TenferroLanes {
@@ -529,6 +534,11 @@ fn assert_lane_count_identity(
     on: impl Fn(usize) -> PatchedInterpolationResult<Name>,
 ) {
     let reference = on(LANE_COUNTS[0]);
+    assert_eq!(
+        reference.partition.len(),
+        6,
+        "the six-patch fixture drifted"
+    );
     assert!(
         reference.report.splits >= 2 && reference.partition.len() >= 3,
         "the fixture must give waves of several patches: {} splits, {} patches",
@@ -601,6 +611,7 @@ fn the_elementwise_lanes_are_bitwise_identical_across_lane_counts() {
     };
     // Six patches times one: the product splits along the first input.
     let (x, y) = (input(&raw_kernel_peak, 3), input(&raw_kernel_ramp, 8));
+    assert_eq!((x.len(), y.len()), (6, 1), "the input partitions drifted");
     let options = lane_identity_options(
         &problem,
         &|p: &[usize]| raw_kernel_peak(p) * raw_kernel_ramp(p),
