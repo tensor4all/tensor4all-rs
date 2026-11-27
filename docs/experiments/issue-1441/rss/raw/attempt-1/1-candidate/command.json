@@ -1,0 +1,23 @@
+[
+  "ai-run",
+  "measure",
+  "--mem",
+  "2G",
+  "--cpus",
+  "8-15",
+  "--report",
+  "/root/projects/tensor4all-rust/tensor4all-rs-1441/docs/experiments/issue-1441/rss/raw/attempt-1/1-candidate/ai-run.json",
+  "--",
+  "/usr/bin/time",
+  "-v",
+  "-o",
+  "/root/projects/tensor4all-rust/tensor4all-rs-1441/docs/experiments/issue-1441/rss/raw/attempt-1/1-candidate/time.txt",
+  "timeout",
+  "--kill-after=5",
+  "120",
+  "taskset",
+  "-c",
+  "8",
+  "/root/projects/tensor4all-rust/tensor4all-rs-1441/target/1496-rss/enumeration",
+  "candidate"
+]

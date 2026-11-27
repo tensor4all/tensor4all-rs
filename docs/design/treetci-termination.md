@@ -113,9 +113,22 @@ nothing either, a third stage enumerates around the same retained tail
 pivots: every configuration of each maximal edge side with at most 32 local
 configurations, the other sites held at the pivot, without random draws
 ([#1433](https://github.com/tensor4all/tensor4all-rs/issues/1433)). The points
-are evaluated in batches of at most 2^20 index entries (points times sites;
-a batch always holds at least one point), which bounds the index buffer on
-large trees and changes neither the residuals nor the selected pivots. A walk
+form a lexicographically sorted, deduplicated stream: a min-heap merges one
+sparse mixed-radix cursor per anchor/side block. Each cursor borrows its
+anchor and stores only the varied nonunit coordinates (at most five under
+the 32-configuration budget). Equal heads advance together, so there is no
+whole-point seen set. This preserves the previous eager set's point order,
+including which point wins an equal-residual tie (#1441).
+
+The stream is evaluated in batches of at most 2^20 index entries (points
+times sites; a batch always holds at least one point). The third stage keeps
+only its strongest `max_nglobal_pivot` accepted points, preferring the earlier
+point when residuals tie, while still visiting every point for `max_error`.
+For `A` anchors, `S` selected sides and `N` sites, enumeration-specific storage
+is `O(A S log2(32) + A N + max(2^20, N) + max_nglobal_pivot * N)` index-sized
+words, rather than one full-site vector per enumerated point. This is not a
+bound on the unmodified graph/side metadata, evaluation memo or readout cache.
+Batching changes neither the residuals nor the selected pivots. A walk
 needs a nonzero residual one coordinate move from its start; the enumeration
 reaches a defect several moves away as long as it lies in such a side. On
 binary quantics chains that side is the aligned block of width at most 32

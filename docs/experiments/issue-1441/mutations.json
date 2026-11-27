@@ -1,0 +1,30 @@
+{
+  "mutations": [
+    {
+      "mutation": "reverse_radix_order",
+      "test": "sorted_union_matches_eager_reference_for_overlaps_and_mixed_radices",
+      "assertion_rejected": true,
+      "exit": 101
+    },
+    {
+      "mutation": "skip_deduplication",
+      "test": "sorted_union_matches_eager_reference_for_overlaps_and_mixed_radices",
+      "assertion_rejected": true,
+      "exit": 101
+    },
+    {
+      "mutation": "omit_candidate_cap",
+      "test": "accepted_points_stay_bounded_with_stable_ties",
+      "assertion_rejected": true,
+      "exit": 101
+    },
+    {
+      "mutation": "reverse_equal_residual_ties",
+      "test": "accepted_points_stay_bounded_with_stable_ties",
+      "assertion_rejected": true,
+      "exit": 101
+    }
+  ],
+  "restored_pass": true,
+  "scope": "isolated copy of the production generator and its private tests; production sources unmodified"
+}

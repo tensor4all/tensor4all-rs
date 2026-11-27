@@ -1,0 +1,16 @@
+{
+  "baseline": "f3d0df4ccdd4cab15ec4463abe9531c4cd52ddc8",
+  "candidate": "11e2f5c792845ba9890c4645c480fb73427a9248",
+  "scope": "Exact production point generators and production chunk shapes on the motivating 200-arm/1001-site/5-anchor workload; excludes evaluator, TreeTN, memo and topology construction. No end-to-end interpolation or runtime claim.",
+  "pairs": 3,
+  "order": "baseline/candidate, candidate/baseline, baseline/candidate; fresh processes",
+  "primary_observation": "whole-process peak RSS in KiB from GNU time, including dimensions, sides, anchors and checksum; median and range per arm",
+  "correctness": "30877 points in each cell and identical whole ordered-stream checksum in all cells; prior small exhaustive production tests establish order and distinctness",
+  "profile": "rustc opt-level=3 debuginfo=0; no target-cpu override; standard library only, no numerical provider",
+  "hardware": "AMD Ryzen 9 6900HX, 8 physical / 16 logical CPUs, Linux/WSL",
+  "affinity": "process on CPU 8; ai-run exclusive measurement CPUs 8-15; observer on 0-7",
+  "memory_cap": "2G",
+  "wall_cap_seconds": 120,
+  "validity": "all processes CLEAN; if contaminated rerun the complete six-cell matrix once, retaining both attempts; no selective retries or omitted failures",
+  "acceptance": "descriptive RSS observation requested in review; no new runtime or end-to-end performance gate; all correctness checks required"
+}

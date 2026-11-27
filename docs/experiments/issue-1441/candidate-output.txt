@@ -1,0 +1,83 @@
+
+running 4 tests
+test heavy_issue1433_box::heavy_width_16_control_box_stays_exact_for_every_seed ... issue1441 box r=6 seed=1 rule=Sampled points=4266 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=2 rule=Sampled points=4565 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=3 rule=Sampled points=4262 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=4 rule=Sampled points=4565 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=5 rule=Sampled points=4291 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=6 rule=Sampled points=4470 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=7 rule=Sampled points=4289 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=8 rule=Sampled points=4267 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=9 rule=Sampled points=4151 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=10 rule=Sampled points=4565 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=11 rule=Sampled points=4283 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=1 rule=PerBond points=4266 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=2 rule=PerBond points=4565 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=3 rule=PerBond points=4262 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=4 rule=PerBond points=4565 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=5 rule=PerBond points=4291 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=6 rule=PerBond points=4470 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=7 rule=PerBond points=4289 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=8 rule=PerBond points=4267 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=9 rule=PerBond points=4151 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=10 rule=PerBond points=4565 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=6 seed=11 rule=PerBond points=4283 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+ok
+test heavy_issue1433_box::heavy_width_32_box_is_exact_for_every_seed ... issue1441 box r=7 seed=1 rule=Sampled points=5897 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=2 rule=Sampled points=5897 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=3 rule=Sampled points=5897 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=4 rule=Sampled points=5897 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=5 rule=Sampled points=5897 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=6 rule=Sampled points=6821 iterations=5 ranks=[2, 3, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=7 rule=Sampled points=5897 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=8 rule=Sampled points=6823 iterations=5 ranks=[2, 3, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=9 rule=Sampled points=5897 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=10 rule=Sampled points=6825 iterations=5 ranks=[2, 3, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=11 rule=Sampled points=5897 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=1 rule=PerBond points=5897 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=2 rule=PerBond points=5897 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=3 rule=PerBond points=5897 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=4 rule=PerBond points=5897 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=5 rule=PerBond points=5897 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=6 rule=PerBond points=6821 iterations=5 ranks=[2, 3, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=7 rule=PerBond points=5897 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=8 rule=PerBond points=6823 iterations=5 ranks=[2, 3, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=9 rule=PerBond points=5897 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=10 rule=PerBond points=6825 iterations=5 ranks=[2, 3, 3, 3, 3] termination=Converged error=0e0
+issue1441 box r=7 seed=11 rule=PerBond points=5897 iterations=4 ranks=[2, 3, 3, 3] termination=Converged error=0e0
+ok
+test heavy_issue1441_enumeration::heavy_comb_point_costs ... Oscillating { delta: 1.0 } global true: termination Converged, iterations 4, max rank 20, junction ranks [12, 12, 11], distinct points 45328, max rel error 7.955e-7, reported error 5.470e-7
+issue1441 comb delta=1 seed=11 rule=Sampled points=45328 iterations=4 ranks=[15, 20, 20, 20] termination=Converged error=7.954982267238903e-7
+Oscillating { delta: 4.0 } global true: termination Converged, iterations 5, max rank 50, junction ranks [28, 27, 24], distinct points 529037, max rel error 3.370e-7, reported error 2.544e-7
+issue1441 comb delta=4 seed=11 rule=Sampled points=529037 iterations=5 ranks=[18, 48, 51, 50, 50] termination=Converged error=3.369874514820864e-7
+Oscillating { delta: 1.0 } global true: termination Converged, iterations 4, max rank 20, junction ranks [12, 12, 11], distinct points 46781, max rel error 1.331e-6, reported error 9.750e-7
+issue1441 comb delta=1 seed=11 rule=PerBond points=46781 iterations=4 ranks=[15, 20, 20, 20] termination=Converged error=1.330598075267888e-6
+Oscillating { delta: 4.0 } global true: termination Converged, iterations 6, max rank 48, junction ranks [26, 27, 22], distinct points 489714, max rel error 2.073e-6, reported error 9.640e-7
+issue1441 comb delta=4 seed=11 rule=PerBond points=489714 iterations=6 ranks=[18, 47, 48, 48, 49, 48] termination=Converged error=2.0727457040654806e-6
+ok
+test heavy_issue1441_enumeration::heavy_reopened_table_point_costs ... issue1441 plane=16 binary=false seed=1 rule=Sampled points=37175 iterations=5 ranks=[8, 16, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=1 rule=PerBond points=37175 iterations=5 ranks=[8, 16, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=2 rule=Sampled points=37567 iterations=5 ranks=[8, 16, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=2 rule=PerBond points=37567 iterations=5 ranks=[8, 16, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=3 rule=Sampled points=36997 iterations=5 ranks=[8, 16, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=3 rule=PerBond points=36997 iterations=5 ranks=[8, 16, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=4 rule=Sampled points=29044 iterations=4 ranks=[8, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=4 rule=PerBond points=29044 iterations=4 ranks=[8, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=5 rule=Sampled points=29046 iterations=4 ranks=[8, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=5 rule=PerBond points=29046 iterations=4 ranks=[8, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=6 rule=Sampled points=37310 iterations=5 ranks=[8, 16, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=6 rule=PerBond points=37310 iterations=5 ranks=[8, 16, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=7 rule=Sampled points=38170 iterations=5 ranks=[8, 16, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=7 rule=PerBond points=38170 iterations=5 ranks=[8, 16, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=8 rule=Sampled points=27532 iterations=4 ranks=[8, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=8 rule=PerBond points=27532 iterations=4 ranks=[8, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=9 rule=Sampled points=37119 iterations=5 ranks=[8, 16, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=9 rule=PerBond points=37119 iterations=5 ranks=[8, 16, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=10 rule=Sampled points=39279 iterations=5 ranks=[8, 16, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=10 rule=PerBond points=39279 iterations=5 ranks=[8, 16, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=11 rule=Sampled points=37102 iterations=5 ranks=[8, 16, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+issue1441 plane=16 binary=false seed=11 rule=PerBond points=37102 iterations=5 ranks=[8, 16, 16, 16, 16] termination=Converged error=4.089622707551871e-16
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 87 filtered out; finished in 5.30s
+

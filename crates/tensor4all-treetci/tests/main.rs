@@ -14,6 +14,7 @@ mod evaluation_memo;
 mod external_proposer;
 mod heavy_issue1371_local_threshold;
 mod heavy_issue1433_box;
+mod heavy_issue1441_enumeration;
 mod issue1078_context_adoption;
 mod issue1153_degenerate_junction;
 mod issue1159_rank1_junction;
