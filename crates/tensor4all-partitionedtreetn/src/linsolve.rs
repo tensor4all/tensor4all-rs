@@ -125,7 +125,12 @@ where
             (&m.internal_index, &m.true_index)
         };
         if from != to {
-            current = current.replaceind(from, to)?;
+            current =
+                current
+                    .replaceind(from, to)
+                    .map_err(|err| PartitionedTreeTNError::TreeTN {
+                        source: anyhow::Error::new(err).into(),
+                    })?;
         }
     }
     Ok(current)
@@ -247,16 +252,27 @@ where
     // Inspect operator incidence from projectors alone, before any numerics.
     let mut is_coupled = false;
     let mut diag_blocks: HashMap<Projector, &SubDomainTreeTN<V>> = HashMap::new();
-    let mut supported_outputs: HashSet<Projector> = rhs.iter().map(|(p, _)| p.clone()).collect();
+    let mut op_output_projectors: Vec<Projector> = Vec::new();
+    let rhs_projectors: HashSet<Projector> = rhs.iter().map(|(p, _)| p.clone()).collect();
 
     for (op_proj, op_patch) in operator {
         let (p_in, p_out) =
             operator_block_endpoints(op_proj, input_mapping.as_ref(), output_mapping.as_ref())?;
-        supported_outputs.insert(p_out.clone());
+        op_output_projectors.push(p_out.clone());
         if p_in != p_out {
             is_coupled = true;
         } else {
-            diag_blocks.insert(p_out, op_patch);
+            // If an operator block overlaps a rhs patch without matching its
+            // exact projector key (e.g., an unprojected or coarser operator
+            // block), route to GlobalKrylov so patched contraction handles it.
+            let overlaps_nonexact = rhs_projectors
+                .iter()
+                .any(|rp| rp != &p_out && p_out.intersection(rp).is_some());
+            if overlaps_nonexact {
+                is_coupled = true;
+            } else {
+                diag_blocks.insert(p_out, op_patch);
+            }
         }
     }
 
@@ -275,7 +291,8 @@ where
             operator,
             rhs,
             init,
-            &supported_outputs,
+            &rhs_projectors,
+            &op_output_projectors,
             center,
             options,
             input_mapping,
@@ -313,17 +330,19 @@ where
                     .scale(AnyScalar::new_real(0.0))
                     .map_err(PartitionedTreeTNError::from)?,
             };
+            let mut patch_options = options.clone();
+            patch_options.check_residual = true;
             let res = square_linsolve(
                 op_patch.data(),
                 rhs_patch.data(),
                 init_tree,
                 center,
-                options.clone(),
+                patch_options,
                 input_mapping.clone(),
                 output_mapping.clone(),
             )
             .map_err(PartitionedTreeTNError::from)?;
-            let patch_res = res.residual.unwrap_or(0.0);
+            let patch_res = res.residual.unwrap_or(f64::NAN);
             residual_abs = residual_abs.hypot(patch_res * bp_norm);
             all_converged &= res.converged;
             patch_residuals.push((proj.clone(), patch_res));
@@ -371,7 +390,8 @@ fn solve_global_krylov<V>(
     operator: &PartitionedTreeTN<V>,
     rhs: &PartitionedTreeTN<V>,
     init: PartitionedTreeTN<V>,
-    supported_outputs: &HashSet<Projector>,
+    rhs_projectors: &HashSet<Projector>,
+    op_output_projectors: &[Projector],
     center: &V,
     options: LinsolveOptions,
     input_mapping: Option<HashMap<V, IndexMapping<DynIndex>>>,
@@ -384,7 +404,12 @@ where
     // never enter the Krylov subspace or the returned solution.
     let mut init_patches: Vec<SubDomainTreeTN<V>> = init
         .into_iter()
-        .filter(|(proj, _)| supported_outputs.contains(proj))
+        .filter(|(proj, _)| {
+            rhs_projectors.contains(proj)
+                || op_output_projectors
+                    .iter()
+                    .any(|p_out| p_out.intersection(proj).is_some())
+        })
         .map(|(_, patch)| patch)
         .collect();
     if init_patches.is_empty() {
@@ -449,16 +474,28 @@ where
         &gmres_opts,
         truncate_fn,
     )
-    .map_err(|err| PartitionedTreeTNError::tree(err.to_string()))?;
+    .map_err(|err| PartitionedTreeTNError::TreeTN {
+        source: anyhow::Error::new(err).into(),
+    })?;
 
     // Compute true residual of the whole coupled system.
     let b_norm = rhs.norm()?;
     let residual = if b_norm == 0.0 {
         0.0
     } else {
-        let ax = apply_a(&gmres_res.solution)
-            .map_err(|err| PartitionedTreeTNError::tree(err.to_string()))?;
-        let diff = ax.axpby(AnyScalar::new_real(1.0), rhs, AnyScalar::new_real(-1.0))?;
+        let ax = apply_a(&gmres_res.solution).map_err(|err| {
+            match err.downcast::<PartitionedTreeTNError>() {
+                Ok(e) => e,
+                Err(other) => PartitionedTreeTNError::TreeTN {
+                    source: other.into(),
+                },
+            }
+        })?;
+        let diff = ax
+            .axpby(AnyScalar::new_real(1.0), rhs, AnyScalar::new_real(-1.0))
+            .map_err(|err| PartitionedTreeTNError::TreeTN {
+                source: anyhow::Error::new(err).into(),
+            })?;
         diff.norm()? / b_norm
     };
 

@@ -16,7 +16,9 @@ use crate::subdomain_tree_tn::{
     ensure_same_tree_structure, sort_by_patch_order, validate_contraction_options,
     validate_contraction_site_assignment, validate_truncation_options, SubDomainTreeTN,
 };
-use tensor4all_core::{AnyScalar, DynIndex, TensorIndex, TensorVectorSpace};
+use tensor4all_core::{
+    AnyScalar, DynIndex, TensorIndex, TensorVectorSpace, TensorVectorSpaceError,
+};
 use tensor4all_treetn::{
     contraction::ContractionOptions, ExactSum, SumEngine, TreeTN, TruncationOptions,
 };
@@ -2118,7 +2120,7 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     type Index = DynIndex;
-    type Error = PartitionedTreeTNError;
+    type Error = TensorVectorSpaceError;
 
     fn external_indices(&self) -> Vec<Self::Index> {
         self.ordered_patches()
@@ -2127,19 +2129,29 @@ where
             .unwrap_or_default()
     }
 
-    fn replaceind(&self, old_index: &Self::Index, new_index: &Self::Index) -> Result<Self> {
-        self.validate_contents()?;
+    fn replaceind(
+        &self,
+        old_index: &Self::Index,
+        new_index: &Self::Index,
+    ) -> std::result::Result<Self, Self::Error> {
+        self.validate_contents().map_err(anyhow::Error::new)?;
         let mut data = HashMap::with_capacity(self.data.len());
         for (projector, patch) in &self.data {
             let new_tree = patch
                 .data()
                 .replaceind(old_index, new_index)
-                .map_err(PartitionedTreeTNError::from)?;
+                .map_err(PartitionedTreeTNError::from)
+                .map_err(anyhow::Error::new)?;
             let mut new_proj = projector.clone();
             if let Some(coord) = new_proj.remove(old_index) {
-                new_proj.insert(new_index.clone(), coord)?;
+                new_proj
+                    .insert(new_index.clone(), coord)
+                    .map_err(anyhow::Error::new)?;
             }
-            data.insert(new_proj.clone(), SubDomainTreeTN::new(new_tree, new_proj)?);
+            data.insert(
+                new_proj.clone(),
+                SubDomainTreeTN::new(new_tree, new_proj).map_err(anyhow::Error::new)?,
+            );
         }
         Ok(Self { data })
     }
@@ -2148,12 +2160,13 @@ where
         &self,
         old_indices: &[Self::Index],
         new_indices: &[Self::Index],
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, Self::Error> {
         if old_indices.len() != new_indices.len() {
-            return Err(PartitionedTreeTNError::InvalidOptions {
+            return Err(anyhow::Error::new(PartitionedTreeTNError::InvalidOptions {
                 operation: "PartitionedTreeTN::replace_indices",
                 reason: "old_indices and new_indices must have equal length",
-            });
+            })
+            .into());
         }
         let mut current = self.clone();
         for (old_idx, new_idx) in old_indices.iter().zip(new_indices.iter()) {
@@ -2175,24 +2188,39 @@ impl<V> TensorVectorSpace for PartitionedTreeTN<V>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    fn norm_squared(&self) -> Result<f64> {
+    fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         PartitionedTreeTN::norm_squared(self)
+            .map_err(anyhow::Error::new)
+            .map_err(Into::into)
     }
 
-    fn norm(&self) -> Result<f64> {
+    fn norm(&self) -> std::result::Result<f64, Self::Error> {
         PartitionedTreeTN::norm(self)
+            .map_err(anyhow::Error::new)
+            .map_err(Into::into)
     }
 
-    fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
+    fn axpby(
+        &self,
+        a: AnyScalar,
+        other: &Self,
+        b: AnyScalar,
+    ) -> std::result::Result<Self, Self::Error> {
         self.axpby_with(a, other, b, None, AUTOMATIC_REFINEMENT_LIMIT)
+            .map_err(anyhow::Error::new)
+            .map_err(Into::into)
     }
 
-    fn scale(&self, scalar: AnyScalar) -> Result<Self> {
+    fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error> {
         PartitionedTreeTN::scale(self, scalar)
+            .map_err(anyhow::Error::new)
+            .map_err(Into::into)
     }
 
-    fn inner_product(&self, other: &Self) -> Result<AnyScalar> {
+    fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, Self::Error> {
         PartitionedTreeTN::inner(self, other)
+            .map_err(anyhow::Error::new)
+            .map_err(Into::into)
     }
 
     fn is_single_precision(&self) -> bool {
@@ -2207,25 +2235,28 @@ where
             .any(|patch| TensorVectorSpace::is_complex(patch.data()))
     }
 
-    fn maxabs(&self) -> Result<f64> {
-        Err(PartitionedTreeTNError::InvalidOptions {
+    fn maxabs(&self) -> std::result::Result<f64, Self::Error> {
+        Err(anyhow::Error::new(PartitionedTreeTNError::InvalidOptions {
             operation: "PartitionedTreeTN::maxabs",
             reason: "maxabs requires explicit dense materialization; use a norm-based residual",
         })
+        .into())
     }
 
-    fn min_nonzero_abs(&self) -> Result<Option<f64>> {
-        Err(PartitionedTreeTNError::InvalidOptions {
+    fn min_nonzero_abs(&self) -> std::result::Result<Option<f64>, Self::Error> {
+        Err(anyhow::Error::new(PartitionedTreeTNError::InvalidOptions {
             operation: "PartitionedTreeTN::min_nonzero_abs",
             reason: "min_nonzero_abs requires explicit dense materialization",
         })
+        .into())
     }
 
-    fn is_all_finite(&self) -> Result<bool> {
-        self.validate_contents()?;
+    fn is_all_finite(&self) -> std::result::Result<bool, Self::Error> {
+        self.validate_contents().map_err(anyhow::Error::new)?;
         for patch in self.ordered_patches() {
             if !TensorVectorSpace::is_all_finite(patch.data())
-                .map_err(PartitionedTreeTNError::from)?
+                .map_err(PartitionedTreeTNError::from)
+                .map_err(anyhow::Error::new)?
             {
                 return Ok(false);
             }
@@ -2233,13 +2264,15 @@ where
         Ok(true)
     }
 
-    fn validate(&self) -> Result<()> {
-        self.validate_contents()?;
+    fn validate(&self) -> std::result::Result<(), Self::Error> {
+        self.validate_contents().map_err(anyhow::Error::new)?;
         if self.is_empty() {
-            return Err(PartitionedTreeTNError::Empty);
+            return Err(anyhow::Error::new(PartitionedTreeTNError::Empty).into());
         }
         for patch in self.ordered_patches() {
-            TensorVectorSpace::validate(patch.data()).map_err(PartitionedTreeTNError::from)?;
+            TensorVectorSpace::validate(patch.data())
+                .map_err(PartitionedTreeTNError::from)
+                .map_err(anyhow::Error::new)?;
         }
         Ok(())
     }

@@ -287,12 +287,6 @@ impl From<TreeTNOperationError> for PartitionedTreeTNError {
     }
 }
 
-impl From<anyhow::Error> for PartitionedTreeTNError {
-    fn from(source: anyhow::Error) -> Self {
-        Self::TensorConstruction { source }
-    }
-}
-
 impl From<IdxTensorError> for PartitionedTreeTNError {
     fn from(source: IdxTensorError) -> Self {
         match source {

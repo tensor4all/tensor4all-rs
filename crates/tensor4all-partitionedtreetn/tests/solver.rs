@@ -5,7 +5,9 @@ use tensor4all_core::{AnyScalar, DynIndex, IdxTensor, TensorVectorSpace};
 use tensor4all_partitionedtreetn::{
     partitioned_linsolve, LinsolveRoute, PartitionedTreeTN, Projector, SubDomainTreeTN,
 };
-use tensor4all_treetn::{IndexMapping, LinsolveOptions, TreeTN, TruncationOptions};
+use tensor4all_treetn::{
+    square_linsolve, IndexMapping, LinsolveOptions, TreeTN, TruncationOptions,
+};
 
 /// Build a 2-site complex TreeTN on sites `(s0, s1)` with bond dimension 1
 /// from a column-major dense array of length `s0.dim * s1.dim` where only
@@ -246,6 +248,116 @@ fn routes_and_global_residual() {
         .norm()
         .unwrap();
     assert!(local_err <= 10.0 * tolerance);
+
+    // Compare block-diagonal result directly against patch-by-patch `square_linsolve`.
+    let ref_p0 = square_linsolve(
+        op_diag
+            .get(&Projector::from_pairs([(s0_out.clone(), 0), (s0_in.clone(), 0)]).unwrap())
+            .unwrap()
+            .data(),
+        b_diag.get(&p0).unwrap().data(),
+        init.get(&p0).unwrap().data().clone(),
+        &0usize,
+        options.clone(),
+        Some(input_mapping.clone()),
+        Some(output_mapping.clone()),
+    )
+    .unwrap();
+    let ref_p1 = square_linsolve(
+        op_diag
+            .get(&Projector::from_pairs([(s0_out.clone(), 1), (s0_in.clone(), 1)]).unwrap())
+            .unwrap()
+            .data(),
+        b_diag.get(&p1).unwrap().data(),
+        init.get(&p1).unwrap().data().clone(),
+        &0usize,
+        options.clone(),
+        Some(input_mapping.clone()),
+        Some(output_mapping.clone()),
+    )
+    .unwrap();
+    let patch_by_patch = PartitionedTreeTN::from_subdomains(vec![
+        SubDomainTreeTN::new(ref_p0.solution, p0.clone()).unwrap(),
+        SubDomainTreeTN::new(ref_p1.solution, p1.clone()).unwrap(),
+    ])
+    .unwrap();
+    let vs_patch_by_patch = local_res
+        .solution
+        .axpby(
+            AnyScalar::new_real(1.0),
+            &patch_by_patch,
+            AnyScalar::new_real(-1.0),
+        )
+        .unwrap()
+        .norm()
+        .unwrap();
+    assert!(vs_patch_by_patch <= 10.0 * tolerance);
+
+    // 2b. Unprojected operator block (`I_{s0} ⊗ m00`) on a 2-patch state must
+    // not be silently dropped by exact-key lookup; it must match manufactured x.
+    let mut id_s0 = vec![Complex64::new(0.0, 0.0); s0_out.dim * s0_in.dim];
+    for i in 0..s0_out.dim {
+        id_s0[i + s0_out.dim * i] = Complex64::new(1.0, 0.0);
+    }
+    let u_bond = DynIndex::new_dyn(1);
+    let mut unproj_tree = TreeTN::<IdxTensor, usize>::new();
+    let u0 = unproj_tree
+        .add_tensor(
+            0,
+            IdxTensor::from_dense(vec![s0_out.clone(), s0_in.clone(), u_bond.clone()], id_s0)
+                .unwrap(),
+        )
+        .unwrap();
+    let u1 = unproj_tree
+        .add_tensor(
+            1,
+            IdxTensor::from_dense(
+                vec![u_bond.clone(), s1_out.clone(), s1_in.clone()],
+                m00.to_vec(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    unproj_tree.connect(u0, &u_bond, u1, &u_bond).unwrap();
+    let op_unproj = PartitionedTreeTN::from_subdomain(
+        SubDomainTreeTN::new(unproj_tree, Projector::new()).unwrap(),
+    )
+    .unwrap();
+    let ax0_unproj = mat_vec2(&m00, &x0);
+    let ax1_unproj = mat_vec2(&m00, &x1);
+    let b_unproj = PartitionedTreeTN::from_subdomains(vec![
+        make_state_patch(&s0, &s1, 0, &[x0[0] - ax0_unproj[0], x0[1] - ax0_unproj[1]]),
+        make_state_patch(&s0, &s1, 1, &[x1[0] - ax1_unproj[0], x1[1] - ax1_unproj[1]]),
+    ])
+    .unwrap();
+    let init_two_patches = PartitionedTreeTN::from_subdomains(vec![
+        make_state_patch(&s0, &s1, 0, &[Complex64::new(0.0, 0.0); 2]),
+        make_state_patch(&s0, &s1, 1, &[Complex64::new(0.0, 0.0); 2]),
+    ])
+    .unwrap();
+    let unproj_res = partitioned_linsolve(
+        &op_unproj,
+        &b_unproj,
+        init_two_patches,
+        &0usize,
+        options.clone(),
+        Some(input_mapping.clone()),
+        Some(output_mapping.clone()),
+    )
+    .unwrap();
+    assert!(unproj_res.converged);
+    assert!(unproj_res.residual <= 10.0 * tolerance);
+    let unproj_err = unproj_res
+        .solution
+        .axpby(
+            AnyScalar::new_real(1.0),
+            &x_exact,
+            AnyScalar::new_real(-1.0),
+        )
+        .unwrap()
+        .norm()
+        .unwrap();
+    assert!(unproj_err <= 10.0 * tolerance);
 
     // 3. Coupled operator -> LinsolveRoute::GlobalKrylov with whole-system residual.
     let op_coupled = PartitionedTreeTN::from_subdomains(vec![
