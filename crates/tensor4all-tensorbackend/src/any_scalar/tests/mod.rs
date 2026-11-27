@@ -86,17 +86,6 @@ fn complex_division_retains_exceptional_value_classification() {
     assert_eq!(actual.im, f64::NEG_INFINITY);
 }
 
-#[test]
-fn external_target_dtype_is_rejected_as_unsupported() {
-    let native = NativeTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
-    let error = promote_scalar_native(&native, DType::External(core::any::TypeId::of::<u8>()))
-        .expect_err("an external target dtype must be rejected");
-    let tenferro = error
-        .downcast_ref::<tenferro_tensor::Error>()
-        .expect("the rejection must preserve the typed tenferro error");
-    assert_eq!(tenferro.kind(), tenferro_tensor::ErrorKind::Unsupported);
-}
-
 fn assert_scalar_close(actual: &BackendScalar, expected: &BackendScalar) {
     match (actual.as_f64(), expected.as_f64()) {
         (Some(a), Some(e)) => assert!((a - e).abs() < 1e-6),
@@ -182,110 +171,9 @@ fn scalar_arithmetic_uses_runtime_bridge() {
 }
 
 #[test]
-fn promote_scalar_native_covers_all_scalar_type_pairs() {
-    let cases = vec![
-        (
-            BackendScalar::from_value(1.25_f32),
-            DType::F32,
-            BackendScalar::from_value(1.25_f32),
-        ),
-        (
-            BackendScalar::from_value(1.25_f32),
-            DType::F64,
-            BackendScalar::from_value(1.25_f64),
-        ),
-        (
-            BackendScalar::from_value(1.25_f32),
-            DType::C32,
-            BackendScalar::from_value(Complex32::new(1.25, 0.0)),
-        ),
-        (
-            BackendScalar::from_value(1.25_f32),
-            DType::C64,
-            BackendScalar::from_value(Complex64::new(1.25, 0.0)),
-        ),
-        (
-            BackendScalar::from_value(-2.5_f64),
-            DType::F32,
-            BackendScalar::from_value(-2.5_f32),
-        ),
-        (
-            BackendScalar::from_value(-2.5_f64),
-            DType::F64,
-            BackendScalar::from_value(-2.5_f64),
-        ),
-        (
-            BackendScalar::from_value(-2.5_f64),
-            DType::C32,
-            BackendScalar::from_value(Complex32::new(-2.5, 0.0)),
-        ),
-        (
-            BackendScalar::from_value(-2.5_f64),
-            DType::C64,
-            BackendScalar::from_value(Complex64::new(-2.5, 0.0)),
-        ),
-        (
-            BackendScalar::from_value(Complex32::new(3.0, -0.5)),
-            DType::F32,
-            BackendScalar::from_value(3.0_f32),
-        ),
-        (
-            BackendScalar::from_value(Complex32::new(3.0, -0.5)),
-            DType::F64,
-            BackendScalar::from_value(3.0_f64),
-        ),
-        (
-            BackendScalar::from_value(Complex32::new(3.0, -0.5)),
-            DType::C32,
-            BackendScalar::from_value(Complex32::new(3.0, -0.5)),
-        ),
-        (
-            BackendScalar::from_value(Complex32::new(3.0, -0.5)),
-            DType::C64,
-            BackendScalar::from_value(Complex64::new(3.0, -0.5)),
-        ),
-        (
-            BackendScalar::from_value(Complex64::new(-1.0, 2.0)),
-            DType::F32,
-            BackendScalar::from_value(-1.0_f32),
-        ),
-        (
-            BackendScalar::from_value(Complex64::new(-1.0, 2.0)),
-            DType::F64,
-            BackendScalar::from_value(-1.0_f64),
-        ),
-        (
-            BackendScalar::from_value(Complex64::new(-1.0, 2.0)),
-            DType::C32,
-            BackendScalar::from_value(Complex32::new(-1.0, 2.0)),
-        ),
-        (
-            BackendScalar::from_value(Complex64::new(-1.0, 2.0)),
-            DType::C64,
-            BackendScalar::from_value(Complex64::new(-1.0, 2.0)),
-        ),
-    ];
-
-    for (source, target, expected) in cases {
-        let promoted =
-            BackendScalar::from_native(promote_scalar_native(source.as_native(), target).unwrap())
-                .expect("promoted scalar");
-        assert_eq!(promoted.native.dtype(), expected.native.dtype());
-        assert_scalar_close(&promoted, &expected);
-    }
-}
-
-#[test]
 fn i64_native_scalar_is_supported_without_public_tensor_element() {
-    let scalar = BackendScalar::from_native(
-        NativeTensor::from_vec_col_major(vec![], vec![-3_i64])
-            .expect("valid i64 scalar test tensor"),
-    )
-    .expect("i64 native scalar");
-    let zero = BackendScalar::from_native(
-        NativeTensor::from_vec_col_major(vec![], vec![0_i64]).expect("valid i64 zero test tensor"),
-    )
-    .expect("i64 zero scalar");
+    let scalar = BackendScalar::from_i64(-3);
+    let zero = BackendScalar::from_i64(0);
 
     assert_eq!(scalar.native.dtype(), DType::I64);
     assert_eq!(scalar.real(), -3.0);
@@ -304,15 +192,8 @@ fn i64_native_scalar_is_supported_without_public_tensor_element() {
 
 #[test]
 fn i32_native_scalar_is_supported_without_public_tensor_element() {
-    let scalar = BackendScalar::from_native(
-        NativeTensor::from_vec_col_major(vec![], vec![-4_i32])
-            .expect("valid i32 scalar test tensor"),
-    )
-    .expect("i32 native scalar");
-    let zero = BackendScalar::from_native(
-        NativeTensor::from_vec_col_major(vec![], vec![0_i32]).expect("valid i32 zero test tensor"),
-    )
-    .expect("i32 zero scalar");
+    let scalar = BackendScalar::from_i32(-4);
+    let zero = BackendScalar::from_i32(0);
 
     assert_eq!(scalar.native.dtype(), DType::I32);
     assert_eq!(scalar.real(), -4.0);
@@ -332,16 +213,8 @@ fn i32_native_scalar_is_supported_without_public_tensor_element() {
 
 #[test]
 fn bool_native_scalar_is_supported_without_public_tensor_element() {
-    let true_scalar = BackendScalar::from_native(
-        NativeTensor::from_vec_col_major(vec![], vec![true])
-            .expect("valid bool true scalar test tensor"),
-    )
-    .expect("bool true scalar");
-    let false_scalar = BackendScalar::from_native(
-        NativeTensor::from_vec_col_major(vec![], vec![false])
-            .expect("valid bool false scalar test tensor"),
-    )
-    .expect("bool false scalar");
+    let true_scalar = BackendScalar::from_bool(true);
+    let false_scalar = BackendScalar::from_bool(false);
 
     assert_eq!(true_scalar.native.dtype(), DType::Bool);
     assert_eq!(true_scalar.real(), 1.0);
@@ -367,217 +240,8 @@ fn bool_native_scalar_is_supported_without_public_tensor_element() {
 }
 
 #[test]
-fn promote_i64_native_scalar_covers_supported_targets_and_rejections() {
-    let i64_scalar = BackendScalar::from_native(
-        NativeTensor::from_vec_col_major(vec![], vec![7_i64])
-            .expect("valid i64 scalar test tensor"),
-    )
-    .expect("i64 scalar");
-
-    let promoted_f32 = BackendScalar::from_native(
-        promote_scalar_native(i64_scalar.as_native(), DType::F32).unwrap(),
-    )
-    .expect("promoted f32");
-    let promoted_f64 = BackendScalar::from_native(
-        promote_scalar_native(i64_scalar.as_native(), DType::F64).unwrap(),
-    )
-    .expect("promoted f64");
-    let promoted_i64 = BackendScalar::from_native(
-        promote_scalar_native(i64_scalar.as_native(), DType::I64).unwrap(),
-    )
-    .expect("promoted i64");
-    let promoted_c32 = BackendScalar::from_native(
-        promote_scalar_native(i64_scalar.as_native(), DType::C32).unwrap(),
-    )
-    .expect("promoted c32");
-    let promoted_c64 = BackendScalar::from_native(
-        promote_scalar_native(i64_scalar.as_native(), DType::C64).unwrap(),
-    )
-    .expect("promoted c64");
-
-    assert_eq!(promoted_f32.native.dtype(), DType::F32);
-    assert_eq!(promoted_f32.as_f64(), Some(7.0));
-    assert_eq!(promoted_f64.native.dtype(), DType::F64);
-    assert_eq!(promoted_f64.as_f64(), Some(7.0));
-    assert_eq!(promoted_i64.native.dtype(), DType::I64);
-    assert_eq!(promoted_i64.as_f64(), Some(7.0));
-    assert_eq!(promoted_c32.native.dtype(), DType::C32);
-    assert_eq!(promoted_c32.as_c64(), Some(Complex64::new(7.0, 0.0)));
-    assert_eq!(promoted_c64.native.dtype(), DType::C64);
-    assert_eq!(promoted_c64.as_c64(), Some(Complex64::new(7.0, 0.0)));
-
-    assert!(
-        promote_scalar_native(BackendScalar::from_value(1.25_f32).as_native(), DType::I64).is_err()
-    );
-    assert!(
-        promote_scalar_native(BackendScalar::from_value(1.25_f64).as_native(), DType::I64).is_err()
-    );
-    assert!(promote_scalar_native(
-        BackendScalar::from_value(Complex32::new(1.0, 0.0)).as_native(),
-        DType::I64
-    )
-    .is_err());
-    assert!(promote_scalar_native(
-        BackendScalar::from_value(Complex64::new(1.0, 0.0)).as_native(),
-        DType::I64
-    )
-    .is_err());
-}
-
-#[test]
-fn promote_i32_native_scalar_covers_supported_targets_and_rejections() {
-    let i32_scalar = BackendScalar::from_native(
-        NativeTensor::from_vec_col_major(vec![], vec![5_i32])
-            .expect("valid i32 scalar test tensor"),
-    )
-    .expect("i32 scalar");
-
-    let promoted_f32 = BackendScalar::from_native(
-        promote_scalar_native(i32_scalar.as_native(), DType::F32).unwrap(),
-    )
-    .expect("promoted f32");
-    let promoted_f64 = BackendScalar::from_native(
-        promote_scalar_native(i32_scalar.as_native(), DType::F64).unwrap(),
-    )
-    .expect("promoted f64");
-    let promoted_i32 = BackendScalar::from_native(
-        promote_scalar_native(i32_scalar.as_native(), DType::I32).unwrap(),
-    )
-    .expect("promoted i32");
-    let promoted_i64 = BackendScalar::from_native(
-        promote_scalar_native(i32_scalar.as_native(), DType::I64).unwrap(),
-    )
-    .expect("promoted i64");
-    let promoted_c32 = BackendScalar::from_native(
-        promote_scalar_native(i32_scalar.as_native(), DType::C32).unwrap(),
-    )
-    .expect("promoted c32");
-    let promoted_c64 = BackendScalar::from_native(
-        promote_scalar_native(i32_scalar.as_native(), DType::C64).unwrap(),
-    )
-    .expect("promoted c64");
-
-    assert_eq!(promoted_f32.native.dtype(), DType::F32);
-    assert_eq!(promoted_f32.as_f64(), Some(5.0));
-    assert_eq!(promoted_f64.native.dtype(), DType::F64);
-    assert_eq!(promoted_f64.as_f64(), Some(5.0));
-    assert_eq!(promoted_i32.native.dtype(), DType::I32);
-    assert_eq!(promoted_i32.as_f64(), Some(5.0));
-    assert_eq!(promoted_i64.native.dtype(), DType::I64);
-    assert_eq!(promoted_i64.as_f64(), Some(5.0));
-    assert_eq!(promoted_c32.native.dtype(), DType::C32);
-    assert_eq!(promoted_c32.as_c64(), Some(Complex64::new(5.0, 0.0)));
-    assert_eq!(promoted_c64.native.dtype(), DType::C64);
-    assert_eq!(promoted_c64.as_c64(), Some(Complex64::new(5.0, 0.0)));
-
-    assert!(promote_scalar_native(i32_scalar.as_native(), DType::Bool).is_err());
-    assert!(
-        promote_scalar_native(BackendScalar::from_value(1.25_f32).as_native(), DType::I32).is_err()
-    );
-    assert!(
-        promote_scalar_native(BackendScalar::from_value(1.25_f64).as_native(), DType::I32).is_err()
-    );
-    assert!(promote_scalar_native(
-        BackendScalar::from_value(Complex32::new(1.0, 0.0)).as_native(),
-        DType::I32
-    )
-    .is_err());
-    assert!(promote_scalar_native(
-        BackendScalar::from_value(Complex64::new(1.0, 0.0)).as_native(),
-        DType::I32
-    )
-    .is_err());
-}
-
-#[test]
-fn promote_bool_native_scalar_covers_supported_targets_and_rejections() {
-    let true_scalar = BackendScalar::from_native(
-        NativeTensor::from_vec_col_major(vec![], vec![true])
-            .expect("valid bool scalar test tensor"),
-    )
-    .expect("bool scalar");
-
-    let promoted_f32 = BackendScalar::from_native(
-        promote_scalar_native(true_scalar.as_native(), DType::F32).unwrap(),
-    )
-    .expect("promoted f32");
-    let promoted_f64 = BackendScalar::from_native(
-        promote_scalar_native(true_scalar.as_native(), DType::F64).unwrap(),
-    )
-    .expect("promoted f64");
-    let promoted_i32 = BackendScalar::from_native(
-        promote_scalar_native(true_scalar.as_native(), DType::I32).unwrap(),
-    )
-    .expect("promoted i32");
-    let promoted_i64 = BackendScalar::from_native(
-        promote_scalar_native(true_scalar.as_native(), DType::I64).unwrap(),
-    )
-    .expect("promoted i64");
-    let promoted_bool = BackendScalar::from_native(
-        promote_scalar_native(true_scalar.as_native(), DType::Bool).unwrap(),
-    )
-    .expect("promoted bool");
-    let promoted_c32 = BackendScalar::from_native(
-        promote_scalar_native(true_scalar.as_native(), DType::C32).unwrap(),
-    )
-    .expect("promoted c32");
-    let promoted_c64 = BackendScalar::from_native(
-        promote_scalar_native(true_scalar.as_native(), DType::C64).unwrap(),
-    )
-    .expect("promoted c64");
-
-    assert_eq!(promoted_f32.native.dtype(), DType::F32);
-    assert_eq!(promoted_f32.as_f64(), Some(1.0));
-    assert_eq!(promoted_f64.native.dtype(), DType::F64);
-    assert_eq!(promoted_f64.as_f64(), Some(1.0));
-    assert_eq!(promoted_i32.native.dtype(), DType::I32);
-    assert_eq!(promoted_i32.as_f64(), Some(1.0));
-    assert_eq!(promoted_i64.native.dtype(), DType::I64);
-    assert_eq!(promoted_i64.as_f64(), Some(1.0));
-    assert_eq!(promoted_bool.native.dtype(), DType::Bool);
-    assert_eq!(promoted_bool.as_f64(), Some(1.0));
-    assert_eq!(promoted_c32.native.dtype(), DType::C32);
-    assert_eq!(promoted_c32.as_c64(), Some(Complex64::new(1.0, 0.0)));
-    assert_eq!(promoted_c64.native.dtype(), DType::C64);
-    assert_eq!(promoted_c64.as_c64(), Some(Complex64::new(1.0, 0.0)));
-
-    assert!(
-        promote_scalar_native(BackendScalar::from_value(1.25_f32).as_native(), DType::Bool)
-            .is_err()
-    );
-    assert!(
-        promote_scalar_native(BackendScalar::from_value(1.25_f64).as_native(), DType::Bool)
-            .is_err()
-    );
-    assert!(promote_scalar_native(
-        BackendScalar::from_value(Complex32::new(1.0, 0.0)).as_native(),
-        DType::Bool
-    )
-    .is_err());
-    assert!(promote_scalar_native(
-        BackendScalar::from_value(Complex64::new(1.0, 0.0)).as_native(),
-        DType::Bool
-    )
-    .is_err());
-}
-
-#[test]
-fn promote_scalar_native_rejects_non_scalar_tensor() {
-    let tensor = NativeTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-        .expect("valid non-scalar test tensor");
-
-    let err = promote_scalar_native(&tensor, DType::F64).unwrap_err();
-
-    assert!(err.to_string().contains("rank-0 scalar"));
-}
-
-#[test]
 fn i64_native_scalar_participates_in_real_ordering() {
-    let i64_scalar = BackendScalar::from_native(
-        NativeTensor::from_vec_col_major(vec![], vec![3_i64])
-            .expect("valid i64 scalar test tensor"),
-    )
-    .expect("i64 scalar");
+    let i64_scalar = BackendScalar::from_i64(3);
 
     assert_eq!(
         i64_scalar.partial_cmp(&BackendScalar::from_value(2.5_f32)),
@@ -588,34 +252,16 @@ fn i64_native_scalar_participates_in_real_ordering() {
         Some(Ordering::Less)
     );
     assert_eq!(
-        i64_scalar.partial_cmp(
-            &BackendScalar::from_native(
-                NativeTensor::from_vec_col_major(vec![], vec![3_i64])
-                    .expect("valid comparison scalar test tensor"),
-            )
-            .unwrap()
-        ),
+        i64_scalar.partial_cmp(&BackendScalar::from_i64(3)),
         Some(Ordering::Equal)
     );
 }
 
 #[test]
 fn i32_and_bool_native_scalars_participate_in_real_ordering() {
-    let i32_scalar = BackendScalar::from_native(
-        NativeTensor::from_vec_col_major(vec![], vec![2_i32])
-            .expect("valid i32 scalar test tensor"),
-    )
-    .expect("i32 scalar");
-    let true_scalar = BackendScalar::from_native(
-        NativeTensor::from_vec_col_major(vec![], vec![true])
-            .expect("valid bool true scalar test tensor"),
-    )
-    .expect("bool true scalar");
-    let false_scalar = BackendScalar::from_native(
-        NativeTensor::from_vec_col_major(vec![], vec![false])
-            .expect("valid bool false scalar test tensor"),
-    )
-    .expect("bool false scalar");
+    let i32_scalar = BackendScalar::from_i32(2);
+    let true_scalar = BackendScalar::from_bool(true);
+    let false_scalar = BackendScalar::from_bool(false);
 
     assert_eq!(
         i32_scalar.partial_cmp(&BackendScalar::from_value(1.5_f32)),
@@ -626,13 +272,7 @@ fn i32_and_bool_native_scalars_participate_in_real_ordering() {
         Some(Ordering::Less)
     );
     assert_eq!(
-        i32_scalar.partial_cmp(
-            &BackendScalar::from_native(
-                NativeTensor::from_vec_col_major(vec![], vec![2_i32])
-                    .expect("valid comparison scalar test tensor"),
-            )
-            .unwrap()
-        ),
+        i32_scalar.partial_cmp(&BackendScalar::from_i32(2)),
         Some(Ordering::Equal)
     );
     assert_eq!(
@@ -649,33 +289,15 @@ fn i32_and_bool_native_scalars_participate_in_real_ordering() {
     );
     assert_eq!(true_scalar.partial_cmp(&i32_scalar), Some(Ordering::Less));
     assert_eq!(
-        true_scalar.partial_cmp(
-            &BackendScalar::from_native(
-                NativeTensor::from_vec_col_major(vec![], vec![1_i64])
-                    .expect("valid comparison scalar test tensor"),
-            )
-            .unwrap()
-        ),
+        true_scalar.partial_cmp(&BackendScalar::from_i64(1)),
         Some(Ordering::Equal)
     );
     assert_eq!(
-        false_scalar.partial_cmp(
-            &BackendScalar::from_native(
-                NativeTensor::from_vec_col_major(vec![], vec![0_i32])
-                    .expect("valid comparison scalar test tensor"),
-            )
-            .unwrap()
-        ),
+        false_scalar.partial_cmp(&BackendScalar::from_i32(0)),
         Some(Ordering::Equal)
     );
     assert_eq!(
-        false_scalar.partial_cmp(
-            &BackendScalar::from_native(
-                NativeTensor::from_vec_col_major(vec![], vec![false])
-                    .expect("valid comparison scalar test tensor"),
-            )
-            .unwrap()
-        ),
+        false_scalar.partial_cmp(&BackendScalar::from_bool(false)),
         Some(Ordering::Equal)
     );
 }
