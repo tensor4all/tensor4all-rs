@@ -277,8 +277,8 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   host storage. Two fan-out entries run the same driver:
   `patched_interpolate_on_lanes(&mut lanes, ...)` takes a
   `hataori_tenferro::TenferroLanes` and an `Fn + Sync` evaluator (each patch runs
-  in the lane's child session; the root wave and waves smaller than the lane
-  count run one patch at a time), and `patched_interpolate_mpi(&world, &mut
+  on its lane's engine; each lane runs one patch at a time and may claim
+  several patches per wave, while a small wave leaves lanes idle), and `patched_interpolate_mpi(&world, &mut
   lanes, root, ...)` (features `hataori-mpi` / `hataori-mpi-rsmpi-rt`)
   distributes waves over ranks through `hataori::pmap_lanes`, returning
   `Option<result>` (`Some` on the root only). `evaluate` receives a column-major `[n_sites, n_points]`

@@ -34,7 +34,7 @@ splits form the next one.
 | Entry | Where a patch runs | Evaluator |
 |---|---|---|
 | `patched_interpolate` | the caller's `EvalContext`, one patch after another | `FnMut` |
-| `patched_interpolate_on_lanes` | the engine of the `hataori_tenferro::TenferroLanes` lane that pulled it; every wave runs one patch per lane, and the caller sizes each lane's engine | `Fn + Sync` |
+| `patched_interpolate_on_lanes` | the engine of the `hataori_tenferro::TenferroLanes` lane that pulled it; each lane runs one patch at a time and may claim several per wave; the caller sizes each lane's engine | `Fn + Sync` |
 | `patched_interpolate_mpi` (features `hataori-mpi` / `hataori-mpi-rsmpi-rt`) | the lane of the rank that `hataori::pmap_lanes` assigns the patch to; the root orchestrates waves and owns the result | `Fn + Sync` |
 
 The schedule never changes the result contract: random sub-seeds come from the

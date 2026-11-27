@@ -279,20 +279,18 @@ generations of the patch queue. `patched_interpolate` runs every patch on the
 caller's session, one after another.
 `adaptive_interpolation::patched_interpolate_on_lanes` fans each wave out over
 the lanes of a caller-owned `hataori_tenferro::TenferroLanes`, so every patch
-runs on the engine of the lane that pulled it; every wave runs one patch per
-lane, so a wave smaller than the lane count leaves the other lanes idle, and
-the caller sizes each lane's engine.
+runs on the engine of the lane that pulled it. A lane runs one patch at a
+time and may claim several patches of the same wave; a wave smaller than the
+lane count leaves lanes idle. The caller sizes each lane's engine.
 `adaptive_interpolation::patched_interpolate_mpi` (feature `hataori-mpi` or
 `hataori-mpi-rsmpi-rt`) distributes each wave over MPI ranks through
 `hataori::pmap_lanes`, with the root owning the queue and the result. The
 schedule does not change the report: seeds come from the seed and the patch
 path, counters are per patch, and the wave merge is in canonical path order.
-The lane entries are also held to bitwise identity across lane counts, but only
-at a fixed per-lane engine profile: every lane has the same engine kind and
-thread count and runs serially (for example one `CpuEngine::serial()` per
-lane); a multi-threaded lane voids it. No test pins that promise yet, so treat
-it as the rule the lane entries are built to, and see "Lane-count identity" in
-the `adaptive_interpolation` module documentation for its current status.
+The two adaptive-driver lane entries also follow the separate
+[lane-count identity contract](https://github.com/tensor4all/tensor4all-rs/blob/main/docs/design/tree-patching-error-contract.md#lane-count-identity).
+It requires the same serial engine profile per lane and carries the norm-field
+exclusions; that section records the tests and remaining coverage gaps.
 
 The accuracy requirement is an `ErrorNorm` with an
 `ErrorTolerance { rtol, atol }`. The default, `ErrorNorm::L2`, bounds the L2

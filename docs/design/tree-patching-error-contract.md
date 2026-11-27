@@ -1380,20 +1380,29 @@ the same thread are not a valid test of this property.
 **A separate promise (owner decision 2026-11-27,
 [#1497](https://github.com/tensor4all/tensor4all-rs/issues/1497#issuecomment-7229306374)):
 bitwise identity across lane counts, at a fixed per-lane engine profile.** For
-a fixed seed, a deterministic evaluator and a deterministic engine, a lane entry
-(`_on_lanes`) gives the same report and the same stored node tensors, bit for
+a fixed seed, a deterministic evaluator and a deterministic engine, this
+adaptive driver's `patched_interpolate_on_lanes` and
+`patched_elementwise_on_lanes` give the same report and stored node tensors, bit for
 bit, on one lane and on eight, provided every lane of both runs has the same
 profile: the same engine kind and the same per-lane thread count, with each lane
 serial internally (one thread per lane engine, such as `CpuEngine::serial()`).
 The scope and the exclusions are Tier 1's: the same machine and build, no
-cross-machine claim, and never `approximation_rms` or the fields derived from it.
+cross-machine claim. `report.norm` is not excluded as a whole: its reference,
+source, allowance, domain size, certified fraction and global error statistic
+are compared bitwise. Only `approximation_rms`, `rounding_allowance_rms`,
+`relative_error_bound` and `relative_bound_estimate` allow rounding, with
+`rounding_limited` compared only away from its threshold. The counts, ordered
+patch records (including `log_norm`) and stored node tensors are checked too.
 
 This promise is not implied by Tier 1. Tier 1 is identity at a fixed thread count
 only, and changing the lane count changes the number of threads in the run. The
-lane driver carries the promise instead: the arithmetic of a patch must be a
+lane driver carries this requirement instead: the arithmetic of a patch must be a
 function of the patch, its path-derived seeds and its lane's engine profile, not
 of which lane pulled it, how many lanes there are or what the other lanes do,
-and the results are merged in canonical path order. **A multi-threaded lane voids
+and the results are merged in canonical path order. Persistent lane engines,
+thread-local contraction-plan caches and pooled evaluator histories must be
+checked at their owning seams; canonical merging alone does not establish
+arithmetic independence. **A multi-threaded lane voids
 the promise**: its kernels run as a team, whose bits Tier 1 fixes only per thread
 count and which can take a different kernel from a serial engine altogether (the
 `Complex64` dense products recorded above split serial against parallel).
@@ -1407,17 +1416,27 @@ lane, not only the resulting bits. The operand order comes from the shared graph
 reordering changes the floating-point sums and with them truncation decisions;
 a lane that sees a different order is a seam bug to fix, not a reason to sort.
 
-Status 2026-11-27: the promise is the rule, and no test pins it yet.
-`crates/tensor4all-partitionedtreetn/tests/adaptive_lanes.rs` compares the
-serial entry with one and two serial lanes: the report fields exactly, the
-stored patches only to `1e-12` after contraction to a dense tensor. The
-`patched_elementwise_on_lanes` test compares three serial lanes with the serial
-entry to a relative `1e-12`. That entry also pools its cached input evaluators
-across lanes, so an evaluator's call history depends on the schedule; whether
-that history can change the bits is not established. On generic-path trees the
-promise is limited like Tier 1 above. The `_on_lanes` operations requested in
-#1495 (contraction, sums, truncation, the patched Fourier transform) do not
-exist yet; each is to meet this promise when it lands.
+Coverage status (2026-11-28), scoped to these two adaptive-driver entries:
+
+- The existing interpolation tests compare the serial entry with one and two
+  serial lanes, checking reports exactly and stored patches within `1e-12`;
+  the elementwise unit test compares three lanes with serial within `1e-12`.
+- Companion PR #1528 adds bitwise report and stored-tensor comparisons on
+  one, two and four serial lanes for a splitting TreeTCI fixture and an
+  elementwise product of six patches by one. The latter's restricted inputs
+  have site-free nodes, so it provides empirical generic-path evidence too.
+  This does not establish every layout, dtype or pooled-evaluator history,
+  and it does not instrument N-ary operand sequences. Those tests belong to
+  #1528; they are not added by this documentation PR.
+- Separate `tensor4all-interpolativeqtt` APIs already have bitwise lane tests:
+  `interpolate_patched_nd_on_lanes` (`src/patched/tests/parallel.rs`) and
+  `interpolate_chebyshev_patches_on_lanes`
+  (`src/chebyshev_patches/tests/parallel.rs`). Their coverage does not prove
+  the adaptive partitioned driver or its pooled evaluators.
+- The contraction, sums, truncation and Fourier lane variants requested in
+  #1495/#1497 do not exist yet. Their tests must also compare N-ary operand
+  sequences when applicable. The broader generic-path and two-process
+  coverage limitations remain as recorded above.
 
 ## Placement
 

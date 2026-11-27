@@ -12,9 +12,9 @@
 //!
 //! # One engine per lane
 //!
-//! Every wave runs one patch per lane, whatever its size: a lane owns one
-//! fixed `tenferro_cpu::CpuEngine` that the caller built and
-//! sized, and a patch runs on the engine of the lane that pulled it. A wave
+//! A lane runs one patch at a time and may claim several patches of a wave.
+//! It owns one fixed `tenferro_cpu::CpuEngine` that the caller built and
+//! sized; every patch it claims runs on that engine. A wave
 //! with fewer patches than lanes leaves the remaining lanes idle. The driver
 //! opens no child sessions and does not divide a pool between items, so the
 //! caller decides each lane's thread count when it builds the engines.
@@ -23,25 +23,12 @@
 //!
 //! # Determinism
 //!
-//! The driver's own contract does not change: every patch derives its
-//! sub-seeds from the seed and its path, patches are merged in canonical path
-//! order, and the report is a function of the problem, not of the schedule.
-//! Counters are per patch and summed, so they do not depend on the number of
-//! lanes. The measured network values of the generic cached-evaluator path can
-//! still differ at rounding level between threads near `tau` (see "Randomness
-//! and determinism" in the documentation of the parent module): serial and
-//! lane runs agree on fixtures whose measurements use the raw kernels, and no
-//! bitwise cross-thread or cross-process claim is made for the generic path.
-//!
-//! The lane entries carry the separate promise of bitwise identity across lane
-//! counts at a fixed per-lane engine profile, each lane serial internally
-//! ("Lane-count identity" in the parent module and in
-//! `docs/design/tree-patching-error-contract.md`). This file is what carries
-//! it: a patch reads the plan, its own copy of the references, the shared
-//! evaluator, and a session over its lane's engine, and the wave results come
-//! back in input order whichever lane ran them. A stateful evaluator, such as
-//! the pooled cached evaluators of the element-wise entry, can still carry a
-//! schedule-dependent history. No test pins the promise yet.
+//! Per-patch seeds and canonical wave merging make the driver's bookkeeping
+//! independent of which lane claims each patch. The lane engine persists
+//! across patches, as can a stateful evaluator's caches; these facts alone
+//! do not prove schedule-independent arithmetic. See
+//! [lane-count identity](super#lane-count-identity) for the serial per-lane
+//! engine requirement, exclusions and the design contract's coverage status.
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -258,7 +245,7 @@ where
     assemble(plan, merged)
 }
 
-/// Run one patch per lane and keep each patch's typed error.
+/// Spread a wave over lanes and keep each patch's typed error.
 ///
 /// The evaluator stays behind a shared reference: every lane builds a session
 /// over its own engine and calls the evaluator on its own thread.

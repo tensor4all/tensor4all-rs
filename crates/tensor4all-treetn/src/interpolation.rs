@@ -74,9 +74,9 @@ use crate::{NodeNameNetwork, TreeTN};
 /// The parallelism budget of the application's own code inside an [`EvalContext`].
 ///
 /// This describes what the *application's* code may do, not what the backend does:
-/// operations issued through [`EvalContext::session`] follow the backend's own lane
-/// policy, so a lane's child session still selects the backend's inner parallelism
-/// with the full domain budget. `parallelism` only bounds the caller's own fan-out
+/// operations issued through [`EvalContext::session`] run on the engine owned
+/// by that session, with the thread count chosen when the caller built the
+/// engine. `parallelism` only bounds the caller's own fan-out
 /// (an evaluator that parallelizes its host work, for example), and it never
 /// installs a pool or reroutes work.
 ///

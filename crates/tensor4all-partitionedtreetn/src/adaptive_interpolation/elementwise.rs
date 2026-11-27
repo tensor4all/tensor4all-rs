@@ -433,18 +433,16 @@ where
 /// restriction of the inputs, the kernel, and the pointwise evaluation of the
 /// target. Cached input evaluators are pooled across lanes: a lane takes one
 /// out while it evaluates, so no evaluator is shared between threads at
-/// once. The partition layout, the splits, and the evaluation counts do not
-/// depend on the number of lanes, as for the interpolation entries.
+/// once. Schedule independence requires those evaluators to return the same
+/// values for every allowed call history; canonical merging alone does not
+/// establish that condition.
 ///
 /// # Determinism
 ///
-/// The result is to be bitwise identical across lane counts when every lane
-/// has the same engine kind and per-lane thread count and runs serially; a
-/// multi-threaded lane voids this. See
-/// [lane-count identity](crate::adaptive_interpolation#lane-count-identity):
-/// for this entry the promise is not established yet, because the pooled
-/// evaluators' call history depends on the schedule and the lane test checks
-/// the values only within `1e-12`.
+/// This entry is held to the
+/// [lane-count identity](crate::adaptive_interpolation#lane-count-identity)
+/// contract, including its serial per-lane engine requirement, norm-field
+/// exclusions and fixture-limited evidence for pooled cached evaluators.
 ///
 /// # Arguments
 ///
