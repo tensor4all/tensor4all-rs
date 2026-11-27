@@ -12,9 +12,11 @@
 //! ```
 
 pub use crate::{
-    crossinterpolate1, crossinterpolate2, crossinterpolate2_with_rng, estimate_true_error,
+    crossinterpolate1, crossinterpolate2, crossinterpolate2_matrix,
+    crossinterpolate2_matrix_with_rng, crossinterpolate2_with_rng, estimate_true_error,
     floating_zone, opt_first_pivot, optimize_with_finder, optimize_with_finder_with_rng,
     DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput, GlobalPivotSearchResult,
-    PivotSearchStrategy, Sweep2Strategy, TCI1Options, TCI1SweepStrategy, TCI2OptimizationResult,
-    TCI2Options, TCI2Termination, TensorCI1, TensorCI2, TensorCI2FromTensorTrainOptions,
+    MatrixSamplingStats, MatrixShape, MatrixTCI2Result, PivotSearchStrategy, Sweep2Strategy,
+    TCI1Options, TCI1SweepStrategy, TCI2OptimizationResult, TCI2Options, TCI2Termination,
+    TensorCI1, TensorCI2, TensorCI2FromTensorTrainOptions,
 };

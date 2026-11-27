@@ -3,14 +3,17 @@
 //! unrelated-component guards, for several matrix shapes.
 
 use num_complex::Complex64;
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use tensor4all_core::{MatrixLuciScalar, MultiIndex, Scalar};
 use tensor4all_simplett::{AbstractTensorTrain, TTScalar};
 use tensor4all_tensorbackend::Matrix;
 use tensor4all_tensorci::{
-    crossinterpolate2, crossinterpolate2_matrix, MatrixShape, PivotSearchStrategy, TCI2Options,
-    TCI2Termination,
+    crossinterpolate2, crossinterpolate2_matrix, crossinterpolate2_matrix_with_rng,
+    crossinterpolate2_with_rng, MatrixShape, PivotSearchStrategy, TCI2OptimizationResult,
+    TCI2Options, TCI2Termination,
 };
 
 trait TestScalar: Scalar + TTScalar + Default + MatrixLuciScalar {
@@ -125,6 +128,34 @@ fn initial_pivot(shape: MatrixShape) -> MultiIndex {
     vec![1.min(shape.rows - 1), 1, 2, 1, 1.min(shape.cols - 1)]
 }
 
+/// Asserts that a matrix fit and the scalar endpoint-adapter fit agree exactly:
+/// termination, ranks, errors, `max_sample_value` and every I/J set.
+fn assert_identical_fits<T: TestScalar>(
+    shape: MatrixShape,
+    result: &TCI2OptimizationResult<T>,
+    scalar: &TCI2OptimizationResult<T>,
+) {
+    assert_eq!(result.termination, TCI2Termination::Converged);
+    assert_eq!(result.termination, scalar.termination);
+    // The target is rank two, so the comparison is not a rank-one triviality.
+    assert!(result.ranks.iter().any(|&rank| rank >= 2));
+    assert_eq!(result.ranks, scalar.ranks);
+    assert_eq!(result.errors, scalar.errors);
+    assert_eq!(result.tci.max_sample_value(), scalar.tci.max_sample_value());
+    for site in 0..internal_dims(shape, &PHYSICAL_DIMS).len() {
+        assert_eq!(
+            result.tci.i_set(site),
+            scalar.tci.i_set(site),
+            "I set {site}"
+        );
+        assert_eq!(
+            result.tci.j_set(site),
+            scalar.tci.j_set(site),
+            "J set {site}"
+        );
+    }
+}
+
 fn parity<T: TestScalar>(shape: MatrixShape, pivot_search: PivotSearchStrategy) {
     let initial = vec![initial_pivot(shape)];
     let block_len = shape.rows * shape.cols;
@@ -154,26 +185,11 @@ fn parity<T: TestScalar>(shape: MatrixShape, pivot_search: PivotSearchStrategy) 
     )
     .unwrap();
 
+    assert_identical_fits(shape, &matrix_fit.result, &scalar);
     let result = &matrix_fit.result;
     assert_eq!(result.termination, TCI2Termination::Converged);
-    assert_eq!(result.termination, scalar.termination);
     // The target is rank two, so the comparison is not a rank-one triviality.
     assert!(result.ranks.iter().any(|&rank| rank >= 2));
-    assert_eq!(result.ranks, scalar.ranks);
-    assert_eq!(result.errors, scalar.errors);
-    assert_eq!(result.tci.max_sample_value(), scalar.tci.max_sample_value());
-    for site in 0..internal_dims(shape, &PHYSICAL_DIMS).len() {
-        assert_eq!(
-            result.tci.i_set(site),
-            scalar.tci.i_set(site),
-            "I set {site}"
-        );
-        assert_eq!(
-            result.tci.j_set(site),
-            scalar.tci.j_set(site),
-            "J set {site}"
-        );
-    }
 
     // Distinct points were sampled at most once each while retained.
     let stats = matrix_fit.sampling_stats();
@@ -531,4 +547,69 @@ fn one_by_one_layout_is_bit_identical_rook_f64() {
 #[test]
 fn one_by_one_layout_is_bit_identical_rook_complex64() {
     one_by_one_layout_is_bit_identical::<Complex64>(PivotSearchStrategy::Rook);
+}
+
+/// `crossinterpolate2_matrix_with_rng` on a seeded stream equals
+/// `crossinterpolate2_with_rng` on the scalar endpoint adapter with an
+/// identically seeded stream, and both leave the stream in the same state.
+fn with_rng_parity<T: TestScalar>(pivot_search: PivotSearchStrategy) {
+    const SHAPE: MatrixShape = MatrixShape { rows: 2, cols: 3 };
+    const STREAM_SEED: u64 = 20_261_127;
+    let initial = vec![initial_pivot(SHAPE)];
+    let block_len = SHAPE.rows * SHAPE.cols;
+
+    let mut matrix_rng = ChaCha8Rng::seed_from_u64(STREAM_SEED);
+    let matrix_fit = crossinterpolate2_matrix_with_rng::<T, _, _>(
+        |points: &[Vec<usize>], out: &mut [T]| {
+            assert_eq!(out.len(), points.len() * block_len);
+            fill_blocks(points, out, |x| target::<T>(SHAPE, x));
+        },
+        SHAPE,
+        PHYSICAL_DIMS.to_vec(),
+        initial.clone(),
+        options(pivot_search),
+        &mut matrix_rng,
+    )
+    .unwrap();
+
+    let adapter = EndpointAdapter::<T> {
+        shape: SHAPE,
+        memo: RefCell::new(HashMap::new()),
+    };
+    let mut scalar_rng = ChaCha8Rng::seed_from_u64(STREAM_SEED);
+    let scalar = crossinterpolate2_with_rng::<T, _, _, _>(
+        |index| adapter.entry(index),
+        Some(|indices: &[MultiIndex]| indices.iter().map(|i| adapter.entry(i)).collect()),
+        internal_dims(SHAPE, &PHYSICAL_DIMS),
+        initial,
+        options(pivot_search),
+        &mut scalar_rng,
+    )
+    .unwrap();
+
+    assert_identical_fits(SHAPE, &matrix_fit.result, &scalar);
+    assert_eq!(matrix_fit.result.termination, TCI2Termination::Converged);
+    assert!(matrix_fit.result.ranks.iter().any(|&rank| rank >= 2));
+    // The same number of draws was consumed from each stream.
+    assert_eq!(matrix_rng.random::<u64>(), scalar_rng.random::<u64>());
+}
+
+#[test]
+fn with_rng_parity_full_f64() {
+    with_rng_parity::<f64>(PivotSearchStrategy::Full);
+}
+
+#[test]
+fn with_rng_parity_full_complex64() {
+    with_rng_parity::<Complex64>(PivotSearchStrategy::Full);
+}
+
+#[test]
+fn with_rng_parity_rook_f64() {
+    with_rng_parity::<f64>(PivotSearchStrategy::Rook);
+}
+
+#[test]
+fn with_rng_parity_rook_complex64() {
+    with_rng_parity::<Complex64>(PivotSearchStrategy::Rook);
 }
