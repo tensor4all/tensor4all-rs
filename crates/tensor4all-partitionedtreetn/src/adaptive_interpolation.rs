@@ -19,10 +19,12 @@
 //!   whole run.
 //! - [`patched_interpolate_on_lanes`] fans a wave out over the lanes of a
 //!   caller-owned [`TenferroLanes`](hataori_tenferro::TenferroLanes): each patch
-//!   runs in the child session of the lane that pulled it, and the evaluator
-//!   must be `Fn + Sync`. The root wave and every wave smaller than the lane
-//!   count run one patch at a time, so a single item keeps the backend's whole
-//!   team.
+//!   runs on the engine of the lane that pulled it, and the evaluator must be
+//!   `Fn + Sync`. Every wave runs one patch per lane, whatever its size, so a
+//!   wave smaller than the lane count leaves the other lanes idle and the
+//!   caller decides each lane's thread count when it builds the engines.
+//!   [Lane-count identity](#lane-count-identity) states what the lane count
+//!   may not change.
 //! - `patched_interpolate_mpi` (feature `hataori-mpi` or `hataori-mpi-rsmpi-rt`)
 //!   distributes each wave over MPI ranks through `hataori::pmap_lanes`; the
 //!   root owns the queue, the merge, the pinned references and the result.
@@ -31,8 +33,8 @@
 //!
 //! Every numerical step of a run - the engine call, the re-embedding of fixed
 //! sites, the measurement of a stored patch and the readout of its norm - runs
-//! on one session: the session of the caller's [`EvalContext`], or the child
-//! session of the lane that runs the patch. The evaluator receives that same
+//! on one session: the session of the caller's [`EvalContext`], or a session
+//! over the engine of the lane that runs the patch. The evaluator receives that same
 //! context, so a caller-owned execution capability reaches every stage and an
 //! evaluator that needs numerical work of its own can issue it on the session.
 //! No step enters the process-global session, an eager runtime or a
@@ -279,8 +281,9 @@
 //! [Issue #795](https://github.com/tensor4all/tensor4all-rs/issues/795) closed
 //! the tracking and test gap through PR #816; it did not fix the planner.
 //! The intended scope is bitwise identical results on the same machine and
-//! build across threads, thread counts, and processes, with no cross-machine
-//! promise. It is not reached yet: generic-path measurements need deterministic
+//! build at a fixed thread count, across threads and processes, with no
+//! cross-machine promise; identity across thread counts is not promised. It is
+//! not reached yet: generic-path measurements need deterministic
 //! contraction paths, and reproducibility across processes is not claimed
 //! until a two-process test passes, which does not exist yet. The bitwise claim
 //! never covers `approximation_rms` and the fields derived from it. Issue #791
@@ -288,6 +291,32 @@
 //! output order no longer inherit the old hash-iteration nondeterminism.
 //! `site_space` remains a set with unspecified iteration order; generic cached
 //! evaluation still has the separate planner limitation above.
+//!
+//! # Lane-count identity
+//!
+//! The lane entries, [`patched_interpolate_on_lanes`] and
+//! [`patched_elementwise_on_lanes`], carry a separate promise: *bitwise
+//! identity across lane counts, at a fixed per-lane engine profile*. For a
+//! fixed seed, a deterministic evaluator, and a deterministic engine, a run on
+//! one lane and a run on eight lanes are to give the same report and the same
+//! stored node tensors, bit for bit, when every lane of both runs has the same
+//! engine kind and the same per-lane thread count and each lane is serial
+//! internally, as with one `tenferro_cpu::CpuEngine::serial()` per lane. A
+//! multi-threaded lane voids the promise. It is not implied by the
+//! fixed-thread-count scope above: changing the lane count changes the number
+//! of threads in the run, so the promise rests on the lane driver, which keeps
+//! a patch's arithmetic independent of the lane that runs it and merges every
+//! wave in canonical path order. The exclusions above still apply
+//! (`approximation_rms` and the fields derived from it, and the generic-path
+//! rounding).
+//!
+//! No test pins this promise yet. The lane tests compare the serial entry with
+//! one, two, or three serial lanes and check the stored patches only within
+//! `1e-12`, and [`patched_elementwise_on_lanes`] pools its cached input
+//! evaluators across lanes, so an evaluator's call history depends on the
+//! schedule; whether that history can change the bits is not established.
+//! The rule, how it is to be verified, and its status are recorded under
+//! "Lane-count identity" in `docs/design/tree-patching-error-contract.md`.
 //!
 //! # Examples
 //!

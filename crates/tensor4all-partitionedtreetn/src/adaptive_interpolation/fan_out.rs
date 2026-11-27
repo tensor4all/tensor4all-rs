@@ -32,6 +32,16 @@
 //! and determinism" in the documentation of the parent module): serial and
 //! lane runs agree on fixtures whose measurements use the raw kernels, and no
 //! bitwise cross-thread or cross-process claim is made for the generic path.
+//!
+//! The lane entries carry the separate promise of bitwise identity across lane
+//! counts at a fixed per-lane engine profile, each lane serial internally
+//! ("Lane-count identity" in the parent module and in
+//! `docs/design/tree-patching-error-contract.md`). This file is what carries
+//! it: a patch reads the plan, its own copy of the references, the shared
+//! evaluator, and a session over its lane's engine, and the wave results come
+//! back in input order whichever lane ran them. A stateful evaluator, such as
+//! the pooled cached evaluators of the element-wise entry, can still carry a
+//! schedule-dependent history. No test pins the promise yet.
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -133,6 +143,14 @@ where
 /// evaluator and the resource limits, plus
 /// [`PatchedInterpolationError::FanOut`] when the lane executor itself fails to
 /// run, join, or clean up a lane.
+///
+/// # Determinism
+///
+/// The result is to be bitwise identical across lane counts when every lane
+/// has the same engine kind and per-lane thread count and runs serially, as
+/// with `CpuEngine::serial()` below; a multi-threaded lane voids this. See
+/// [lane-count identity](crate::adaptive_interpolation#lane-count-identity)
+/// for the scope and for what the tests check today.
 ///
 /// # Examples
 ///

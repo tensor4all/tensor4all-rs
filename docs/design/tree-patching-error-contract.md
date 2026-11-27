@@ -1270,8 +1270,11 @@ one tier 2026-11-09, owner decision after #1202).** There is one promise:
 Bitwise identity **across** thread counts is not promised, for any operation.
 The owner decided this after #1202: making a partition independent of the thread
 count removes parallel freedom, and no caller needs the same bits at one thread
-and at eight. The configurations recorded below are **observations under Tier 1**:
-they say what this host does today, and how far it reaches.
+and at eight. Tier 1 is the one promise about thread counts; the lane entries
+carry a separate one, [lane-count identity](#lane-count-identity), which is not
+an exception to this rule because it holds every lane at one thread. The
+configurations recorded below are **observations under Tier 1**: they say what
+this host does today, and how far it reaches.
 
 **When results are compared, pin the thread count — also when a cache is shared
 across runs.** A digest, a stored baseline, or a cache key computed at one thread
@@ -1371,6 +1374,50 @@ and a fresh
 with the same chunking, center, and hint; all repetitions must give bitwise
 identical residuals. "The same patch" is never the same object. Repetitions on
 the same thread are not a valid test of this property.
+
+#### Lane-count identity
+
+**A separate promise (owner decision 2026-11-27,
+[#1497](https://github.com/tensor4all/tensor4all-rs/issues/1497#issuecomment-7229306374)):
+bitwise identity across lane counts, at a fixed per-lane engine profile.** For
+a fixed seed, a deterministic evaluator and a deterministic engine, a lane entry
+(`_on_lanes`) gives the same report and the same stored node tensors, bit for
+bit, on one lane and on eight, provided every lane of both runs has the same
+profile: the same engine kind and the same per-lane thread count, with each lane
+serial internally (one thread per lane engine, such as `CpuEngine::serial()`).
+The scope and the exclusions are Tier 1's: the same machine and build, no
+cross-machine claim, and never `approximation_rms` or the fields derived from it.
+
+This promise is not implied by Tier 1. Tier 1 is identity at a fixed thread count
+only, and changing the lane count changes the number of threads in the run. The
+lane driver carries the promise instead: the arithmetic of a patch must be a
+function of the patch, its path-derived seeds and its lane's engine profile, not
+of which lane pulled it, how many lanes there are or what the other lanes do,
+and the results are merged in canonical path order. **A multi-threaded lane voids
+the promise**: its kernels run as a team, whose bits Tier 1 fixes only per thread
+count and which can take a different kernel from a serial engine altogether (the
+`Complex64` dense products recorded above split serial against parallel).
+
+How it is verified: a cross-lane test runs one problem at several lane counts
+with serial lane engines and compares the report and the stored node tensors
+bitwise, not within a tolerance. Where a lane operation issues N-ary
+contractions, the test also compares each N-ary call's operand *sequence* per
+lane, not only the resulting bits. The operand order comes from the shared graph
+(a breadth-first walk) and is not re-sorted inside the contraction, because a
+reordering changes the floating-point sums and with them truncation decisions;
+a lane that sees a different order is a seam bug to fix, not a reason to sort.
+
+Status 2026-11-27: the promise is the rule, and no test pins it yet.
+`crates/tensor4all-partitionedtreetn/tests/adaptive_lanes.rs` compares the
+serial entry with one and two serial lanes: the report fields exactly, the
+stored patches only to `1e-12` after contraction to a dense tensor. The
+`patched_elementwise_on_lanes` test compares three serial lanes with the serial
+entry to a relative `1e-12`. That entry also pools its cached input evaluators
+across lanes, so an evaluator's call history depends on the schedule; whether
+that history can change the bits is not established. On generic-path trees the
+promise is limited like Tier 1 above. The `_on_lanes` operations requested in
+#1495 (contraction, sums, truncation, the patched Fourier transform) do not
+exist yet; each is to meet this promise when it lands.
 
 ## Placement
 
@@ -1901,6 +1948,13 @@ defaults reproduce M3 exactly.
    as observations about the host and provider named with them. This narrowing is
    a correction of this document, not a retreat from the 2026-10-03 decision about
    *which machine* the promise covers.
+
+   **Lane counts, 2026-11-27 (owner decision in
+   [#1497](https://github.com/tensor4all/tensor4all-rs/issues/1497#issuecomment-7229306374)).**
+   The lane entries carry a separate promise, bitwise identity across lane counts
+   at a fixed per-lane engine profile with each lane serial internally, recorded
+   under [Lane-count identity](#lane-count-identity). It does not widen Tier 1,
+   and a multi-threaded lane voids it.
 
 ## Implementation decisions
 

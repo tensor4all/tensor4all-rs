@@ -279,14 +279,20 @@ generations of the patch queue. `patched_interpolate` runs every patch on the
 caller's session, one after another.
 `adaptive_interpolation::patched_interpolate_on_lanes` fans each wave out over
 the lanes of a caller-owned `hataori_tenferro::TenferroLanes`, so every patch
-runs in the child session of the lane that pulled it; the root wave and waves
-smaller than the lane count run one patch at a time, so a single item keeps
-the backend's whole team.
+runs on the engine of the lane that pulled it; every wave runs one patch per
+lane, so a wave smaller than the lane count leaves the other lanes idle, and
+the caller sizes each lane's engine.
 `adaptive_interpolation::patched_interpolate_mpi` (feature `hataori-mpi` or
 `hataori-mpi-rsmpi-rt`) distributes each wave over MPI ranks through
 `hataori::pmap_lanes`, with the root owning the queue and the result. The
 schedule does not change the report: seeds come from the seed and the patch
 path, counters are per patch, and the wave merge is in canonical path order.
+The lane entries are also held to bitwise identity across lane counts, but only
+at a fixed per-lane engine profile: every lane has the same engine kind and
+thread count and runs serially (for example one `CpuEngine::serial()` per
+lane); a multi-threaded lane voids it. No test pins that promise yet, so treat
+it as the rule the lane entries are built to, and see "Lane-count identity" in
+the `adaptive_interpolation` module documentation for its current status.
 
 The accuracy requirement is an `ErrorNorm` with an
 `ErrorTolerance { rtol, atol }`. The default, `ErrorNorm::L2`, bounds the L2
