@@ -46,6 +46,11 @@ pub struct TreeTciRunResult {
     ///
     /// Has the same length as `ranks`; it is not a full-network residual.
     pub errors: Vec<f64>,
+    /// Global pivots found per iteration, with one entry per rank/error entry.
+    ///
+    /// See [`crate::TreeTciOptimizationResult::nglobal_pivots`] for skipped
+    /// searches and discoveries discarded at a local-threshold-floor stop.
+    pub nglobal_pivots: Vec<usize>,
     /// The stopping condition evaluated by the optimization loop.
     pub termination: TreeTciTermination,
     /// Factor that the last sweep applied to the local truncation threshold;
@@ -515,6 +520,7 @@ where
         treetn,
         ranks: result.ranks,
         errors: result.errors,
+        nglobal_pivots: result.nglobal_pivots,
         termination: result.termination,
         local_threshold_factor: result.local_threshold_factor,
         evaluation: evaluator.stats(),

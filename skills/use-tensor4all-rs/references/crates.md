@@ -192,16 +192,17 @@ Ports TreeTCI.jl. Cross interpolation on tree-structured graphs → TreeTN.
 
 - `crossinterpolate2()` (tree entry), `TreeTCI2`, `TreeTciGraph`.
 - Tree entry points return `TreeTciRunResult`: access `result.treetn`,
-  `result.ranks`, `result.errors`, and `result.termination`. Optimizers return
+  `result.ranks`, `result.errors`, `result.nglobal_pivots`, and `result.termination`. Optimizers return
   `TreeTciOptimizationResult` with the same diagnostics. `TreeTciTermination`
   distinguishes `Converged`, `MaxBondDimension`, `MaxIterations`,
   `DegenerateCandidateSet` (a bond error could not be measured), and
   `LocalThresholdFloor` (`StopRule::Sampled` only, trees with at least two
-  edges: the local truncation threshold was tightened to `1 / E` and three
+  edges: the local truncation threshold was tightened to `1 / E` and `ncheck_history`
   sweeps there left the sampled error at or above `tolerance`); convergence
   describes sampled errors, not a full-network residual bound.
+- `TreeTciOptions::ncheck_history` defaults to 3 and must be positive; all stopping checks use it. `rank_slack` defaults to 0, preserving `last == min(window)`. Opt-in `0.03` allows rank noise via `last <= min(window) + rank_slack * max(window)`; validate accuracy independently.
 - `tensor4all_treetci::materialize::to_treetn(tci_state, batch_eval, Some(root))` — materialize as TreeTN with a batched evaluator.
-- `optimize_with_proposer` / `optimize_default` return `TreeTciOptimizationResult { ranks, errors, termination, local_threshold_factor, evaluation }`; only `TreeTciTermination::Converged` is convergence (`MaxBondDimension` / `MaxIterations` / `DegenerateCandidateSet` / `LocalThresholdFloor` are stops).
+- `optimize_with_proposer` / `optimize_default` return `TreeTciOptimizationResult { ranks, errors, nglobal_pivots, termination, local_threshold_factor, evaluation }`; only `TreeTciTermination::Converged` is convergence (`MaxBondDimension` / `MaxIterations` / `DegenerateCandidateSet` / `LocalThresholdFloor` are stops).
 - `TreeTciInterpolator` — implements `tensor4all_treetn::interpolation::TreeInterpolator` (validated `InterpolationProblem` with named nodes, several or zero active sites per node, absolute tolerance, bond cap, seed). Accept a result only on `InterpolationTermination::Converged`.
 
 ## tensor4all-interpolativeqtt — interpolative QTT
