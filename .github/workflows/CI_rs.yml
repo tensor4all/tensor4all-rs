@@ -333,6 +333,20 @@ jobs:
       - name: Check crate boundaries and dev cycles
         run: python3 scripts/check-crate-boundaries.py
 
+      - name: Test changelog-fragment checker
+        run: python3 scripts/test-changelog-fragments.py
+
+      - name: Check changelog fragments (CONTRIBUTING.md, "Changelog entries")
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -n "$PR_NUMBER" ]; then
+            python3 scripts/changelog_fragments.py check --base "origin/$BASE_REF" --pr "$PR_NUMBER"
+          else
+            python3 scripts/changelog_fragments.py check
+          fi
+
       - name: Test test-target checker
         run: python3 scripts/test-check-test-targets.py
 
