@@ -23,15 +23,16 @@ use tensor4all_treetn::SiteIndexNetwork;
 /// constructed operator. Defaults use relative tolerance `1e-6`, complete input
 /// coverage, and an exact full-depth schedule with no rank goal. Exact output
 /// cells and intermediate bonds can grow substantially with bit count. Set
-/// `merge_refine.target_bond_dim` to request adaptive compression; the goal is
-/// soft and never overrides the error allowance or resource limits.
+/// `merge_refine.merge_policy` to `MergePolicy::RankGoal` for a soft rank goal,
+/// or `MergePolicy::Tolerance` to select ranks from the global allowance.
+/// Neither policy overrides the error allowance or resource limits.
 ///
 /// # Examples
 /// ```
-/// use tensor4all_quanticstransform::PatchedFourierOptions;
+/// use tensor4all_quanticstransform::{PatchedFourierOptions, MergePolicy};
 /// let options = PatchedFourierOptions::<usize>::default();
 /// assert_eq!(options.tolerance.rtol, 1e-6);
-/// assert_eq!(options.merge_refine.target_bond_dim, None);
+/// assert_eq!(options.merge_refine.merge_policy, MergePolicy::Exact);
 /// assert!(options.merge_refine.coordinate_groups.is_none());
 /// ```
 #[derive(Debug, Clone)]
@@ -40,9 +41,13 @@ pub struct PatchedFourierOptions<V> {
     /// Excludes operator construction error and backend roundoff.
     pub tolerance: ReconstructionTolerance,
     /// Scheduler controls, including coverage, output regions/depth, rank goal
-    /// and work/term limits. Leave `coordinate_groups` unset: axes determine it.
-    /// Without a rank goal and with the default exact `application`, no
-    /// approximation is made. `merge_refine.application` also selects a
+    /// and work/term limits. Leave `coordinate_groups` unset: axes determine it,
+    /// one coordinate group per element of `axes`. Because of that, an
+    /// `output_regions` selection on a multi-axis transform must use
+    /// `OutputRegion::per_axis` with one `(depth, prefix)` pair per axis;
+    /// `OutputRegion::new` describes a single axis and is rejected there.
+    /// With `MergePolicy::Exact` and the default exact `application`, no
+    /// approximation is made. `Tolerance` compresses without a rank goal. `merge_refine.application` also selects a
     /// measured or a certified truncating application of the operator.
     pub merge_refine: MergeRefineOptions<V>,
 }
@@ -71,7 +76,22 @@ impl<V> Default for PatchedFourierOptions<V> {
 /// [`quantics_fourier_operator_multiaxis`]), and delegates to the merge-refine scheduler. It never globally sums patches.
 /// A region can retain several terms, so `into_partition()` can fail. Requested
 /// `output_regions` select intersecting schedule cells, which can be coarser
-/// than the request. See [`MergeRefineOptions`] for limits and coverage contracts.
+/// than the request. The front end derives one coordinate group per element of
+/// `axes`, so a selection on a multi-axis transform needs
+/// `OutputRegion::per_axis` with one `(depth, prefix)` pair per axis. See
+/// [`MergeRefineOptions`] for limits and coverage contracts.
+///
+/// With `MergePolicy::Tolerance`, executing the full input-merge depth
+/// (`output_depth: None`) leaves one term in every nonempty region, even when
+/// output splitting stops earlier. An explicit shorter depth can retain several
+/// terms. The depth is a level limit, not a requested uniform output layout.
+/// For a shared layout, convert with `into_partition()` and call
+/// [`PartitionedTreeTN::refine_to`] with projectors that cover the retained
+/// output and refine all its existing restrictions, including spectators.
+/// Refinement adds no truncation error, but it cannot coarsen existing patches
+/// or restore regions dropped within the allowance. Use
+/// [`PartitionedTreeTN::common_refinement`] to align differing adaptive layouts
+/// when their resulting shared layout need not be fixed in advance.
 ///
 /// Each axis's output bits occupy its input indices in reversed significance.
 /// To undo a normalized forward transform, reverse **each axis's index vector**
@@ -83,6 +103,8 @@ impl<V> Default for PatchedFourierOptions<V> {
 /// it excludes its Fourier approximation error and floating-point roundoff.
 /// `options.max_bond_dim` limits per-axis construction, not exact layout
 /// restructuring. No total exact-DFT error bound is promised.
+/// Tolerance-driven merges do not impose a hard peak-memory ceiling: the default
+/// leaf application is exact, and candidates can still have large transient bonds.
 ///
 /// # Input partition
 ///
@@ -111,7 +133,7 @@ impl<V> Default for PatchedFourierOptions<V> {
 /// use tensor4all_core::{DynIndex, IdxTensor};
 /// use tensor4all_treetn::TreeTN;
 /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, SubDomainTreeTN};
-/// use tensor4all_quanticstransform::{patched_fourier_transform, FourierOptions, PatchedFourierOptions};
+/// use tensor4all_quanticstransform::{patched_fourier_transform, FourierOptions, MergePolicy, PatchedFourierOptions};
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let bits = vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
 /// // Both selected bits share a named node. Flat payloads are column-major.
@@ -119,7 +141,7 @@ impl<V> Default for PatchedFourierOptions<V> {
 ///     vec![IdxTensor::from_dense(bits.clone(), vec![1.0; 4])?], vec!["site"])?;
 /// let state = PartitionedTreeTN::from_subdomain(SubDomainTreeTN::from_treetn(tree)?)?;
 /// let mut policy = PatchedFourierOptions::default();
-/// policy.merge_refine.target_bond_dim = Some(4);
+/// policy.merge_refine.merge_policy = MergePolicy::RankGoal(4_usize.try_into()?);
 /// policy.merge_refine.output_depth = Some(2);
 /// let result = patched_fourier_transform(&state, &"site", &[bits],
 ///     FourierOptions::forward(), &policy)?;

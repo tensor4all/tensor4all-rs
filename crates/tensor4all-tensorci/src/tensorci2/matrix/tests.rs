@@ -352,13 +352,30 @@ fn scrambled_requests_keep_every_component_in_its_own_slot() {
 }
 
 #[test]
-fn point_payload_counts_entries_and_the_arc_header() {
+fn point_payload_is_the_arc_allocation_size() {
+    // f64 and Complex64 are at most word-aligned (on 64-bit), so the header
+    // is exactly the two counts and nothing is padded.
+    let header = 2 * std::mem::size_of::<usize>();
     assert_eq!(point_payload_bytes::<f64>(6), POINT_PAYLOAD);
+    assert_eq!(point_payload_bytes::<f64>(6), header + 6 * 8);
     assert_eq!(
         point_payload_bytes::<num_complex::Complex64>(1),
-        16 + 2 * std::mem::size_of::<usize>()
+        header + 16
+    );
+    assert_eq!(
+        point_payload_bytes::<num_complex::Complex64>(5),
+        header + 5 * 16
     );
     assert_eq!(point_payload_bytes::<f64>(usize::MAX), usize::MAX);
+}
+
+#[test]
+fn point_payload_pads_the_header_for_over_aligned_values() {
+    #[repr(align(32))]
+    #[derive(Clone, Copy)]
+    struct Wide(#[allow(dead_code)] [u8; 32]);
+    // Counts (16 bytes) are padded to the 32-byte alignment of the slice.
+    assert_eq!(point_payload_bytes::<Wide>(3), 32 + 3 * 32);
 }
 
 #[test]
@@ -409,4 +426,84 @@ fn a_matrix_larger_than_the_limit_is_never_retained_but_still_served() {
     // The point is evaluated again on the next request.
     state.entries(&[(&[1, 1], 0, 0)]);
     assert_eq!(state.finished_stats().source_points, 2);
+}
+
+/// Fit of `F(x)[i, j] = value(x, i, j)`-like data on `dims`, exactly low rank.
+fn fit_for_folding(dims: Vec<usize>) -> MatrixTCI2Result<f64> {
+    crossinterpolate2_matrix::<f64, _>(
+        |points: &[MultiIndex], out: &mut [f64]| {
+            for (p, x) in points.iter().enumerate() {
+                let s: f64 = x.iter().map(|&c| 1.0 + c as f64).sum();
+                for j in 0..3 {
+                    for i in 0..2 {
+                        out[p * 6 + i + 2 * j] = (1 + i + 2 * j) as f64 * s;
+                    }
+                }
+            }
+        },
+        SHAPE,
+        dims,
+        vec![],
+        TCI2Options {
+            seed: Some(3),
+            tolerance: 1e-12,
+            ..TCI2Options::default()
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn folded_end_cores_carry_the_matrix_legs() {
+    for dims in [vec![3], vec![3, 4], vec![3, 2, 4]] {
+        let fit = fit_for_folding(dims.clone());
+        let folded = fit.to_folded().unwrap();
+        let core_dims = folded.core_dims();
+        assert_eq!(folded.len(), dims.len());
+        assert_eq!(folded.site_dims(), dims);
+        assert!(!folded.is_empty());
+        assert_eq!(core_dims[0][0], 2, "rows leads");
+        assert_eq!(core_dims[dims.len() - 1][2], 3, "cols trails");
+        for pair in core_dims.windows(2) {
+            assert_eq!(pair[0][2], pair[1][0], "bonds match");
+        }
+    }
+}
+
+#[test]
+fn folded_evaluate_checks_its_argument() {
+    let folded = fit_for_folding(vec![3, 4]).to_folded().unwrap();
+    assert!(matches!(
+        folded.evaluate(&[0]),
+        Err(TCIError::DimensionMismatch { .. })
+    ));
+    assert!(matches!(
+        folded.evaluate(&[0, 4]),
+        Err(TCIError::IndexOutOfBounds { .. })
+    ));
+    let m = folded.evaluate(&[2, 1]).unwrap();
+    // F[i, j] = (1 + i + 2 j) * (3 + 2) at x = (2, 1).
+    for j in 0..3 {
+        for i in 0..2 {
+            assert!((m[[i, j]] - ((1 + i + 2 * j) * 5) as f64).abs() < 1e-9);
+        }
+    }
+}
+
+#[test]
+fn folded_single_site_core_is_the_dense_slab_stack() {
+    let fit = fit_for_folding(vec![3]);
+    let folded = fit.to_folded().unwrap();
+    assert_eq!(folded.core_dims(), vec![[2, 3, 3]]);
+    assert_eq!(
+        folded.retained_bytes(),
+        2 * 3 * 3 * std::mem::size_of::<f64>()
+    );
+    for x in 0..3 {
+        let a = folded.evaluate(&[x]).unwrap();
+        let b = fit.evaluate(&[x]).unwrap();
+        for (u, v) in a.as_col_major_slice().iter().zip(b.as_col_major_slice()) {
+            assert!((u - v).abs() < 1e-9);
+        }
+    }
 }

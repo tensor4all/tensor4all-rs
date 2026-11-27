@@ -1,0 +1,96 @@
+{
+  "status": "PASS",
+  "attempt": 1,
+  "summary": {
+    "original": {
+      "pairs": [
+        {
+          "pair": 1,
+          "time_ratio": 1.6253797875774785,
+          "rss_ratio": 1.1549440511532314
+        },
+        {
+          "pair": 2,
+          "time_ratio": 1.6568873731242197,
+          "rss_ratio": 1.1379152871332343
+        },
+        {
+          "pair": 3,
+          "time_ratio": 1.6837311959522634,
+          "rss_ratio": 1.1467712596634834
+        },
+        {
+          "pair": 4,
+          "time_ratio": 1.6238829259460617,
+          "rss_ratio": 1.1332653985507246
+        },
+        {
+          "pair": 5,
+          "time_ratio": 1.614356830023756,
+          "rss_ratio": 1.2356782062338303
+        }
+      ],
+      "median_paired_time_ratio": 1.6253797875774785,
+      "bootstrap_95_percentile_interval": [
+        1.614356830023756,
+        1.6837311959522634
+      ],
+      "median_scheduler_seconds": {
+        "goal8": 0.390846365,
+        "tolerance": 0.639911512
+      },
+      "max_peak_rss_kib": {
+        "goal8": 35328,
+        "tolerance": 40460
+      },
+      "soft_review_triggered": true,
+      "hard_time_gate_passed": true,
+      "rss_gate_passed": true
+    },
+    "interleaved": {
+      "pairs": [
+        {
+          "pair": 1,
+          "time_ratio": 2.3832449172495735,
+          "rss_ratio": 1.1042862376358529
+        },
+        {
+          "pair": 2,
+          "time_ratio": 2.370286656422715,
+          "rss_ratio": 1.0169987616796128
+        },
+        {
+          "pair": 3,
+          "time_ratio": 2.3240956836930016,
+          "rss_ratio": 1.01815107102593
+        },
+        {
+          "pair": 4,
+          "time_ratio": 2.4056791909096487,
+          "rss_ratio": 1.0249717514124295
+        },
+        {
+          "pair": 5,
+          "time_ratio": 2.396454605415491,
+          "rss_ratio": 1.0103127452079363
+        }
+      ],
+      "median_paired_time_ratio": 2.3832449172495735,
+      "bootstrap_95_percentile_interval": [
+        2.3240956836930016,
+        2.4056791909096487
+      ],
+      "median_scheduler_seconds": {
+        "goal8": 0.431963327,
+        "tolerance": 1.030758715
+      },
+      "max_peak_rss_kib": {
+        "goal8": 35684,
+        "tolerance": 36284
+      },
+      "soft_review_triggered": true,
+      "hard_time_gate_passed": true,
+      "rss_gate_passed": true
+    }
+  }
+}

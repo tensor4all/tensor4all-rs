@@ -31,6 +31,21 @@ storage; four injected faults fail the private regressions.
 The storage guarantee concerns enumeration-generated points and accepted
 pivots. Graph/side discovery metadata, input anchors, the target memo and
 the approximation readout cache remain under their existing contracts.
-No runtime speedup or peak-RSS reduction is claimed. The root README's
+No runtime speedup or full-interpolation peak-RSS reduction is claimed.
+The [isolated enumeration-storage RSS measurement](../experiments/issue-1441/README.md#peak-rss-on-the-motivating-point-enumeration-workload)
+reports median 240.00 to 10.18 MiB, with matching points/checksums and all six
+processes CLEAN. Its incidental generation-only timings are slower for the
+streaming arm; this is disclosed without an end-to-end runtime conclusion.
+`report_rss.py` now regenerates the RSS summary from the accepted raw records. The root README's
 features and crate map remain accurate; the durable algorithm and storage
 contract are recorded in the [termination design](../design/treetci-termination.md).
+
+
+## Cross-provider review follow-up
+
+The branch is synchronized with main `9ddffd17`. No production enumeration
+code changed in this follow-up. The evidence now distinguishes the 70-cell
+trajectory comparison from direct unit/search coverage of stage-3 eviction.
+The PR's model disclosure also includes `openai/gpt-6-luna` for the Copilot CLI
+comment contribution. The historical RSS controller and all raw data stay
+pinned; summary regeneration does not rerun or reinterpret the measurement.

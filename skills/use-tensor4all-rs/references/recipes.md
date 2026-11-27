@@ -392,7 +392,8 @@ to selected indices if the grid is refused. Each original patch is transformed
 once, and output regions keep their spectator constraints. The
 result is lazy `MergeRefineResult`, and `into_partition()` requires one term per
 region. Leave `PatchedFourierOptions::merge_refine.coordinate_groups` unset.
-For repeated transforms, set a suitable `target_bond_dim` and reconstruction
+For repeated transforms, select `merge_refine.merge_policy` (`MergePolicy::RankGoal`
+or `MergePolicy::Tolerance`) and a reconstruction
 tolerance rather than allowing exact intermediate bonds to accumulate.
 
 The normalized inverse reverses each axis's index vector and uses

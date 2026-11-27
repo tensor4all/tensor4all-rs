@@ -41,7 +41,11 @@ unmodified topology metadata and evaluator/memo storage.
 All 70 baseline/candidate cells have identical target-evaluated point counts,
 iteration counts, rank histories, termination and independently checked
 errors. Both boxes are exact for all 11 seeds under both stop rules. No
-tie-breaking change was observed or introduced.
+tie-breaking change was observed or introduced. The campaign records do not
+identify whether stage 3 ran or its pivot cap was binding in each cell.
+End-to-end trajectory agreement is therefore scoped to these workloads;
+exhaustive unit and injected search tests directly exercise bounded retention,
+including eviction and equal-residual ties across batches.
 
 | Case | Seeds | Sampled points, each revision | PerBond points, each revision |
 |---|---|---:|---:|
@@ -101,6 +105,12 @@ This isolates the issue's point-storage mechanism. It includes dimensions,
 anchors, side lists, enumeration, batch storage and checksum readout; it
 excludes TreeTN evaluation, evaluator/memo storage and topology construction.
 It is not full-interpolation peak RSS or a runtime speedup measurement.
+The retained GNU-time output also shows generation-only user CPU time of
+0.08–0.09 s for baseline versus 0.30–0.34 s for streaming, with wall time
+0.21 s versus 0.41–0.42 s. This is an observed slowdown in the isolated harness,
+not a preregistered runtime comparison or evidence about full interpolation.
+TreeTN evaluation is excluded, so its effect on end-to-end runtime is unmeasured.
+
 The single-thread standard-library-only harness uses exact copied production
 code, not a substitute tensor implementation.
 
@@ -112,3 +122,15 @@ and the installed ai-run hash. Reproduce with
 in a disposable copy without the existing `rss/raw` directory; it builds
 through `ai-run build` and runs only the finished binary through exclusive
 `ai-run measure`. No numerical tolerance was changed.
+
+
+Regenerate the RSS medians and ranges without rerunning measurements:
+`python3 docs/experiments/issue-1441/report_rss.py`. The helper checks every
+accepted cell against its raw guard verdict, stdout and GNU-time peak before
+writing `rss/summary.json`. It reports median/minimum/maximum of the three
+per-arm KiB peaks divided by 1024; it does not aggregate process timings.
+The earlier hand-written summary's platform string is omitted because the
+RSS raw manifest did not record it; the declared host remains in the protocol.
+The measurement controller and all recorded protocol/source hashes remain
+unchanged. A fresh RSS campaign needs both `measure_rss.py` and `report_rss.py`
+to recreate the summary.
