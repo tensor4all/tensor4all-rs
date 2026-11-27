@@ -1,7 +1,12 @@
 //! Collections of eagerly projected [`SubDomainTreeTN`] patches.
 
+mod coverage;
 mod evaluate;
 
+pub(crate) use coverage::{
+    canonicalize_coverage, derive_contraction_coverage, ensure_covered, intersect_coverages,
+    projector_covered_by, refine_coverage, validate_coverage,
+};
 pub(crate) use evaluate::PatchLocator;
 
 use std::collections::{HashMap, HashSet};
@@ -316,6 +321,7 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
     data: HashMap<Projector, SubDomainTreeTN<V>>,
+    coverage: Option<Vec<Projector>>,
 }
 
 impl<V> PartitionedTreeTN<V>
@@ -335,7 +341,41 @@ where
     pub fn new() -> Self {
         Self {
             data: HashMap::new(),
+            coverage: None,
         }
+    }
+
+    /// Return the region on which this partition is defined, or `None` when it
+    /// is defined everywhere.
+    ///
+    /// Inside the returned coverage, an absent patch is an exact zero; outside
+    /// it, the value is unknown (uncomputed). When `None`, every absent patch
+    /// is an exact zero. The returned slice is in deterministic canonical order
+    /// with no duplicates.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::DynIndex;
+    /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector};
+    ///
+    /// let x = DynIndex::new_dyn(2);
+    /// let p0 = Projector::from_pairs([(x, 0)])?;
+    /// let empty = PartitionedTreeTN::<usize>::new();
+    /// assert_eq!(empty.coverage(), None);
+    ///
+    /// let covered = empty.with_coverage(vec![p0.clone()])?;
+    /// assert_eq!(covered.coverage(), Some(&[p0][..]));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn coverage(&self) -> Option<&[Projector]> {
+        self.coverage.as_deref()
+    }
+
+    /// Attach a canonicalized coverage list without re-validating.
+    pub(crate) fn with_canonical_coverage(mut self, coverage: Option<Vec<Projector>>) -> Self {
+        self.coverage = coverage.map(canonicalize_coverage);
+        self
     }
 
     /// Return the number of stored patches.
@@ -363,6 +403,58 @@ impl<V> PartitionedTreeTN<V>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
+    /// Set the region on which this partition is defined.
+    ///
+    /// Inside `coverage`, an absent patch is an exact zero; outside it, the
+    /// value is unknown (uncomputed). The stored list is canonicalized in
+    /// deterministic order with duplicates removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PartitionedTreeTNError::ProjectorIndexNotFound`] when a
+    /// coverage projector fixes an index absent from a non-empty partition's
+    /// site space, [`PartitionedTreeTNError::SiteIndexMismatch`] when a
+    /// coverage index dimension differs from the partition's site space,
+    /// [`PartitionedTreeTNError::ProjectorCoordinateOutOfBounds`] when a
+    /// coordinate is out of bounds, [`PartitionedTreeTNError::OutsideCoverage`]
+    /// when an existing stored patch lies outside `coverage`, or a typed
+    /// TreeTN/validation error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector, SubDomainTreeTN};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let x = DynIndex::new_dyn(2);
+    /// let tree = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense(vec![x.clone()], vec![1.0_f64, 0.0])?],
+    ///     vec![0usize],
+    /// )?;
+    /// let p0 = Projector::from_pairs([(x, 0)])?;
+    /// let partition = PartitionedTreeTN::from_subdomain(SubDomainTreeTN::new(tree, p0.clone())?)?
+    ///     .with_coverage(vec![p0.clone(), p0.clone()])?;
+    /// assert_eq!(partition.coverage(), Some(&[p0][..]));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_coverage(mut self, coverage: Vec<Projector>) -> Result<Self> {
+        self.validate_contents()?;
+        let canonical = canonicalize_coverage(coverage);
+        let site_indices = if let Some(template) = self.data.values().next() {
+            let (sites, _) = template
+                .data()
+                .all_site_indices()
+                .map_err(PartitionedTreeTNError::from)?;
+            Some(sites)
+        } else {
+            None
+        };
+        validate_coverage(&canonical, site_indices.as_deref(), self.data.keys())?;
+        self.coverage = Some(canonical);
+        Ok(self)
+    }
+
     /// Iterate over the projector keys in canonical patch order.
     ///
     /// The order is the one [`Self::iter`] documents: it depends only on the
@@ -522,7 +614,10 @@ where
             data.remove(&projector);
             data.insert(projector, subdomain);
         }
-        Ok(Self { data })
+        Ok(Self {
+            data,
+            coverage: None,
+        })
     }
 
     /// Construct a partition from patches whose projectors are pairwise
@@ -555,7 +650,10 @@ where
             .into_iter()
             .map(|subdomain| (subdomain.projector().clone(), subdomain))
             .collect();
-        Ok(Self { data })
+        Ok(Self {
+            data,
+            coverage: None,
+        })
     }
 
     /// Construct a partition containing one patch.
@@ -691,7 +789,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`PartitionedTreeTNError::OverlappingProjectors`],
+    /// Returns [`PartitionedTreeTNError::OutsideCoverage`] when the partition
+    /// has a partial coverage that does not cover the whole domain,
+    /// [`PartitionedTreeTNError::OverlappingProjectors`],
     /// [`PartitionedTreeTNError::TopologyMismatch`],
     /// [`PartitionedTreeTNError::SiteIndexMismatch`], or
     /// [`PartitionedTreeTNError::DTypeMismatch`] when stored partition metadata
@@ -700,6 +800,7 @@ where
     /// patch norm cannot be evaluated.
     pub fn norm_squared(&self) -> Result<f64> {
         self.validate_contents()?;
+        ensure_covered(&Projector::new(), self.coverage())?;
         self.ordered_patches()
             .into_iter()
             .try_fold(0.0, |sum, subdomain| Ok(sum + subdomain.norm_squared()?))
@@ -716,6 +817,7 @@ where
     ///
     /// Returns the concrete validation variants documented by
     /// [`Self::norm_squared`], including
+    /// [`PartitionedTreeTNError::OutsideCoverage`],
     /// [`PartitionedTreeTNError::OverlappingProjectors`],
     /// [`PartitionedTreeTNError::TopologyMismatch`],
     /// [`PartitionedTreeTNError::SiteIndexMismatch`],
@@ -723,6 +825,7 @@ where
     /// [`PartitionedTreeTNError::TreeTN`].
     pub fn norm(&self) -> Result<f64> {
         self.validate_contents()?;
+        ensure_covered(&Projector::new(), self.coverage())?;
         self.ordered_patches()
             .into_iter()
             .try_fold(0.0_f64, |norm, patch| Ok(norm.hypot(patch.norm()?)))
@@ -822,7 +925,8 @@ where
                 patches.push(projected);
             }
         }
-        Self::from_subdomains(patches)
+        let result = Self::from_subdomains(patches)?;
+        Ok(result.with_canonical_coverage(refine_coverage(self.coverage(), layout)))
     }
 
     /// Return the common refinement of the operands' patch layouts.
@@ -1156,8 +1260,14 @@ where
         // patch, so the result needs no per-insert overlap scan.
         ensure_union_disjoint(&self.data, &other.data)?;
 
+        let result_coverage = intersect_coverages(self.coverage(), other.coverage());
         let mut data = HashMap::with_capacity(self.data.len() + other.data.len());
         for (projector, left) in &self.data {
+            if let Some(ref cov) = result_coverage {
+                if !projector_covered_by(projector, cov) {
+                    continue;
+                }
+            }
             if let Some(right) = other.data.get(projector) {
                 let mut sum = left.add(right)?;
                 if let Some((center, options)) = truncation {
@@ -1170,10 +1280,18 @@ where
         }
         for (projector, right) in &other.data {
             if !self.data.contains_key(projector) {
+                if let Some(ref cov) = result_coverage {
+                    if !projector_covered_by(projector, cov) {
+                        continue;
+                    }
+                }
                 data.insert(projector.clone(), right.clone());
             }
         }
-        Ok(Self { data })
+        Ok(Self {
+            data,
+            coverage: result_coverage,
+        })
     }
 
     /// Contract two partitions at an explicit center.
@@ -1415,6 +1533,21 @@ where
         self.validate_contents()?;
         other.validate_contents()?;
         nonempty_templates(self, other)?;
+        let Some((_, _, output_sites)) = prepare_contraction(self, other, center)? else {
+            return Err(PartitionedTreeTNError::Empty);
+        };
+        let derived_coverage =
+            derive_contraction_coverage(self.coverage(), other.coverage(), &output_sites)?;
+        let result_coverage = if let Some(wanted_set) = wanted {
+            let mut canonical_wanted: Vec<Projector> = wanted_set.iter().cloned().collect();
+            canonical_wanted.sort_by(Projector::canonical_cmp);
+            for projector in &canonical_wanted {
+                ensure_covered(projector, derived_coverage.as_deref())?;
+            }
+            Some(canonical_wanted)
+        } else {
+            derived_coverage
+        };
 
         // Group the pairwise contributions by output projector. Pairs come in
         // logical patch-key order, with content digests breaking metadata ties,
@@ -1473,7 +1606,8 @@ where
         // overlapping non-identical output projector is rejected here;
         // `contract` avoids that by refining its operands first, and
         // `contract_selected` reports it.
-        PartitionedTreeTN::from_subdomains(subdomains)
+        let result = PartitionedTreeTN::from_subdomains(subdomains)?;
+        Ok(result.with_canonical_coverage(result_coverage))
     }
 
     /// Contract the compatible patch pairs of `self` and `other` whose output
@@ -1561,7 +1695,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`PartitionedTreeTNError::Empty`] when there are no patches,
+    /// Returns [`PartitionedTreeTNError::OutsideCoverage`] when the partition
+    /// has a partial coverage that does not cover the whole domain,
+    /// [`PartitionedTreeTNError::Empty`] when there are no patches,
     /// typed invariant errors for invalid metadata, or [`PartitionedTreeTNError::TreeTN`]
     /// when strict TreeTN addition fails.
     pub fn to_treetn(&self) -> Result<TreeTN<tensor4all_core::IdxTensor, V>> {
@@ -1597,7 +1733,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`PartitionedTreeTNError::Empty`] when there are no patches,
+    /// Returns [`PartitionedTreeTNError::OutsideCoverage`] when the partition
+    /// has a partial coverage that does not cover the whole domain,
+    /// [`PartitionedTreeTNError::Empty`] when there are no patches,
     /// typed invariant errors for invalid metadata, or [`PartitionedTreeTNError::TreeTN`]
     /// when building the sum fails.
     ///
@@ -1631,6 +1769,7 @@ where
         engine: SumEngine,
     ) -> Result<ExactSum<tensor4all_core::IdxTensor, V>> {
         self.validate_contents()?;
+        ensure_covered(&Projector::new(), self.coverage())?;
         if self.is_empty() {
             return Err(PartitionedTreeTNError::Empty);
         }
