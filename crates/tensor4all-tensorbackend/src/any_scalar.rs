@@ -2,8 +2,6 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
-#[cfg(feature = "global-defaults")]
-use anyhow::ensure;
 use anyhow::{anyhow, Result};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
@@ -189,76 +187,6 @@ fn scalar_value_from_storage(storage: &Storage) -> ScalarValue {
     }
 }
 
-#[cfg(feature = "global-defaults")]
-fn scalar_value_from_native(native: &NativeTensor) -> Result<ScalarValue> {
-    ensure!(
-        native.shape().is_empty(),
-        "expected rank-0 scalar tensor, got shape {:?}",
-        native.shape()
-    );
-
-    match native.dtype() {
-        DType::F32 => native
-            .as_slice::<f32>()
-            .map_err(anyhow::Error::new)?
-            .first()
-            .copied()
-            .map(ScalarValue::F32)
-            .ok_or_else(|| anyhow!("failed to read f32 scalar tensor value")),
-        DType::F64 => native
-            .as_slice::<f64>()
-            .map_err(anyhow::Error::new)?
-            .first()
-            .copied()
-            .map(ScalarValue::F64)
-            .ok_or_else(|| anyhow!("failed to read f64 scalar tensor value")),
-        DType::I32 => native
-            .as_slice::<i32>()
-            .map_err(anyhow::Error::new)?
-            .first()
-            .copied()
-            .map(ScalarValue::I32)
-            .ok_or_else(|| anyhow!("failed to read i32 scalar tensor value")),
-        DType::I64 => native
-            .as_slice::<i64>()
-            .map_err(anyhow::Error::new)?
-            .first()
-            .copied()
-            .map(ScalarValue::I64)
-            .ok_or_else(|| anyhow!("failed to read i64 scalar tensor value")),
-        DType::Bool => native
-            .as_slice::<bool>()
-            .map_err(anyhow::Error::new)?
-            .first()
-            .copied()
-            .map(ScalarValue::Bool)
-            .ok_or_else(|| anyhow!("failed to read bool scalar tensor value")),
-        DType::C32 => native
-            .as_slice::<Complex32>()
-            .map_err(anyhow::Error::new)?
-            .first()
-            .copied()
-            .map(ScalarValue::C32)
-            .ok_or_else(|| anyhow!("failed to read c32 scalar tensor value")),
-        // An external scalar kind is a caller-registered Rust type; it has no
-        // logical scalar value in this crate.
-        DType::External(_) => Err(anyhow::Error::new(tenferro_tensor::Error::unsupported(
-            "scalar snapshot",
-            format!(
-                "external scalar kind {:?} is not a supported scalar tensor",
-                native.dtype()
-            ),
-        ))),
-        DType::C64 => native
-            .as_slice::<Complex64>()
-            .map_err(anyhow::Error::new)?
-            .first()
-            .copied()
-            .map(ScalarValue::C64)
-            .ok_or_else(|| anyhow!("failed to read c64 scalar tensor value")),
-    }
-}
-
 /// Maps a concrete tensor element type onto its [`ScalarValue`] variant.
 ///
 /// This is the single implementation of the scalar construction contract:
@@ -312,118 +240,6 @@ impl ScalarTensorElement for Complex64 {
     }
 }
 
-#[cfg(feature = "global-defaults")]
-pub(crate) fn promote_scalar_native(native: &NativeTensor, target: DType) -> Result<NativeTensor> {
-    let promoted = match (scalar_value_from_native(native)?, target) {
-        (ScalarValue::F32(value), DType::F32) => BackendScalar::from_value(value),
-        (ScalarValue::F32(value), DType::F64) => BackendScalar::from_value(value as f64),
-        (ScalarValue::F32(value), DType::C32) => {
-            BackendScalar::from_value(Complex32::new(value, 0.0))
-        }
-        (ScalarValue::F32(value), DType::C64) => {
-            BackendScalar::from_value(Complex64::new(value as f64, 0.0))
-        }
-        (ScalarValue::F32(_), DType::I64) => {
-            return Err(anyhow!(
-                "cannot promote f32 scalar to i64 without truncation"
-            ));
-        }
-        (ScalarValue::F32(_), DType::I32 | DType::Bool) => {
-            return Err(anyhow!(
-                "cannot promote f32 scalar to integer/bool without truncation"
-            ));
-        }
-        (ScalarValue::F64(value), DType::F32) => BackendScalar::from_value(value as f32),
-        (ScalarValue::F64(value), DType::F64) => BackendScalar::from_value(value),
-        (ScalarValue::F64(_), DType::I64) => {
-            return Err(anyhow!(
-                "cannot promote f64 scalar to i64 without truncation"
-            ));
-        }
-        (ScalarValue::F64(_), DType::I32 | DType::Bool) => {
-            return Err(anyhow!(
-                "cannot promote f64 scalar to integer/bool without truncation"
-            ));
-        }
-        (ScalarValue::F64(value), DType::C32) => {
-            BackendScalar::from_value(Complex32::new(value as f32, 0.0))
-        }
-        (ScalarValue::F64(value), DType::C64) => {
-            BackendScalar::from_value(Complex64::new(value, 0.0))
-        }
-        (ScalarValue::I32(value), DType::F32) => BackendScalar::from_value(value as f32),
-        (ScalarValue::I32(value), DType::F64) => BackendScalar::from_value(value as f64),
-        (ScalarValue::I32(value), DType::I32) => return Ok(scalar_native(value)),
-        (ScalarValue::I32(value), DType::I64) => BackendScalar::from_i64(value as i64),
-        (ScalarValue::I32(value), DType::C32) => {
-            BackendScalar::from_value(Complex32::new(value as f32, 0.0))
-        }
-        (ScalarValue::I32(value), DType::C64) => {
-            BackendScalar::from_value(Complex64::new(value as f64, 0.0))
-        }
-        (ScalarValue::I32(_), DType::Bool) => {
-            return Err(anyhow!("cannot promote i32 scalar to bool"));
-        }
-        (ScalarValue::I64(value), DType::F32) => BackendScalar::from_value(value as f32),
-        (ScalarValue::I64(value), DType::F64) => BackendScalar::from_value(value as f64),
-        (ScalarValue::I64(_), DType::I32 | DType::Bool) => {
-            return Err(anyhow!("cannot promote i64 scalar to i32/bool"));
-        }
-        (ScalarValue::I64(value), DType::I64) => BackendScalar::from_i64(value),
-        (ScalarValue::I64(value), DType::C32) => {
-            BackendScalar::from_value(Complex32::new(value as f32, 0.0))
-        }
-        (ScalarValue::I64(value), DType::C64) => {
-            BackendScalar::from_value(Complex64::new(value as f64, 0.0))
-        }
-        (ScalarValue::Bool(value), DType::F32) => {
-            BackendScalar::from_value(if value { 1.0_f32 } else { 0.0_f32 })
-        }
-        (ScalarValue::Bool(value), DType::F64) => {
-            BackendScalar::from_value(if value { 1.0 } else { 0.0 })
-        }
-        (ScalarValue::Bool(value), DType::I32) => {
-            return Ok(scalar_native(if value { 1 } else { 0 }));
-        }
-        (ScalarValue::Bool(value), DType::I64) => {
-            BackendScalar::from_i64(if value { 1 } else { 0 })
-        }
-        (ScalarValue::Bool(value), DType::Bool) => return Ok(scalar_native(value)),
-        (ScalarValue::Bool(value), DType::C32) => {
-            BackendScalar::from_value(Complex32::new(if value { 1.0 } else { 0.0 }, 0.0))
-        }
-        (ScalarValue::Bool(value), DType::C64) => {
-            BackendScalar::from_value(Complex64::new(if value { 1.0 } else { 0.0 }, 0.0))
-        }
-        (ScalarValue::C32(value), DType::F32) => BackendScalar::from_value(value.re),
-        (ScalarValue::C32(value), DType::F64) => BackendScalar::from_value(value.re as f64),
-        (ScalarValue::C32(_), DType::I32 | DType::I64 | DType::Bool) => {
-            return Err(anyhow!("cannot promote c32 scalar to integer/bool"));
-        }
-        (ScalarValue::C32(value), DType::C32) => BackendScalar::from_value(value),
-        (ScalarValue::C32(value), DType::C64) => {
-            BackendScalar::from_value(Complex64::new(value.re as f64, value.im as f64))
-        }
-        (ScalarValue::C64(value), DType::F32) => BackendScalar::from_value(value.re as f32),
-        (ScalarValue::C64(value), DType::F64) => BackendScalar::from_value(value.re),
-        (ScalarValue::C64(_), DType::I32 | DType::I64 | DType::Bool) => {
-            return Err(anyhow!("cannot promote c64 scalar to integer/bool"));
-        }
-        (ScalarValue::C64(value), DType::C32) => {
-            BackendScalar::from_value(Complex32::new(value.re as f32, value.im as f32))
-        }
-        (ScalarValue::C64(value), DType::C64) => BackendScalar::from_value(value),
-
-        (_, DType::External(_)) => {
-            return Err(anyhow::Error::new(tenferro_tensor::Error::unsupported(
-                "promotion",
-                "external scalar kinds are not promotable dtypes",
-            )));
-        }
-    };
-    Ok(promoted.native)
-}
-
 /// Dynamic scalar used across tensor4all backends.
 ///
 /// This is a tensor4all-owned rank-0 wrapper over tenferro's dynamic tensor.
@@ -457,19 +273,6 @@ pub struct BackendScalar {
 }
 
 impl BackendScalar {
-    #[cfg(feature = "global-defaults")]
-    fn wrap_native(native: NativeTensor) -> Result<Self> {
-        if native.shape().is_empty() {
-            let value = scalar_value_from_native(&native)?;
-            Ok(Self { native, value })
-        } else {
-            Err(anyhow!(
-                "BackendScalar requires a rank-0 tensor, got shape {:?}",
-                native.shape()
-            ))
-        }
-    }
-
     fn value(&self) -> ScalarValue {
         self.value
     }
@@ -493,11 +296,6 @@ impl BackendScalar {
             native: scalar_native(value),
             value: ScalarValue::Bool(value),
         }
-    }
-
-    #[cfg(feature = "global-defaults")]
-    pub(crate) fn from_native(value: NativeTensor) -> Result<Self> {
-        Self::wrap_native(value)
     }
 
     pub(crate) fn as_native(&self) -> &NativeTensor {

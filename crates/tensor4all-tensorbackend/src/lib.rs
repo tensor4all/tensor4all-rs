@@ -113,35 +113,28 @@ pub use matrix::{
 pub use memory::{release_process_allocator_cached_memory, AllocatorPressureRelief};
 #[cfg(feature = "explicit-context")]
 pub use runtime::{Runtime, RuntimeError};
-#[cfg(feature = "global-defaults")]
-pub use storage::contract_storage;
 #[cfg(feature = "explicit-context")]
 pub use storage::{
-    make_mut_storage, min_dim, scale_target_dtype, NonfiniteFlags, Storage, StorageError,
-    StorageKind, StorageResult, StorageScalar, StructuredStorage, SumFromStorage,
+    scale_target_dtype, NonfiniteFlags, Storage, StorageError, StorageKind, StorageResult,
+    StorageScalar, StructuredStorage, SumFromStorage,
 };
 /// The engine trait every computing entry takes as `exec: &mut dyn ExecutionEngine`.
 #[cfg(feature = "explicit-context")]
 pub use tenferro::ExecutionEngine;
-#[cfg(feature = "global-defaults")]
-pub use tenferro_bridge::{
-    axpby_native_tensor, axpby_storage_native, contract_native_tensor, contract_storage_native,
-    einsum_native_subscripts, einsum_native_tensor_reads, einsum_native_tensors,
-    einsum_native_tensors_owned, native_tensor_primal_to_diag, outer_product_native_tensor,
-    outer_product_storage_native, permute_native_tensor, permute_storage_native, qr_native_tensor,
-    reshape_col_major_native_tensor, scale_native_tensor, scale_storage_native, sum_native_tensor,
-    svd_native_tensor,
-};
 #[cfg(feature = "explicit-context")]
 pub use tenferro_bridge::{
     conj_native_tensor, dense_native_tensor_from_col_major,
     dense_native_tensor_from_col_major_owned, dense_native_tensor_read_input_from_col_major,
     diag_native_tensor_from_col_major, einsum_native_tensor_reads_in, einsum_native_tensors_in,
     einsum_native_tensors_owned_in, native_tensor_primal_to_dense_col_major,
-    native_tensor_primal_to_storage, print_and_reset_native_einsum_profile,
-    reset_native_einsum_profile, storage_from_payload_native, storage_payload_native,
-    storage_payload_native_read_input, storage_to_native_tensor, tangent_native_tensor,
-    BridgeError, NativeEinsumPlan, NativeTensorReadInput,
+    print_and_reset_native_einsum_profile, reset_native_einsum_profile,
+    storage_from_payload_native, storage_payload_native, storage_payload_native_read_input,
+    storage_to_native_tensor, BridgeError, NativeEinsumPlan, NativeTensorReadInput,
+};
+#[cfg(feature = "global-defaults")]
+pub use tenferro_bridge::{
+    einsum_native_subscripts, einsum_native_tensor_reads, einsum_native_tensors,
+    einsum_native_tensors_owned, native_tensor_primal_to_diag, qr_native_tensor,
 };
 /// The CUDA engine a caller opens and passes as `exec`, and its device id.
 #[cfg(feature = "tenferro-cuda")]
