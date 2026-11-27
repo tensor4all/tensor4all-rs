@@ -1,4 +1,5 @@
 use super::*;
+use crate::einsum_ids::build_binary_einsum_ids;
 use crate::storage::{Storage, StorageRepr};
 use crate::tensor_element::TensorElement;
 use num_complex::{Complex32, Complex64};
@@ -35,6 +36,93 @@ fn assert_storage_eq(lhs: &Storage, rhs: &Storage) {
             std::mem::discriminant(lhs.repr()),
             std::mem::discriminant(rhs.repr())
         ),
+    }
+}
+
+/// Materialize a native tensor into dense storage, the test-side inverse of
+/// [`storage_to_native_tensor`] for roundtrip checks.
+fn native_tensor_primal_to_storage(
+    tensor: &NativeTensor,
+) -> std::result::Result<Storage, BridgeError> {
+    match tensor.dtype() {
+        DType::F32 => Storage::from_dense_col_major(
+            native_slice::<f32>(tensor, "failed to read f32 native tensor")?.to_vec(),
+            tensor.shape(),
+        )
+        .map_err(|e| {
+            BridgeError::from(anyhow!(
+                "native tensor snapshot materialization failed: {e}"
+            ))
+        }),
+        DType::F64 => Storage::from_dense_col_major(
+            native_slice::<f64>(tensor, "failed to read f64 native tensor")?.to_vec(),
+            tensor.shape(),
+        )
+        .map_err(|e| {
+            BridgeError::from(anyhow!(
+                "native tensor snapshot materialization failed: {e}"
+            ))
+        }),
+        DType::I32 => Storage::from_dense_col_major(
+            native_slice::<i32>(tensor, "failed to read i32 native tensor")?
+                .iter()
+                .map(|&value| value as f64)
+                .collect::<Vec<_>>(),
+            tensor.shape(),
+        )
+        .map_err(|e| {
+            BridgeError::from(anyhow!(
+                "native tensor snapshot materialization failed: {e}"
+            ))
+        }),
+        DType::I64 => Storage::from_dense_col_major(
+            native_slice::<i64>(tensor, "failed to read i64 native tensor")?
+                .iter()
+                .map(|&value| value as f64)
+                .collect::<Vec<_>>(),
+            tensor.shape(),
+        )
+        .map_err(|e| {
+            BridgeError::from(anyhow!(
+                "native tensor snapshot materialization failed: {e}"
+            ))
+        }),
+        DType::Bool => Storage::from_dense_col_major(
+            native_slice::<bool>(tensor, "failed to read bool native tensor")?
+                .iter()
+                .map(|&value| if value { 1.0 } else { 0.0 })
+                .collect::<Vec<_>>(),
+            tensor.shape(),
+        )
+        .map_err(|e| {
+            BridgeError::from(anyhow!(
+                "native tensor snapshot materialization failed: {e}"
+            ))
+        }),
+        DType::C32 => Storage::from_dense_col_major(
+            native_slice::<Complex32>(tensor, "failed to read c32 native tensor")?.to_vec(),
+            tensor.shape(),
+        )
+        .map_err(|e| {
+            BridgeError::from(anyhow!(
+                "native tensor snapshot materialization failed: {e}"
+            ))
+        }),
+        DType::C64 => Storage::from_dense_col_major(
+            native_slice::<Complex64>(tensor, "failed to read c64 native tensor")?.to_vec(),
+            tensor.shape(),
+        )
+        .map_err(|e| {
+            BridgeError::from(anyhow!(
+                "native tensor snapshot materialization failed: {e}"
+            ))
+        }),
+        DType::External(_) => Err(BridgeError::from(anyhow::Error::new(
+            tenferro_tensor::Error::unsupported(
+                "dense storage",
+                "external scalar kinds cannot be materialized into dense storage",
+            ),
+        ))),
     }
 }
 
@@ -373,29 +461,6 @@ fn diag_native_tensor_from_col_major_c32_promotes_to_c64_values() {
         )
         .unwrap(),
     );
-}
-
-#[test]
-fn sum_native_tensor_returns_rank0_scalar() {
-    let storage = Storage::from_dense_col_major(
-        vec![Complex64::new(1.0, -1.0), Complex64::new(-0.5, 2.0)],
-        &[2],
-    )
-    .unwrap();
-    let native = storage_to_native_tensor(&storage, &[2]).unwrap();
-
-    let sum = sum_native_tensor(&native).unwrap();
-
-    assert!(sum.is_complex());
-    assert_eq!(sum.as_c64(), Some(Complex64::new(0.5, 1.0)));
-}
-
-#[test]
-fn sum_native_tensor_preserves_rank0_scalar() {
-    let native = Complex64::scalar_native_tensor(Complex64::new(1.5, -0.25)).unwrap();
-    let sum = sum_native_tensor(&native).unwrap();
-
-    assert_eq!(sum.as_c64(), Some(Complex64::new(1.5, -0.25)));
 }
 
 #[test]
@@ -1014,50 +1079,28 @@ fn native_read_input_owned_and_plan_helpers_cover_debug_paths() {
 }
 
 #[test]
-fn native_einsum_profile_print_and_c32_arithmetic_paths() {
+fn native_einsum_profile_print_covers_c32_contraction() {
     let _guard = ProfileGuard::enable();
 
     let lhs = NativeTensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(1.0, 2.0), Complex32::new(-3.0, 0.5)],
     )
-    .expect("valid complex32 scale lhs");
+    .expect("valid complex32 lhs");
     let rhs = NativeTensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(0.5, -1.0), Complex32::new(4.0, 2.0)],
     )
-    .expect("valid complex32 scale rhs");
-
-    let scaled = scale_native_tensor(
-        &lhs,
-        &crate::BackendScalar::from_value(Complex32::new(2.0, -1.0)),
-    )
-    .unwrap();
-    assert_eq!(scaled.dtype(), DType::C32);
-    assert_eq!(
-        scaled
-            .as_slice::<Complex32>()
-            .expect("scaled tensor host values"),
-        &[Complex32::new(4.0, 3.0), Complex32::new(-5.5, 4.0)]
-    );
-
-    let combined = axpby_native_tensor(
-        &lhs,
-        &crate::BackendScalar::from_value(Complex32::new(1.0, 0.0)),
-        &rhs,
-        &crate::BackendScalar::from_value(Complex32::new(0.0, 1.0)),
-    )
-    .unwrap();
-    assert_eq!(combined.dtype(), DType::C32);
-    assert_eq!(
-        combined
-            .as_slice::<Complex32>()
-            .expect("combined tensor host values"),
-        &[Complex32::new(2.0, 2.5), Complex32::new(-5.0, 4.5)]
-    );
+    .expect("valid complex32 rhs");
 
     let contraction = einsum_native_tensors(&[(&lhs, &[0]), (&rhs, &[0])], &[]).unwrap();
     assert_eq!(contraction.shape(), &[] as &[usize]);
+    assert_eq!(
+        contraction
+            .as_slice::<Complex32>()
+            .expect("contraction host value"),
+        &[Complex32::new(-10.5, -4.0)]
+    );
     print_and_reset_native_einsum_profile();
     assert_eq!(
         recorded_native_einsum_call_count(NativeEinsumPath::Borrowed),
@@ -1066,161 +1109,12 @@ fn native_einsum_profile_print_and_c32_arithmetic_paths() {
 }
 
 #[test]
-fn contract_native_tensor_restores_rhs_free_axis_order() {
-    let lhs = storage_to_native_tensor(
-        &Storage::from_dense_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap(),
-        &[2, 2],
-    )
-    .unwrap();
-    let rhs = storage_to_native_tensor(
-        &Storage::from_dense_col_major(vec![10.0, 30.0, 20.0, 40.0], &[2, 2]).unwrap(),
-        &[2, 2],
-    )
-    .unwrap();
-
-    let out = contract_native_tensor(&lhs, &[1], &rhs, &[1]).unwrap();
-    let snapshot = native_tensor_primal_to_storage(&out).unwrap();
-    let expected = Storage::from_dense_col_major(vec![50.0, 110.0, 110.0, 250.0], &[2, 2]).unwrap();
-
-    assert_storage_eq(&snapshot, &expected);
-}
-
-#[test]
-fn permute_storage_native_dense_matches_expected_data() {
-    let storage =
-        Storage::from_dense_col_major(vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0], &[2, 3]).unwrap();
-    let permuted = permute_storage_native(&storage, &[2, 3], &[1, 0]).unwrap();
-    let expected =
-        Storage::from_dense_col_major(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2]).unwrap();
-    assert_storage_eq(&permuted, &expected);
-}
-
-#[test]
-fn reshape_col_major_native_tensor_handles_permuted_input() {
-    let native = dense_native_tensor_from_col_major(
-        &(1..=24).map(|x| x as f64).collect::<Vec<_>>(),
-        &[2, 3, 2, 2],
-    )
-    .unwrap();
-    let permuted = permute_native_tensor(&native, &[0, 2, 1, 3]).unwrap();
-    let permuted_values = native_tensor_primal_to_dense_col_major::<f64>(&permuted).unwrap();
-
-    let reshaped = reshape_col_major_native_tensor(&permuted, &[4, 6]).unwrap();
-    let reshaped_values = native_tensor_primal_to_dense_col_major::<f64>(&reshaped).unwrap();
-
-    assert_eq!(reshaped_values, permuted_values);
-}
-
-#[test]
-fn scale_native_tensor_promotes_real_scalar_for_complex_tensor() {
-    let native = dense_native_tensor_from_col_major(
-        &[Complex64::new(1.0, 2.0), Complex64::new(-0.5, 1.0)],
-        &[2],
-    )
-    .unwrap();
-    let scalar = crate::BackendScalar::new_real(2.0);
-    let scaled = scale_native_tensor(&native, &scalar).unwrap();
-    let values = native_tensor_primal_to_dense_col_major::<Complex64>(&scaled).unwrap();
-
-    assert_eq!(
-        values,
-        vec![Complex64::new(2.0, 4.0), Complex64::new(-1.0, 2.0)]
-    );
-}
-
-#[test]
-fn scale_and_axpby_native_tensor_cover_f32_paths() {
-    let lhs = dense_native_tensor_from_col_major(&[1.0_f32, -2.0_f32], &[2]).unwrap();
-    let rhs = dense_native_tensor_from_col_major(&[0.5_f32, 4.0_f32], &[2]).unwrap();
-
-    let scaled = scale_native_tensor(&lhs, &crate::BackendScalar::from_value(0.5_f32)).unwrap();
-    let scaled_values = native_tensor_primal_to_dense_col_major::<f32>(&scaled).unwrap();
-    assert_eq!(scaled_values, vec![0.5_f32, -1.0_f32]);
-
-    let combined = axpby_native_tensor(
-        &lhs,
-        &crate::BackendScalar::from_value(2.0_f32),
-        &rhs,
-        &crate::BackendScalar::from_value(-1.0_f32),
-    )
-    .unwrap();
-    let combined_values = native_tensor_primal_to_dense_col_major::<f32>(&combined).unwrap();
-    assert_eq!(combined_values, vec![1.5_f32, -8.0_f32]);
-}
-
-#[test]
-fn axpby_native_tensor_promotes_real_scalars_for_complex_tensors() {
-    let lhs = dense_native_tensor_from_col_major(
-        &[Complex64::new(1.0, 2.0), Complex64::new(-1.0, 0.5)],
-        &[2],
-    )
-    .unwrap();
-    let rhs = dense_native_tensor_from_col_major(
-        &[Complex64::new(0.5, -1.0), Complex64::new(2.0, 1.0)],
-        &[2],
-    )
-    .unwrap();
-    let a = crate::BackendScalar::new_real(2.0);
-    let b = crate::BackendScalar::new_real(-1.0);
-    let combined = axpby_native_tensor(&lhs, &a, &rhs, &b).unwrap();
-    let values = native_tensor_primal_to_dense_col_major::<Complex64>(&combined).unwrap();
-
-    assert_eq!(
-        values,
-        vec![Complex64::new(1.5, 5.0), Complex64::new(-4.0, 0.0)]
-    );
-}
-
-#[test]
-fn scale_and_axpby_storage_native_roundtrip() {
-    let storage = Storage::from_dense_col_major(vec![1.0, 2.0, 3.0], &[3]).unwrap();
-    let scalar = crate::BackendScalar::new_real(2.0);
-    let scaled = scale_storage_native(&storage, &[3], &scalar).unwrap();
-    let expected_scaled = Storage::from_dense_col_major(vec![2.0, 4.0, 6.0], &[3]).unwrap();
-    assert_storage_eq(&scaled, &expected_scaled);
-
-    let rhs = Storage::from_dense_col_major(vec![3.0, 4.0, 5.0], &[3]).unwrap();
-    let combined = axpby_storage_native(
-        &storage,
-        &[3],
-        &crate::BackendScalar::new_real(2.0),
-        &rhs,
-        &[3],
-        &crate::BackendScalar::new_real(3.0),
-    )
-    .unwrap();
-    let expected_combined = Storage::from_dense_col_major(vec![11.0, 16.0, 21.0], &[3]).unwrap();
-    assert_storage_eq(&combined, &expected_combined);
-}
-
-#[test]
-fn outer_product_storage_native_produces_correct_shape() {
-    let a = Storage::from_dense_col_major(vec![1.0, 2.0], &[2]).unwrap();
-    let b = Storage::from_dense_col_major(vec![3.0, 4.0, 5.0], &[3]).unwrap();
-    let result = outer_product_storage_native(&a, &[2], &b, &[3], &[2, 3]).unwrap();
-    let expected =
-        Storage::from_dense_col_major(vec![3.0, 6.0, 4.0, 8.0, 5.0, 10.0], &[2, 3]).unwrap();
-    assert_storage_eq(&result, &expected);
-}
-
-#[test]
-fn qr_and_svd_native_tensor_return_expected_shapes() {
+fn qr_native_tensor_returns_expected_shapes() {
     let native = dense_native_tensor_from_col_major(&[1.0_f64, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
 
     let (q, r) = qr_native_tensor(&native).unwrap();
     assert_eq!(q.shape(), &[2, 2]);
     assert_eq!(r.shape(), &[2, 2]);
-
-    let (u, s, vt) = svd_native_tensor(&native).unwrap();
-    assert_eq!(u.shape(), &[2, 2]);
-    assert_eq!(s.shape(), &[2]);
-    assert_eq!(vt.shape(), &[2, 2]);
-}
-
-#[test]
-fn tangent_native_tensor_returns_none_for_primal() {
-    let native = dense_native_tensor_from_col_major(&[1.0_f64, 2.0], &[2]).unwrap();
-    assert!(tangent_native_tensor(&native).is_none());
 }
 
 #[test]

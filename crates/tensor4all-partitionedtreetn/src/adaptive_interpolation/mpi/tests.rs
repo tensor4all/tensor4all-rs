@@ -195,6 +195,28 @@ fn a_patch_network_crosses_the_wire_with_its_axes() {
     assert_eq!(format!("{back:?}"), format!("{wire:?}"));
 }
 
+/// A node whose value count disagrees with its shape is a corrupt record: the
+/// decode rejects it as a wire error instead of building a tensor.
+#[test]
+fn a_node_with_the_wrong_value_count_is_rejected_by_the_wire() {
+    let layout = chain_layout();
+    let wire = WireSubdomain {
+        nodes: vec![WireNode {
+            node: 0,
+            axes: vec![WireAxis::Site { position: 0 }, WireAxis::Bond { id: 0 }],
+            shape: vec![2, 3],
+            values: WireArray::C32(vec![Complex32::new(1.0, 0.0); 5]),
+        }],
+    };
+    let projector = layout.projector(&[]).unwrap();
+    let error = decode_subdomain(&layout, projector, wire).unwrap_err();
+    assert!(
+        matches!(&error, PatchedInterpolationError::FanOut { message }
+            if message.starts_with("the MPI wire rejected a record")),
+        "{error:?}"
+    );
+}
+
 #[test]
 fn an_outcome_crosses_the_wire_as_a_whole() {
     let subdomain = WireSubdomain {

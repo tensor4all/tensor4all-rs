@@ -14,6 +14,15 @@ Rules enforced here:
    ``SELF_FEATURE_DEV_DEPENDENCIES``, and then its sources must never name the
    crate by its own extern path (``tensor4all_core::`` inside core), so the
    unit-test build and the linked library never meet as two type identities.
+4. Only ``tensor4all-core`` may name a tensorbackend bridge item
+   (``BRIDGE_ITEMS``: the raw tenferro bridge functions and types, ``Storage``
+   and its low-level helpers) through a ``tensor4all_tensorbackend::`` path.
+   Everything else goes through core's high-level API (tensor4all-rs#1380).
+   The Cargo-level rule 1 cannot see this reach-through, since every crate
+   already depends on tensorbackend. Existing sites are pinned per file and
+   item in ``BRIDGE_BASELINE``, which may only shrink: a new site and a stale
+   pin both fail. ``--update-baseline`` rewrites it and refuses CI, and growth unless
+   ``--allow-growth`` is given.
 
 Dev-dependencies on tenferro-* are permitted (test fixtures). The Cargo.toml
 parser is stdlib-only (tomllib requires Python 3.11, while CI's runner python3
@@ -24,8 +33,11 @@ is 3.10) and understands the bare ``name = value`` forms plus
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,6 +82,57 @@ SELF_FEATURE_DEV_DEPENDENCIES: frozenset[str] = frozenset(
 # library once and are therefore safe) are not scanned.
 _COMMENT_LINE_RE = re.compile(r"^\s*//")
 
+# Rule 4: the tensorbackend items only tensor4all-core may name. They are the
+# raw tenferro bridge (native-tensor conversions, einsum entry points, their
+# plan, input and error types) and the low-level `Storage` layer. Scalar and
+# layout vocabulary that core's public API also speaks (`StorageScalar`,
+# `StorageKind`, `TensorElement`, `Matrix`, the contexts and the `explicit`
+# frontend) is not listed.
+BRIDGE_ITEMS: frozenset[str] = frozenset(
+    {
+        # tenferro bridge
+        "BridgeError",
+        "NativeEinsumPlan",
+        "NativeTensorReadInput",
+        "conj_native_tensor",
+        "dense_native_tensor_from_col_major",
+        "dense_native_tensor_from_col_major_owned",
+        "dense_native_tensor_read_input_from_col_major",
+        "diag_native_tensor_from_col_major",
+        "einsum_native_subscripts",
+        "einsum_native_tensor_reads",
+        "einsum_native_tensor_reads_in",
+        "einsum_native_tensors",
+        "einsum_native_tensors_in",
+        "einsum_native_tensors_owned",
+        "einsum_native_tensors_owned_in",
+        "native_tensor_primal_to_dense_col_major",
+        "native_tensor_primal_to_diag",
+        "print_and_reset_native_einsum_profile",
+        "qr_native_tensor",
+        "reset_native_einsum_profile",
+        "storage_from_payload_native",
+        "storage_payload_native",
+        "storage_payload_native_read_input",
+        "storage_to_native_tensor",
+        # low-level storage layer
+        "NonfiniteFlags",
+        "Storage",
+        "StorageError",
+        "StorageResult",
+        "StructuredStorage",
+        "SumFromStorage",
+        "scale_target_dtype",
+    }
+)
+# Crates allowed to name bridge items: the owner and its one sanctioned consumer.
+BRIDGE_OWNERS: frozenset[str] = frozenset({"tensor4all-tensorbackend", "tensor4all-core"})
+BRIDGE_SCAN_ROOTS: tuple[str, ...] = ("crates", "tests", "benchmarks", "docs/tutorial-code")
+BRIDGE_BASELINE = Path("scripts/tensorbackend-bridge-sites-baseline.json")
+_BRIDGE_EXTERN = "tensor4all_tensorbackend"
+_ALIAS_RE = re.compile(r"\buse\s+" + _BRIDGE_EXTERN + r"\s+as\s+([A-Za-z_]\w*)\s*;")
+_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+
 
 def check_self_dev_dependencies(manifests: list[Path]) -> list[str]:
     """Return violations of rule 3 (self dev-dependencies)."""
@@ -98,6 +161,156 @@ def check_self_dev_dependencies(manifests: list[Path]) -> list[str]:
                         "in unit tests)"
                     )
     return violations
+
+
+def _strip_plain_comments(text: str) -> str:
+    """Drop ``//`` comments but keep doc-comment text (``///``, ``//!``).
+
+    A doc example in another crate that names a bridge item teaches the
+    reach-through as much as code does, so it counts. Block comments are rare
+    here and are not stripped.
+    """
+    kept = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("///") or stripped.startswith("//!"):
+            kept.append(stripped[3:])
+            continue
+        position = line.find("//")
+        kept.append(line if position < 0 else line[:position])
+    return "\n".join(kept)
+
+
+def _path_tail(text: str, start: int) -> str:
+    """Return the path after ``prefix::`` at ``start``: one segment chain or a
+    brace group with its nested groups."""
+    if start < len(text) and text[start] == "{":
+        depth = 0
+        for end in range(start, len(text)):
+            if text[end] == "{":
+                depth += 1
+            elif text[end] == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : end + 1]
+        return text[start:]
+    match = re.match(r"[A-Za-z_][\w:]*(?:::\{)?", text[start:])
+    if match is None:
+        return ""
+    tail = match.group(0)
+    if tail.endswith("{"):
+        # `a::b::{...}`: include the brace group.
+        return tail[:-1] + _path_tail(text, start + len(tail) - 1)
+    return tail
+
+
+def bridge_sites_in(text: str) -> Counter:
+    """Count bridge items named through ``tensor4all_tensorbackend::`` paths
+    (or an alias of the crate) in one Rust source."""
+    code = _strip_plain_comments(text)
+    prefixes = [_BRIDGE_EXTERN, *_ALIAS_RE.findall(code)]
+    found: Counter = Counter()
+    pattern = re.compile(r"\b(?:" + "|".join(map(re.escape, prefixes)) + r")::")
+    for match in pattern.finditer(code):
+        for token in _IDENT_RE.findall(_path_tail(code, match.end())):
+            if token in BRIDGE_ITEMS:
+                found[token] += 1
+    return found
+
+
+def _owning_crate(relative: Path) -> str | None:
+    parts = relative.parts
+    if len(parts) >= 2 and parts[0] == "crates":
+        return parts[1]
+    return None
+
+
+def scan_bridge_sites(root: Path) -> Counter:
+    """Return ``{(path, item): count}`` for every Rust source outside the
+    bridge owners: the workspace crates, the isolated ``tests/`` workspaces,
+    the benchmark crate and the tutorial code."""
+    sites: Counter = Counter()
+    for top in BRIDGE_SCAN_ROOTS:
+        base = root / top
+        if not base.is_dir():
+            continue
+        for source in sorted(base.rglob("*.rs")):
+            relative = source.relative_to(root)
+            if "target" in relative.parts:
+                continue
+            if _owning_crate(relative) in BRIDGE_OWNERS:
+                continue
+            for item, count in bridge_sites_in(
+                source.read_text(encoding="utf-8")
+            ).items():
+                sites[(relative.as_posix(), item)] += count
+    return sites
+
+
+def load_bridge_baseline(path: Path) -> Counter:
+    if not path.exists():
+        return Counter()
+    entries = json.loads(path.read_text(encoding="utf-8"))
+    baseline: Counter = Counter()
+    for entry in entries:
+        baseline[(entry["path"], entry["item"])] += int(entry["count"])
+    return baseline
+
+
+def render_bridge_baseline(sites: Counter) -> str:
+    lines = [
+        json.dumps({"path": path, "item": item, "count": count})
+        for (path, item), count in sorted(sites.items())
+    ]
+    if not lines:
+        return "[]\n"
+    return "[\n  " + ",\n  ".join(lines) + "\n]\n"
+
+
+def check_bridge_sites(root: Path) -> list[str]:
+    """Return violations of rule 4 against the pinned baseline."""
+    current = scan_bridge_sites(root)
+    baseline = load_bridge_baseline(root / BRIDGE_BASELINE)
+    violations: list[str] = []
+    for key in sorted(set(current) | set(baseline)):
+        have, pinned = current[key], baseline[key]
+        path, item = key
+        if have > pinned:
+            violations.append(
+                f"{path}: names tensorbackend bridge item `{item}` {have} time(s), "
+                f"baseline pins {pinned}; only tensor4all-core may name it. Use "
+                "core's high-level API, or add the missing seam to core (#1380)"
+            )
+        elif have < pinned:
+            violations.append(
+                f"{path}: stale bridge baseline entry `{item}`: baseline pins "
+                f"{pinned}, {have} found; shrink it with "
+                "`python3 scripts/check-crate-boundaries.py --update-baseline`"
+            )
+    return violations
+
+
+def update_bridge_baseline(root: Path, allow_growth: bool = False) -> int:
+    if os.environ.get("CI"):
+        print("crate-boundary check: --update-baseline refuses to run in CI",
+              file=sys.stderr)
+        return 2
+    current = scan_bridge_sites(root)
+    baseline = load_bridge_baseline(root / BRIDGE_BASELINE)
+    grown = sorted(key for key in current if current[key] > baseline[key])
+    if grown and not allow_growth:
+        for path, item in grown:
+            print(f"crate-boundary check: refusing to record new bridge site "
+                  f"`{item}` in {path}", file=sys.stderr)
+        print("Remove the new site. Recording new debt needs --allow-growth and a "
+              "justification in the PR.", file=sys.stderr)
+        return 1
+    target = root / BRIDGE_BASELINE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(render_bridge_baseline(current), encoding="utf-8")
+    print(f"crate-boundary check: wrote {BRIDGE_BASELINE} "
+          f"({sum(current.values())} pinned bridge sites)")
+    return 0
 
 
 def _exceptions_from_env() -> dict[str, frozenset[str]]:
@@ -310,13 +523,27 @@ def find_dev_dependency_cycles(manifests: list[Path]) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root-dir", type=Path, default=ROOT)
+    parser.add_argument(
+        "--update-baseline",
+        action="store_true",
+        help="rewrite the rule-4 bridge baseline; refuses growth and CI",
+    )
+    parser.add_argument(
+        "--allow-growth",
+        action="store_true",
+        help="with --update-baseline, record new sites; the growth must be "
+        "justified in the PR",
+    )
     args = parser.parse_args()
     root = args.root_dir.resolve()
+    if args.update_baseline:
+        return update_bridge_baseline(root, args.allow_growth)
     manifests = crate_manifests(root)
     violations = [
         *check_tenferro_boundaries(manifests),
         *find_dev_dependency_cycles(manifests),
         *check_self_dev_dependencies(manifests),
+        *check_bridge_sites(root),
     ]
     if violations:
         print("crate-boundary check failed:", file=sys.stderr)
