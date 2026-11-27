@@ -85,7 +85,7 @@ pub use tensorci1::{crossinterpolate1, TCI1Options, TCI1SweepStrategy, TensorCI1
 pub use tensorci2::{
     crossinterpolate2, crossinterpolate2_matrix, crossinterpolate2_matrix_with_rng,
     crossinterpolate2_with_rng, crossinterpolate2_with_rng_on_session, optimize_with_finder,
-    optimize_with_finder_with_rng, MatrixSamplingStats, MatrixShape, MatrixTCI2Result,
-    PivotSearchStrategy, Sweep2Strategy, TCI2OptimizationResult, TCI2Options, TCI2Termination,
-    TensorCI2,
+    optimize_with_finder_with_rng, FoldedMatrixTT, MatrixSamplingStats, MatrixShape,
+    MatrixTCI2Result, PivotSearchStrategy, Sweep2Strategy, TCI2OptimizationResult, TCI2Options,
+    TCI2Termination, TensorCI2,
 };

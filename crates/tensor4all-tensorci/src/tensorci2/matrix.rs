@@ -47,6 +47,9 @@ use tensor4all_core::{MatrixLuciScalar, MultiIndex, MultiIndexCache, Scalar};
 use tensor4all_simplett::{SimpleTensorTrain, TTScalar, Tensor3Ops};
 use tensor4all_tensorbackend::Matrix;
 
+mod folded;
+pub use folded::FoldedMatrixTT;
+
 /// Shape of the matrix returned by the callback at every point.
 ///
 /// # Examples
@@ -299,21 +302,7 @@ impl<T: Scalar + TTScalar + Default + MatrixLuciScalar> MatrixTCI2Result<T> {
         let tci = &self.result.tci;
         let local_dims = tci.local_dims();
         let n_physical = local_dims.len().saturating_sub(2);
-        if x.len() != n_physical {
-            return Err(TCIError::DimensionMismatch {
-                message: format!(
-                    "expected {n_physical} physical coordinates, got {}",
-                    x.len()
-                ),
-            });
-        }
-        for (k, (&xk, &dk)) in x.iter().zip(&local_dims[1..=n_physical]).enumerate() {
-            if xk >= dk {
-                return Err(TCIError::IndexOutOfBounds {
-                    message: format!("coordinate {k} is {xk}, local dimension is {dk}"),
-                });
-            }
-        }
+        check_physical_point(&local_dims[1..=n_physical], x)?;
         if !tci.is_site_tensors_available() {
             return Err(TCIError::InvalidOperation {
                 message: "site tensors are not available".to_string(),
@@ -345,6 +334,27 @@ impl<T: Scalar + TTScalar + Default + MatrixLuciScalar> MatrixTCI2Result<T> {
         let out = col_major_gemm(&current, rows, width, &tail, cols);
         Ok(Matrix::from_col_major_vec(rows, cols, out))
     }
+}
+
+/// Checks that `x` has one in-range coordinate per physical site.
+fn check_physical_point(physical_dims: &[usize], x: &[usize]) -> Result<()> {
+    let n_physical = physical_dims.len();
+    if x.len() != n_physical {
+        return Err(TCIError::DimensionMismatch {
+            message: format!(
+                "expected {n_physical} physical coordinates, got {}",
+                x.len()
+            ),
+        });
+    }
+    for (k, (&xk, &dk)) in x.iter().zip(physical_dims).enumerate() {
+        if xk >= dk {
+            return Err(TCIError::IndexOutOfBounds {
+                message: format!("coordinate {k} is {xk}, local dimension is {dk}"),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Column-major `(m x k) * (k x n)` product in plain loops.
