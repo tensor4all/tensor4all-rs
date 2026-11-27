@@ -12,7 +12,7 @@ use std::rc::Rc;
 
 use anyhow::{anyhow, Result};
 use quanticsgrids::{DiscretizedGrid, InherentDiscreteGrid};
-use tensor4all_core::MultiIndexCache;
+use tensor4all_core::{MultiIndexCache, DEFAULT_RETAINED_BYTE_LIMIT};
 use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar};
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetci::materialize::{to_treetn, to_treetn_in};
@@ -35,8 +35,21 @@ fn new_memo_cache<V>(local_dims: &[usize]) -> QtciResult<MultiIndexCache<V>>
 where
     V: Clone + Send + Sync + 'static,
 {
-    MultiIndexCache::new(local_dims).map_err(|error| QuanticsTCIError::InvalidConfiguration {
-        message: format!("quantics index space cannot be memoized: {error}"),
+    new_memo_cache_with_limit(local_dims, DEFAULT_RETAINED_BYTE_LIMIT)
+}
+
+/// [`new_memo_cache`] with an explicit retained-byte limit.
+fn new_memo_cache_with_limit<V>(
+    local_dims: &[usize],
+    retained_byte_limit: usize,
+) -> QtciResult<MultiIndexCache<V>>
+where
+    V: Clone + Send + Sync + 'static,
+{
+    MultiIndexCache::with_retained_byte_limit(local_dims, retained_byte_limit).map_err(|error| {
+        QuanticsTCIError::InvalidConfiguration {
+            message: format!("quantics index space cannot be memoized: {error}"),
+        }
     })
 }
 
@@ -95,6 +108,30 @@ fn prepare_pivots(
     Ok(pivots)
 }
 
+/// The starting pivots of a run on a grid: the caller's initial pivots (grid
+/// indices) converted with `to_quantics`, then the random ones.
+///
+/// Shared by every entry point, so the conversion message and the stream
+/// consumption (random draws only, before any evaluation) are defined once.
+fn grid_pivots<E: std::fmt::Display>(
+    initial_pivots: Option<Vec<Vec<usize>>>,
+    local_dims: &[usize],
+    to_quantics: impl Fn(&[usize]) -> std::result::Result<Vec<usize>, E>,
+    options: &QtciOptions,
+    rng: &mut dyn rand::RngCore,
+) -> Result<Vec<Vec<usize>>> {
+    prepare_pivots(
+        initial_pivots,
+        local_dims,
+        |pivot| {
+            to_quantics(pivot)
+                .map_err(|error| anyhow!("initial pivot {pivot:?} conversion failed: {error}"))
+        },
+        options.n_random_init_pivot,
+        rng,
+    )
+}
+
 /// The memoization cache a quantics run shares with its target evaluator.
 ///
 /// The cache lives for one run and is dropped with it. It encodes quantics
@@ -111,16 +148,24 @@ type MemoCache<V> = Rc<RefCell<MultiIndexCache<V>>>;
 /// batched call, and inserted; a failed evaluation returns before anything is
 /// inserted, so a failure never becomes a cached value. Repeated points inside
 /// one batch are converted and evaluated once.
-fn site_evaluator<T, V, C, F>(
+///
+/// The cache stores values of type `W` (the target's whole answer for a point)
+/// and `project` reads the evaluator's own value out of a cached `W`. A run
+/// that owns its cache uses `W = V` and a clone; the components of one
+/// multicomponent call share a cache of all component values per point and each
+/// projects its own component (see [`shared_sampling`]).
+fn site_evaluator<T, W, V, C, F, P>(
     convert: C,
     evaluate: F,
-    cache: MemoCache<V>,
+    cache: MemoCache<W>,
+    project: P,
 ) -> impl Fn(GlobalIndexBatch<'_>) -> Result<Vec<V>>
 where
     T: Copy,
-    V: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
     C: Fn(&[usize]) -> Result<Vec<T>>,
-    F: Fn(QuanticsBatch<'_, T>) -> Result<Vec<V>>,
+    F: Fn(QuanticsBatch<'_, T>) -> Result<Vec<W>>,
+    P: Fn(&W) -> V,
 {
     move |batch: GlobalIndexBatch<'_>| {
         let shape = [batch.n_sites(), batch.n_points()];
@@ -156,6 +201,7 @@ where
                 );
                 Ok(values)
             })
+            .map(|values| values.iter().map(&project).collect())
             .map_err(|error| match error {
                 tensor4all_core::CachedBatchError::Evaluation(source) => source,
                 other => anyhow::Error::new(other),
@@ -168,7 +214,6 @@ where
 fn run_treetci_batch<V, F>(
     local_dims: Vec<usize>,
     evaluate: F,
-    cache: MemoCache<V>,
     pivots: Vec<Vec<usize>>,
     options: &QtciOptions,
     context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
@@ -244,7 +289,6 @@ where
     // Drop the evaluator so it releases its cache handle; the caller reads the
     // counters from its own handle.
     drop(evaluate);
-    drop(cache);
 
     Ok((tci, tt, result.ranks, result.errors))
 }
@@ -800,29 +844,21 @@ where
         },
         f,
         cache.clone(),
+        V::clone,
     );
     // Erase the caller's RNG type once so the run below is instantiated once
     // per scalar type instead of once per (scalar, RNG) pair.
     let mut stream: &mut R = rng;
-    let pivots = prepare_pivots(
+    let pivots = grid_pivots(
         initial_pivots,
         &local_dims,
-        |pivot| {
-            grid.grididx_to_quantics(pivot)
-                .map_err(|error| anyhow!("initial pivot {pivot:?} conversion failed: {error}"))
-        },
-        options.n_random_init_pivot,
+        |pivot| grid.grididx_to_quantics(pivot),
+        &options,
         &mut stream,
     )?;
 
-    let (tci, tt, ranks, errors) = run_treetci_batch(
-        local_dims,
-        evaluate,
-        cache.clone(),
-        pivots,
-        &options,
-        context,
-    )?;
+    let (tci, tt, ranks, errors) =
+        run_treetci_batch(local_dims, evaluate, pivots, &options, context)?;
     let cache_stats = memo_cache_stats(&cache);
     Ok((
         QuanticsTensorCI2::from_discretized(tt, tci, grid.clone(), cache_stats),
@@ -1405,29 +1441,21 @@ where
         },
         f,
         cache.clone(),
+        V::clone,
     );
     // Erase the caller's RNG type once so the run below is instantiated once
     // per scalar type instead of once per (scalar, RNG) pair.
     let mut stream: &mut R = rng;
-    let pivots = prepare_pivots(
+    let pivots = grid_pivots(
         initial_pivots,
         &local_dims,
-        |pivot| {
-            grid.grididx_to_quantics(pivot)
-                .map_err(|error| anyhow!("initial pivot {pivot:?} conversion failed: {error}"))
-        },
-        options.n_random_init_pivot,
+        |pivot| grid.grididx_to_quantics(pivot),
+        &options,
         &mut stream,
     )?;
 
-    let (tci, tt, ranks, errors) = run_treetci_batch(
-        local_dims,
-        evaluate,
-        cache.clone(),
-        pivots,
-        &options,
-        context,
-    )?;
+    let (tci, tt, ranks, errors) =
+        run_treetci_batch(local_dims, evaluate, pivots, &options, context)?;
     let cache_stats = memo_cache_stats(&cache);
     Ok((
         QuanticsTensorCI2::from_inherent(tt, tci, grid, cache_stats),
@@ -1501,6 +1529,9 @@ where
 {
     quanticscrossinterpolate_discrete_batch(size, pointwise_index_batch(f), initial_pivots, options)
 }
+
+pub(crate) mod shared_sampling;
+pub(crate) use shared_sampling::SharedSampling;
 
 #[cfg(test)]
 mod tests;

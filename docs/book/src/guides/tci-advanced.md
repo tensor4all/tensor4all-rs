@@ -198,6 +198,9 @@ and `insert`.
 - The quantics TCI entry points now memoize their target this way, which removed
   the record-only `HashMap<Vec<usize>, V>` that used to sit on that path
   (issue #747).
+- The components of `quanticscrossinterpolate_multicomponent` share one such memo
+  per call: a point one component evaluated is not requested from the callback
+  again (issue #1463). This assumes the callback is a pure function of the point.
 
 ## Manual Integral
 
