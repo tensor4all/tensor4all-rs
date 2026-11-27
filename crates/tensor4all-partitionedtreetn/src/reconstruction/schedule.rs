@@ -373,7 +373,13 @@ impl<V> Default for MergeRefineOptions<V> {
 pub struct MergeRefineLevelReport {
     /// One-based executed level number.
     pub level: usize,
-    /// Potentially merging levels still to execute, including this level.
+    /// `L_t`: the number of potentially merging levels at or after this level,
+    /// up to the last executed level. A level potentially merges when the
+    /// tensor-free forecast finds an input sibling pair there; this level counts
+    /// only if it is one of them. A potentially merging level reserves
+    /// `allocated_error = remaining_before / merging_levels_left`. Any other level
+    /// reserves zero and reports the count of the potentially merging levels
+    /// after it, so a value above zero on such a level is not a divisor it used.
     /// `Some` only in tolerance mode; other policies do not use this forecast.
     pub merging_levels_left: Option<usize>,
     /// Absolute error allowance reserved for this level; zero in exact mode.
@@ -503,11 +509,14 @@ pub struct MergeRefineReport {
     pub work_items_per_level: Vec<usize>,
     /// Largest number of live work items.
     pub peak_work_items: usize,
-    /// Output-region refinement decisions, including decisions whose selected
-    /// children all cancel or are pruned. This counts selected split decisions,
-    /// rather than nonempty regions retained in the result. Counted once per region
-    /// and level in which at least one axis refined, because refining is a decision
-    /// made per axis at one level.
+    /// Output-region refinement decisions: selected split decisions, not a count
+    /// of nonempty output regions retained in the result. A selection counts even
+    /// when all of its children are empty after exact cancellation or are cut by
+    /// [`MergeRefineOptions::output_regions`], including a candidate with no
+    /// child key left at all, so it can exceed the number of regions the run
+    /// keeps; read [`Self::region_count`] for the returned representation.
+    /// Counted once per region and level in which at least one axis refined,
+    /// because refining is a decision made per axis at one level.
     pub refined_regions: usize,
     /// Region-axis refinement decisions that stopped: the region's merged candidate
     /// already fit the goal (which stops every axis still refining), or splitting
@@ -523,7 +532,10 @@ pub struct MergeRefineReport {
     /// Child regions of the refinements this run carried out that
     /// [`MergeRefineOptions::output_regions`] excluded, so they were never
     /// computed. Each pruned child is counted once, at the level where it was cut,
-    /// not once per descendant. Only refinements that were kept count: a rank-goal
+    /// not once per descendant. It is `2^(refined axes)` minus the children the
+    /// selected split kept, per counted [`Self::refined_regions`] decision, so a
+    /// counted decision whose child keys the selection cut entirely contributes
+    /// all `2^(refined axes)` of them. Only refinements that were kept count: a rank-goal
     /// probe that was discarded, or an axis that stopped, refined nothing and cuts
     /// nothing, and a region that stopped refining keeps its unsplit prefix. This is a coverage count and is kept apart from
     /// [`Self::error_bound`], which says nothing about regions that were never
@@ -952,8 +964,11 @@ where
 #[derive(Debug, Clone)]
 pub struct CoordinateGroup {
     /// This axis' selected indices in input significance order, most significant
-    /// first. The scheduler requires between one and `usize::BITS` indices per
-    /// group so every input and output prefix fits its packed coordinate.
+    /// first. The scheduler requires at least one index per group and fewer than
+    /// `usize::BITS` indices across all groups together (at most 63 on a 64-bit
+    /// target), because it counts the coordinates of the whole selection in one
+    /// word; a larger selection is rejected with
+    /// [`PartitionedTreeTNError::InvalidOptions`] before any operator is applied.
     pub inputs: Vec<DynIndex>,
     /// This axis' selected indices in output significance order: `outputs[0]`
     /// carries this axis' most significant frequency bit.
@@ -1129,11 +1144,6 @@ impl ScheduleGeometry {
                     "every coordinate group needs at least one selected index",
                 ));
             }
-            if axis.inputs.len() > usize::BITS as usize {
-                return Err(invalid(
-                    "a coordinate group exceeds usize coordinate capacity; use at most usize::BITS indices per group",
-                ));
-            }
             if axis.inputs.len() != axis.outputs.len() {
                 return Err(invalid(
                     "every coordinate group needs one output index per input index",
@@ -1144,6 +1154,18 @@ impl ScheduleGeometry {
                     "a coordinate group's inputs and outputs must be the same full indices",
                 ));
             }
+        }
+        // The dyadic input-leaf check counts coordinates of the whole selection in
+        // one word (its Kraft sum is `2^total`), so the total, not only each group,
+        // must stay below `usize::BITS`. Rejecting it here keeps the documented
+        // capacity and the schedulable capacity the same.
+        let total_bits = axes
+            .iter()
+            .try_fold(0usize, |total, axis| total.checked_add(axis.inputs.len()));
+        if total_bits.is_none_or(|total| total >= usize::BITS as usize) {
+            return Err(invalid(
+                "the coordinate groups exceed usize coordinate capacity; use fewer than usize::BITS selected indices across all groups",
+            ));
         }
         let assigned: Vec<DynIndex> = axes
             .iter()
@@ -1264,11 +1286,9 @@ impl ScheduleGeometry {
                     "a requested output region must not fix more bits than its coordinate group has output indices",
                 ));
             }
-            if depth >= usize::BITS as usize {
-                return Err(invalid(
-                    "a requested output region must fix fewer bits than a machine word",
-                ));
-            }
+            // INVARIANT: depth <= outputs.len() < usize::BITS, because
+            // ScheduleGeometry::new bounds the total selection, so this shift
+            // cannot overflow.
             if value >> depth != 0 {
                 return Err(invalid(
                     "a requested output region's prefix must be smaller than 2^depth",
@@ -1553,10 +1573,11 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// # Errors
 /// Returns [`PartitionedTreeTNError::InvalidOptions`] for a non-binary or empty
 /// selection, an `output_depth` above the selection depth, an empty
-/// coordinate group or one wider than `usize::BITS`, an empty
+/// coordinate group, `usize::BITS` or more selected indices across all
+/// coordinate groups (or in the selection without groups), an empty
 /// [`MergeRefineOptions::output_regions`], an [`OutputRegion`] that lists a
 /// different number of axes than the coordinate groups, fixes more bits than
-/// its group has output indices or at least `usize::BITS` bits, or has a prefix
+/// its group has output indices, or has a prefix
 /// that does not fit its depth, a `max_work_items`
 /// limit below the present input-leaf count, a preimage
 /// whose leaves do not form a valid dyadic prefix code or do not cover the
@@ -2567,7 +2588,7 @@ struct MergeCounters {
 impl MergeCounters {
     /// Count only the selected refinement, never its discarded probes.
     fn record_refinement(&mut self, axes: usize, kept_children: usize) -> Result<()> {
-        // INVARIANT: validate_leaf_geometry accepts fewer than usize::BITS
+        // INVARIANT: ScheduleGeometry::new accepts fewer than usize::BITS
         // selected bits, and child_keys only filters that split's binary grid.
         let pruned = (1usize << axes) - kept_children;
         self.refined_regions = checked_add(self.refined_regions, 1)?;

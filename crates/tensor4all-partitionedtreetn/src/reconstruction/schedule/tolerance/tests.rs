@@ -63,7 +63,8 @@ fn geometry(lengths: &[usize]) -> ScheduleGeometry {
 
 #[test]
 fn child_planning_bounds_allocation_and_prunes_before_expansion() {
-    let geom = geometry(&vec![1; 64]);
+    let width = usize::BITS as usize - 1;
+    let geom = geometry(&vec![1; width]);
     let root = geom.root_output(0);
     let axes = geom.refining_axes(&root, 1);
     let error = geom
@@ -77,7 +78,7 @@ fn child_planning_bounds_allocation_and_prunes_before_expansion() {
             ..
         }
     ));
-    let wanted = vec![vec![(1, 0); 64]];
+    let wanted = vec![vec![(1, 0); width]];
     let children = geom
         .child_keys(&root, &axes, Some(&wanted), (1, "max_work_items"))
         .unwrap();
@@ -92,7 +93,7 @@ fn child_planning_bounds_allocation_and_prunes_before_expansion() {
         .child_keys(&root, &[], None, (0, "max_work_items"))
         .is_err());
     // The private key planner rejects packed-coordinate overflow rather than wrapping.
-    let geom = geometry(&[usize::BITS as usize]);
+    let geom = geometry(&[usize::BITS as usize - 1]);
     let mut key = geom.root_output(0);
     key.prefix[0] = (64, usize::MAX);
     assert!(geom
@@ -460,6 +461,85 @@ fn serial_joint_probes_keep_the_chosen_partition_and_its_ledger() {
     assert_eq!(selected.regions.len(), 1);
     assert_eq!(counters.pruned_regions, 3);
     assert_eq!(counters.refined_regions, 1);
+}
+
+/// A region that intersects no requested output region keeps no child key in
+/// any candidate. Every candidate then stores zero parameters, so the singles
+/// pass and the joint split wins the tie. The documented counter semantics
+/// (#1130 design: selected split decisions, including selections whose children
+/// are all pruned) count that selection as one refinement and all `2^axes` of
+/// its children as pruned, while nothing is restricted, added, or retained.
+#[test]
+fn fully_pruned_region_counts_its_selected_split_and_every_child() {
+    let mut geom = geometry(&[2, 2]);
+    geom.spectators = vec![Projector::new()];
+    let region = OutputKey {
+        spectator: 0,
+        prefix: vec![(1, 1), (1, 1)],
+    };
+    let wanted = vec![vec![(1, 0), (1, 0)]];
+    let items: BTreeMap<_, _> = (0..2)
+        .flat_map(|a| {
+            (0..2).map(move |b| (vec![(1, a), (1, b)], Item::<usize> { terms: Vec::new() }))
+        })
+        .collect();
+    let shape = merge_shape(&items).unwrap();
+    let options = MergeRefineOptions {
+        merge_policy: MergePolicy::Tolerance,
+        ..Default::default()
+    };
+    let context = ProbeContext {
+        geometry: &geom,
+        center: &0,
+        options: &options,
+        share: 0.0,
+    };
+    let trial = RegionTrial {
+        context: &context,
+        region: &region,
+        items: &items,
+        wanted: Some(&wanted),
+        budget: 1.0,
+        shape,
+        max_children: (4096, "max_work_items"),
+        retained: RetainedWork::default(),
+    };
+    assert_eq!(geom.refining_axes(&region, 2), vec![0, 1]);
+    let mut counters = MergeCounters::default();
+    let selected = trial.choose(2, &mut counters).unwrap();
+    assert_eq!(selected.kind, Kind::Joint);
+    assert!(selected.regions.is_empty());
+    assert_eq!(selected.parameters, 0);
+    assert_eq!(
+        (
+            counters.refined_regions,
+            counters.stopped_regions,
+            counters.pruned_regions
+        ),
+        (1, 0, 4)
+    );
+    assert_eq!((counters.additions, counters.projections), (0, 0));
+
+    let mut counters = MergeCounters::default();
+    let (next, components) = advance(
+        &context,
+        BTreeMap::from([(region, items)]),
+        2,
+        Some(&wanted),
+        1.0,
+        &mut counters,
+    )
+    .unwrap();
+    assert!(next.is_empty());
+    assert!(components.is_empty());
+    assert_eq!(
+        (
+            counters.refined_regions,
+            counters.stopped_regions,
+            counters.pruned_regions
+        ),
+        (1, 0, 4)
+    );
 }
 
 #[test]

@@ -7,7 +7,10 @@ use super::{
     ScheduleGeometry,
 };
 use crate::projector::index::has_overlapping_pair;
-use crate::{DynIndex, IdxTensor, PartitionedTreeTN, Projector, SubDomainTreeTN, TreeTN};
+use crate::{
+    DynIndex, IdxTensor, PartitionedTreeTN, PartitionedTreeTNError, Projector, SubDomainTreeTN,
+    TreeTN,
+};
 /// A region key with the given per-axis prefixes and no spectator constraint.
 fn prefix_key(prefix: Vec<(usize, usize)>) -> OutputKey {
     OutputKey {
@@ -31,36 +34,76 @@ fn axis_lengths_geometry(lengths: &[usize]) -> ScheduleGeometry {
     ScheduleGeometry::new(&bits, Some(&axes)).expect("geometry")
 }
 
+/// The whole selection is counted in one word (the dyadic leaf check sums
+/// `2^total` coordinates), so the capacity is `usize::BITS - 1` selected indices
+/// across all groups. Construction rejects `usize::BITS` with the typed
+/// invalid-options error, whether one group or several groups reach it, and a
+/// selection one bit smaller is accepted and its leaves validate.
 #[test]
-fn coordinate_groups_validate_packed_prefix_capacity_before_use() {
-    let capacity = usize::BITS as usize;
+fn coordinate_groups_capacity_is_one_bit_below_a_word_in_total() {
+    let capacity = usize::BITS as usize - 1;
     let sites: Vec<_> = (0..capacity + 1).map(|_| DynIndex::new_dyn(2)).collect();
-    for groups in [None, Some(vec![CoordinateGroup::new(sites.clone())])] {
+    let rejected = [
+        None,
+        Some(vec![CoordinateGroup::new(sites.clone())]),
+        Some(vec![
+            CoordinateGroup::new(sites[..capacity].to_vec()),
+            CoordinateGroup::new(sites[capacity..].to_vec()),
+        ]),
+    ];
+    for groups in rejected {
         let error = ScheduleGeometry::new(&sites, groups.as_deref())
             .err()
-            .expect("oversized axis");
+            .expect("a selection of usize::BITS indices");
+        assert!(
+            matches!(error, PartitionedTreeTNError::InvalidOptions { .. }),
+            "{error:?}"
+        );
         assert!(error.to_string().contains("usize coordinate capacity"));
     }
-    let geometry = ScheduleGeometry::new(&sites[..capacity], None).expect("full-width axis");
-    let projector =
-        Projector::from_pairs(sites[..capacity].iter().cloned().map(|site| (site, 1))).unwrap();
-    let expected = vec![(capacity, usize::MAX)];
-    assert_eq!(geometry.input_prefix(&projector), Some(expected.clone()));
-    // Input metadata can fill a word. The OutputRegion contract separately
-    // requires a smaller depth so its prefix range is representable.
-    let output = OutputRegion::new(capacity - 1, usize::MAX >> 1);
+
+    let sites = &sites[..capacity];
+    let geometry = ScheduleGeometry::new(sites, None).expect("largest selection");
+    let projector = Projector::from_pairs(sites.iter().cloned().map(|site| (site, 1))).unwrap();
+    assert_eq!(
+        geometry.input_prefix(&projector),
+        Some(vec![(capacity, usize::MAX >> 1)])
+    );
+    let output = OutputRegion::new(capacity, usize::MAX >> 1);
     assert_eq!(
         geometry.output_prefix(&output).unwrap(),
-        vec![(capacity - 1, usize::MAX >> 1)]
+        vec![(capacity, usize::MAX >> 1)]
     );
     assert!(geometry
-        .output_prefix(&OutputRegion::new(capacity, 0))
+        .output_prefix(&OutputRegion::new(capacity + 1, 0))
         .is_err());
+    // The documented maximum is schedulable: its leaf geometry validates, with
+    // the Kraft sum reaching exactly `2^capacity` for complete coverage.
+    let halves = [0, 1].map(|bit| Projector::from_pairs([(sites[0].clone(), bit)]).unwrap());
+    let keys = validate_leaf_geometry(halves.iter(), &geometry, CoverageContract::Complete)
+        .expect("the largest selection validates");
+    assert_eq!(keys, BTreeSet::from([vec![(1, 0)], vec![(1, 1)]]));
+    assert!(validate_leaf_geometry(
+        [Projector::new()].iter(),
+        &geometry,
+        CoverageContract::Complete
+    )
+    .is_ok());
+    assert!(
+        validate_leaf_geometry(halves[..1].iter(), &geometry, CoverageContract::Complete).is_err()
+    );
+
     let groups = [
-        CoordinateGroup::new(sites[..capacity].to_vec()),
-        CoordinateGroup::new(sites[capacity..].to_vec()),
+        CoordinateGroup::new(sites[..capacity - 1].to_vec()),
+        CoordinateGroup::new(sites[capacity - 1..].to_vec()),
     ];
-    assert!(ScheduleGeometry::new(&sites, Some(&groups)).is_ok());
+    let geometry = ScheduleGeometry::new(sites, Some(&groups)).expect("largest split selection");
+    assert!(validate_leaf_geometry(
+        [Projector::new()].iter(),
+        &geometry,
+        CoverageContract::Complete
+    )
+    .is_ok());
 }
 
 /// A region stops an axis by keeping that axis' prefix shorter, so the axes that

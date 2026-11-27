@@ -6,7 +6,10 @@ type Level<V> = BTreeMap<OutputKey, BTreeMap<InputKey, Item<V>>>;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Plan {
+    /// Whether the forecast finds an input sibling pair at this level.
     pub active: bool,
+    /// `L_t`: active levels at or after this level, up to the executed depth.
+    /// Only an active level divides its remaining allowance by it.
     pub merging_levels_left: usize,
 }
 
