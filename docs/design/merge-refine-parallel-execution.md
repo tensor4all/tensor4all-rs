@@ -41,6 +41,162 @@ Its head `5fbd73e5` is the measured source; all consumed crates, benchmarks
 and the lockfile are identical at that head and merge. Preserve those settled
 semantics when designing the parallel merge seam.
 
+## Code-level answers at `281f5122`
+
+This section checks the five issue questions against `main` at `281f5122`
+(tenferro pinned at `5df83672`). Paths are relative to
+`crates/tensor4all-partitionedtreetn/src/reconstruction/` unless named.
+One finding corrects the prerequisite stated in #1497: see question 4.
+
+**1. Unit of parallelism.** Leaf applications are numerically independent:
+the restructured operator, each term's center and exact-block check, and the
+certified budget are all fixed before the first application
+(`target.rs:591-629`). The loop body reads only its own term
+(`target.rs:631-685`). Region bodies of one level share no tensors. Under
+Tolerance they do share admission (question 2). Amdahl ceilings follow from the
+CLEAN medians, assuming unlimited lanes and no dispatch cost. They are
+upper bounds, not speedups:
+
+| Case | (a) leaf share, ceiling | (b) region width | (b') input-parent share, ceiling | (a)+(b') ceiling |
+| --- | --- | ---: | --- | ---: |
+| m6a-r4-cap8 | 60.3% (98 leaves), 2.5x | 1 | 30.0% (≤ 35 per probe), 1.4x | 10x |
+| m6a-r6-cap16 | 11.3% (118 leaves), 1.13x | 1 | 74.8% (≤ 38 per probe), 4.0x | 7.2x |
+| ir-r8-cap64 (one run) | 37.6% (4 leaves), 1.6x | 1 | not measured | — |
+
+Shares come from the [baseline](../experiments/1497-baseline/README.md) and
+[granularity](../experiments/1497-merge-granularity/README.md) campaigns. Their
+Fourier times agree within 1%, so the last column, which adds the two, is approximate.
+Whole-region jobs, (b), have width one in every completed case and buy nothing.
+In the hottest R6 probe, the largest parent takes 16.9% of the parent time, which caps
+that probe near 6x. Neither campaign is decision grade. Both are downscaled
+(T = 0.1, caps 8/16). At the resolution of #1364 (R = 10, T = 0.01, 113 patches),
+no serial merge-refine run completes: exact is killed at 12 GB, and certified
+times out after 60 min. The serial algorithm is the first bottleneck there
+(#1373, #1130). The deciding measurement is a completed serial run of that
+workload with the same phase split (leaf application against eligible
+parent work) and its leaf count.
+
+**2. Budget allocation.** Every accuracy share is fixed before a level's
+items run, so no item reads a peer's measurement:
+
+- Rank goal: `charges` and `share` are computed from the whole incoming level
+  before the region loop (`schedule.rs:1882-1900`). `spent` is accumulated during the
+  loop (`schedule.rs:1946`, `1967`, `2002`, `2059`) but is read only after it
+  (`schedule.rs:2095`), when it sets the next level's `remaining`. Exact
+  uses share zero (`schedule.rs:1896-1897`).
+- Tolerance: `total_pairs` and each region's budget come from whole-level
+  shapes (`tolerance.rs:326-338`). A child's share is fixed from key and pair
+  counts before its tensor work (`tolerance.rs:213-217`).
+
+Two running quantities remain. `spent`, `incurred` and
+`counters.dropped_error` (`schedule.rs:2543`) are binary64 sums in traversal
+order. A parallel split must replay them in that order; worker subtotals do
+not suffice. Tolerance admission `RetainedWork` carries from region to region
+(`tolerance.rs:331`, `350`) and from child to child (`tolerance.rs:228`). A
+`ResourceLimit` there drops an optional candidate (`tolerance.rs:250`). This is
+a decision, not a float: a later region's chosen split depends on earlier
+regions' retained work whenever `max_work_items` (default 4096) or
+`max_terms` (default 2^20) binds. Fixing a per-region quota up front would
+change serial results in exactly those cases. Keeping admission serial
+changes nothing. No change to the allocation is needed.
+
+**3. Order of sums and of the report.** The serial path is already free of
+hash order:
+
+- Leaves follow the canonical patch order: the metadata key with projector
+  coordinates, ties broken by content digest. This is the order #1366 made public
+  (`target.rs:126-133`, `subdomain_tree_tn.rs:156-212`).
+  `application_error` is folded in that order (`schedule.rs:1804-1814`).
+- Live work is `BTreeMap<OutputKey, BTreeMap<InputKey, Item>>`
+  (`schedule.rs:1797`). The keys are derived-`Ord` prefix tuples
+  (`schedule.rs:1074-1082`). Regions run in `OutputKey` order, then own, axis
+  and joint candidates, then child keys in `child_keys` order.
+- Sibling sums are a left fold in `InputKey` order
+  (`schedule.rs:2401-2410`), paired by term index (`schedule.rs:2466`).
+- Level components fold by `hypot` in `OutputKey` order
+  (`schedule.rs:2088-2090`). Levels add in level order to `application_error`
+  (`schedule.rs:2144-2149`).
+
+That traversal is the canonical order. A parallel run must produce the same
+tensors and replay the same scalar sequence. Sorting finished outputs is not
+enough, because truncation decisions and the next level's share depend on
+intermediate values.
+
+**4. Dependency on the M7 prerequisite.** The roadmap's steps (c) and (a)
+change `TreeTNCachedEvaluator` only. This call chain never uses it:
+`CachedEvaluator` does not occur in `reconstruction/`, in
+`tensor4all-quanticstransform/src`, or in `tensor4all-treetn/src/operator`.
+Level zero contracts through the zip-up. At internal nodes it makes one N-ary
+`T::contract` (`tensor4all-treetn/src/treetn/contraction.rs:1834-1843`,
+`297-300`). Core labels its operands positionally
+(`tensor4all-core/src/defaults/contract.rs:1230-1275`), and tenferro plans
+them with `EinsumOptions::default()`
+(`tensor4all-tensorbackend/src/tenferro_bridge.rs:269`). At the pinned
+tenferro, default planning does not anneal and uses the deterministic greedy
+planner (`tenferro-einsum/src/planning/tree.rs:49-57`, `207-215`;
+tenferro-rs#2014, which closed tenferro-rs#1963). The planner tie that the M7
+prerequisite targets therefore does not apply to this path.
+[tree-patching-findings.md](./tree-patching-findings.md) still lists #1963 as
+open. This is a code-reading argument; no cross-lane test has been run. Two
+inputs remain unproven. The first is the operand order of each N-ary call: it
+comes from a BFS over the graph (`contraction.rs:1706`,
+`node_name_network.rs:492-502`), so it depends on node insertion order. The
+second is the SVD/QR/GEMM kernels, which the error contract records as
+thread-count dependent. Option (a) therefore need not wait for the
+cached-evaluator steps, and a topology/dtype allowlist is the wrong gate. Its
+gates are an explicit engine on the consumed path, which does not exist
+today (`patched_fourier.rs:154-160`, `schedule.rs:1672-1680`; #1376), and a
+cross-lane bitwise test at a fixed per-lane engine profile. That test covers
+a chain, a degree-3 tree with a site-free node, and f32/c32. The certified
+application stays chain-only (`application.rs:52-55`).
+
+**5. Memory.** `memory_limit` bounds one certified application's estimated
+working set (`tensor4all-treetn/src/operator/certified.rs:41-48`). The
+scheduler passes it unchanged to every leaf (`target.rs:657`). The exact
+path's #1279 guard refuses an oversized non-chain block before any
+application (`target.rs:595-617`, limit `2^28` elements at `target.rs:804`). Both
+are per application. With `q` applications in flight, the worst case is `q`
+working sets plus the retained images, which serial already holds until the
+loop ends (`target.rs:630`, `schedule.rs:1804`). At the 4 GiB default, `q = 3`
+already admits 12 GiB of estimates. A single certified
+application at R = 8 already peaks at 1.3 GB (#1373). In the measured M6a cases,
+the merge phase sets the peak, not level zero (R6: 111.7 MiB after
+applications, 888.8 MiB high-water mark). Parallel level zero therefore needs
+the window `K` of the section on windows, memory and failures. Dividing
+`memory_limit` by `q` would refuse inputs that fit serially.
+
+**Implementation outline (idiom of #1495).** First, extract the serial stages
+unchanged and compare them with the old function. Then add
+`schedule_merge_refine_on_lanes` and `patched_fourier_transform_on_lanes`, in which:
+
+1. Preparation (`target.rs:441-629`) runs once on one supplied engine.
+2. Leaf applications run in windows of `K` canonical jobs over the lanes.
+   Results are consumed in source order, so the fold at `schedule.rs:1814`
+   is unchanged.
+3. The level loop stays serial on one engine. Any later parent-level split
+   replays the scalar events of question 2 in traversal order.
+4. One lane uses the same code as several lanes; there is no
+   `lanes.len() == 1` branch.
+
+Tests that pin this, after `tests/adaptive_lanes.rs` and
+`tests/routing_oracle.rs`:
+
+- Lane counts 1, 2 and 4 with identical serial per-lane engines produce the
+  same bits for every floating `MergeRefineReport` field, including per-level
+  reports. They also produce equal counters and `work_items_per_level`, and
+  bitwise-equal node tensors under a consistent renaming of bond IDs.
+- The serial entry matches one lane only when the global engine has the same
+  profile.
+- The suite covers Exact, Measured and Certified application, Rank goal and
+  Tolerance, and a Tolerance case where `max_work_items` binds and rejects an
+  optional split.
+- Leaf costs are very uneven: one leaf is empty or tiny, and `K` is below,
+  equal to and above the lane count, with a partial last window.
+- It runs on a chain and a degree-3 tree with a site-free node, with f64, c64,
+  f32 and c32 data.
+- A routing test makes the global defaults unavailable.
+- Two failing leaves return the first failure in source order.
+
 ## What the baseline establishes
 
 An **incoming region job** is one iteration over the incoming level's
@@ -188,6 +344,8 @@ unavailable; a callback's thread identity is insufficient.
 
 The numerical prerequisite includes the roadmap's deterministic cached
 evaluator work, plus every application and decomposition path actually used.
+(Correction: the cached-evaluator steps are not on this call chain. See
+question 4 under "Code-level answers".)
 Start reproducibility acceptance with homogeneous serial CPU engines. More
 inner workers are a separate numerical profile requiring their own evidence.
 Unsupported profiles return a typed refusal; no implicit engine substitution

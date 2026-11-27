@@ -6,11 +6,16 @@ a new feature crate with a normal tenferro dependency fails; a renamed
 ``package = "tenferro-*"`` dependency fails; a dev-only tenferro dependency is
 allowed; an acyclic dev graph passes; a dev cycle fails with the full path; a stale exception tuple
 fails; a listed feature-only self dev-dependency passes, while an unlisted one or
-one whose sources name the crate's own extern path fails.
+one whose sources name the crate's own extern path fails. Rule 4 (#1380): core
+may name tensorbackend bridge items, another crate fails unless the site is
+pinned, nested groups and crate aliases are seen while comments and scalar
+vocabulary are not, a stale pin fails, and ``--update-baseline`` shrinks the pin
+but refuses growth without ``--allow-growth``.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -60,7 +65,7 @@ def write_fixture(files: dict[str, str]) -> Path:
 
 
 def run_check(
-    root: Path, exceptions: str | None = ""
+    root: Path, exceptions: str | None = "", extra_args: tuple[str, ...] = ()
 ) -> subprocess.CompletedProcess[str]:
     """Run the checker with an isolated exception map (test fixture).
 
@@ -75,7 +80,7 @@ def run_check(
     else:
         env["T4A_TEST_TENFERRO_EXCEPTIONS"] = exceptions
     return subprocess.run(
-        [PYTHON, str(SCRIPT), "--root-dir", str(root)],
+        [PYTHON, str(SCRIPT), "--root-dir", str(root), *extra_args],
         capture_output=True,
         text=True,
         env=env,
@@ -369,6 +374,126 @@ workspace = true
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("stale tenferro exception", result.stderr)
         self.assertIn("tenferro-einsum", result.stderr)
+
+
+    # ---- rule 4: tensorbackend bridge items (#1380) ----
+
+    def bridge_fixture(self, files: dict[str, str]) -> Path:
+        base = {
+            "crates/tensor4all-tensorbackend/Cargo.toml": TENSORBACKEND_MANIFEST,
+            "crates/tensor4all-demo/Cargo.toml": PLAIN_MANIFEST,
+        }
+        base.update(files)
+        return write_fixture(base)
+
+    def write_baseline(self, root: Path, entries: str) -> None:
+        (root / "scripts").mkdir(exist_ok=True)
+        (root / "scripts/tensorbackend-bridge-sites-baseline.json").write_text(
+            entries, encoding="utf-8"
+        )
+
+    def test_core_may_name_bridge_items(self) -> None:
+        root = self.bridge_fixture(
+            {
+                "crates/tensor4all-core/src/lib.rs": (
+                    "use tensor4all_tensorbackend::{Storage, NativeTensorReadInput};\n"
+                ),
+            }
+        )
+        result = run_check(root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_unpinned_bridge_item_in_another_crate_fails(self) -> None:
+        root = self.bridge_fixture(
+            {
+                "crates/tensor4all-demo/src/lib.rs": (
+                    "use tensor4all_tensorbackend::{explicit::{Session}, Storage};\n"
+                ),
+            }
+        )
+        result = run_check(root)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("crates/tensor4all-demo/src/lib.rs", result.stderr)
+        self.assertIn("`Storage`", result.stderr)
+        self.assertNotIn("`Session`", result.stderr)
+
+    def test_bridge_item_in_an_isolated_test_workspace_fails(self) -> None:
+        root = self.bridge_fixture(
+            {
+                "tests/feature-configurations/demo/tests/demo.rs": (
+                    "let s = tensor4all_tensorbackend::Storage::default();\n"
+                ),
+            }
+        )
+        result = run_check(root)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("tests/feature-configurations/demo/tests/demo.rs", result.stderr)
+
+    def test_crate_alias_is_followed(self) -> None:
+        root = self.bridge_fixture(
+            {
+                "crates/tensor4all-demo/src/lib.rs": (
+                    "use tensor4all_tensorbackend as backend;\n"
+                    "fn f() { backend::conj_native_tensor(&t); }\n"
+                ),
+            }
+        )
+        result = run_check(root)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("`conj_native_tensor`", result.stderr)
+
+    def test_comments_and_vocabulary_are_not_sites(self) -> None:
+        root = self.bridge_fixture(
+            {
+                "crates/tensor4all-demo/src/lib.rs": (
+                    "// tensor4all_tensorbackend::Storage is core's business\n"
+                    "use tensor4all_tensorbackend::{StorageKind, StorageScalar}; "
+                    "// tensor4all_tensorbackend::Storage\n"
+                ),
+            }
+        )
+        result = run_check(root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_pinned_site_passes_and_stale_pin_fails(self) -> None:
+        source = "use tensor4all_tensorbackend::Storage;\n"
+        root = self.bridge_fixture({"crates/tensor4all-demo/src/lib.rs": source})
+        self.write_baseline(
+            root,
+            '[{"path": "crates/tensor4all-demo/src/lib.rs", "item": "Storage", "count": 1}]\n',
+        )
+        self.assertEqual(run_check(root).returncode, 0)
+
+        (root / "crates/tensor4all-demo/src/lib.rs").write_text("", encoding="utf-8")
+        result = run_check(root)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("stale bridge baseline entry `Storage`", result.stderr)
+
+    def test_update_baseline_shrinks_and_refuses_growth(self) -> None:
+        root = self.bridge_fixture(
+            {"crates/tensor4all-demo/src/lib.rs": "use tensor4all_tensorbackend::Storage;\n"}
+        )
+        env_ci = os.environ.pop("CI", None)
+        try:
+            refused = run_check(root, extra_args=("--update-baseline",))
+            self.assertEqual(refused.returncode, 1, refused.stdout)
+            self.assertIn("refusing to record new bridge site", refused.stderr)
+
+            grown = run_check(root, extra_args=("--update-baseline", "--allow-growth"))
+            self.assertEqual(grown.returncode, 0, grown.stderr)
+            self.assertEqual(run_check(root).returncode, 0)
+
+            (root / "crates/tensor4all-demo/src/lib.rs").write_text("", encoding="utf-8")
+            shrunk = run_check(root, extra_args=("--update-baseline",))
+            self.assertEqual(shrunk.returncode, 0, shrunk.stderr)
+            baseline = (root / "scripts/tensorbackend-bridge-sites-baseline.json").read_text(
+                encoding="utf-8"
+            )
+            self.assertEqual(baseline, "[]\n")
+            self.assertEqual(run_check(root).returncode, 0)
+        finally:
+            if env_ci is not None:
+                os.environ["CI"] = env_ci
 
 
 if __name__ == "__main__":

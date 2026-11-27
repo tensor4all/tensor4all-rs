@@ -12,11 +12,13 @@ fn matrix() -> Tensor {
     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).expect("matrix")
 }
 
-/// Every explicit route agrees with the compatibility frontend on the same input.
+/// Every explicit route returns the known result on a small input; QR and
+/// einsum also agree with the compatibility frontend that remains for them.
 #[cfg(feature = "global-defaults")]
 #[test]
-fn explicit_routes_match_the_compatibility_frontend() {
+fn explicit_routes_return_known_results() {
     let context = context(1);
+    // a = [[1, 3], [2, 4]] (column-major [1, 2, 3, 4]); b = [5, 6] as a 2x1 column.
     let a = matrix();
     let b = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0]).expect("rhs");
 
@@ -42,33 +44,54 @@ fn explicit_routes_match_the_compatibility_frontend() {
         .expect("explicit routes");
 
     let compatibility_qr = crate::qr_native_tensor(&a).expect("compatibility QR").0;
-    let compatibility_svd = crate::svd_native_tensor(&a).expect("compatibility SVD").1;
-    let compatibility_contraction =
-        crate::contract_native_tensor(&a, &[1], &b, &[0]).expect("compatibility contraction");
-    let compatibility_reshape =
-        crate::reshape_col_major_native_tensor(&a, &[4]).expect("compatibility reshape");
-    let compatibility_permute =
-        crate::permute_native_tensor(&a, &[1, 0]).expect("compatibility permute");
     let compatibility_einsum =
         crate::einsum_native_tensors(&[(&a, &[0usize, 1]), (&b, &[1usize, 2])], &[0, 2])
             .expect("compatibility einsum");
 
-    for (explicit, compatibility, route) in [
-        (explicit_qr, compatibility_qr, "qr"),
-        (explicit_svd, compatibility_svd, "svd"),
+    // Singular values of a: the square roots of the eigenvalues 15 +- sqrt(221) of a^T a.
+    let root = 221.0_f64.sqrt();
+    let singular_values = [(15.0 + root).sqrt(), (15.0 - root).sqrt()];
+
+    let compatibility_qr_values = compatibility_qr
+        .as_slice::<f64>()
+        .expect("f64 payload")
+        .to_vec();
+    let compatibility_einsum_values = compatibility_einsum
+        .as_slice::<f64>()
+        .expect("f64 payload")
+        .to_vec();
+    for (explicit, shape, expected, route) in [
+        (explicit_qr, vec![2, 2], compatibility_qr_values, "qr"),
+        (explicit_svd, vec![2], singular_values.to_vec(), "svd"),
         (
             explicit_contraction,
-            compatibility_contraction,
+            vec![2, 1],
+            vec![23.0, 34.0],
             "contraction",
         ),
-        (explicit_reshape, compatibility_reshape, "reshape"),
-        (explicit_permute, compatibility_permute, "permute"),
-        (explicit_einsum, compatibility_einsum, "einsum"),
+        (
+            explicit_reshape,
+            vec![4],
+            vec![1.0, 2.0, 3.0, 4.0],
+            "reshape",
+        ),
+        (
+            explicit_permute,
+            vec![2, 2],
+            vec![1.0, 3.0, 2.0, 4.0],
+            "permute",
+        ),
+        (
+            explicit_einsum,
+            vec![2, 1],
+            compatibility_einsum_values,
+            "einsum",
+        ),
     ] {
-        assert_eq!(explicit.shape(), compatibility.shape(), "{route} shape");
+        assert_eq!(explicit.shape(), shape.as_slice(), "{route} shape");
         let explicit_values = explicit.as_slice::<f64>().expect("f64 payload");
-        let compatibility_values = compatibility.as_slice::<f64>().expect("f64 payload");
-        for (left, right) in explicit_values.iter().zip(compatibility_values) {
+        assert_eq!(explicit_values.len(), expected.len(), "{route} length");
+        for (left, right) in explicit_values.iter().zip(&expected) {
             assert!(
                 (left - right).abs() < 1e-12,
                 "{route} disagrees: {left} vs {right}"
@@ -227,11 +250,10 @@ fn einsum_rejects_a_mismatched_label_count_typed() {
     assert_eq!(recovered.as_slice::<f64>().expect("f64 payload").len(), 4);
 }
 
-/// Mixed-precision operands are promoted to a common dtype exactly as the
-/// compatibility frontend promotes them, and the result carries the promoted dtype.
-#[cfg(feature = "global-defaults")]
+/// Mixed-precision operands are promoted to the wider common dtype, and the
+/// result carries the promoted dtype.
 #[test]
-fn mixed_precision_operands_promote_like_the_compatibility_frontend() {
+fn mixed_precision_operands_promote_to_the_common_dtype() {
     let context = context(1);
     let lhs = matrix();
     let rhs = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f32, 6.0]).expect("f32 rhs");
@@ -240,14 +262,8 @@ fn mixed_precision_operands_promote_like_the_compatibility_frontend() {
         .with_concrete_session(|session| session.contraction(&lhs, &[1], &rhs, &[0]))
         .expect("session entry")
         .expect("promoted contraction");
-    let compatibility =
-        crate::contract_native_tensor(&lhs, &[1], &rhs, &[0]).expect("compatibility contraction");
 
-    assert_eq!(explicit.dtype(), compatibility.dtype());
-    assert_eq!(
-        explicit.as_slice::<f64>().expect("f64 payload"),
-        compatibility.as_slice::<f64>().expect("f64 payload")
-    );
+    assert_eq!(explicit.dtype(), tenferro::DType::F64);
     assert_eq!(
         explicit.as_slice::<f64>().expect("f64 payload"),
         &[23.0, 34.0]
