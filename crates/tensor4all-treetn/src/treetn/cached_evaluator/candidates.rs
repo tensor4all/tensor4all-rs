@@ -15,11 +15,29 @@ use tensor4all_core::MultiIndex;
 /// # Examples
 ///
 /// ```
-/// use tensor4all_treetn::CandidateSide;
+/// use tensor4all_core::{DynIndex, IdxTensor};
+/// use tensor4all_treetn::{
+///     CachedEvaluatorOptions, CandidateEntries, CandidateSide, TreeTN, TreeTNCachedEvaluator,
+/// };
 ///
-/// let candidates = vec![vec![0, 1], vec![1, 1]];
-/// let side = CandidateSide { sites: &[2, 0], candidates: &candidates };
-/// assert_eq!(side.sites.len(), side.candidates[0].len());
+/// // f(a, b) = u[a] * w[b]; the index list is [b, a], so `a` is site 1.
+/// let a = DynIndex::new_dyn(2);
+/// let b = DynIndex::new_dyn(2);
+/// let bond = DynIndex::new_dyn(1);
+/// let u = IdxTensor::from_dense(vec![a.clone(), bond.clone()], vec![1.0_f64, 2.0])?;
+/// let w = IdxTensor::from_dense(vec![bond, b.clone()], vec![3.0_f64, 10.0])?;
+/// let tree = TreeTN::from_tensors(vec![u, w], vec![0usize, 1])?;
+/// let mut evaluator =
+///     TreeTNCachedEvaluator::new(&tree, &[b, a], CachedEvaluatorOptions::default())?;
+///
+/// // Candidate values follow `sites`: the left side is site 1 (`a`).
+/// let a_values = vec![vec![1]];
+/// let b_values = vec![vec![0], vec![1]];
+/// let left = CandidateSide { sites: &[1], candidates: &a_values };
+/// let right = CandidateSide { sites: &[0], candidates: &b_values };
+/// let values = evaluator.evaluate_candidates_typed::<f64>(left, right, CandidateEntries::All)?;
+/// assert_eq!(values, vec![2.0 * 3.0, 2.0 * 10.0]);
+/// # Ok::<(), anyhow::Error>(())
 /// ```
 #[derive(Clone, Copy, Debug)]
 pub struct CandidateSide<'a> {
@@ -36,11 +54,35 @@ pub struct CandidateSide<'a> {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_treetn::CandidateEntries;
+/// use tensor4all_core::{DynIndex, IdxTensor};
+/// use tensor4all_treetn::{
+///     CachedEvaluatorOptions, CandidateEntries, CandidateSide, TreeTN, TreeTNCachedEvaluator,
+/// };
 ///
-/// let misses = [(0usize, 1usize), (2, 0)];
-/// assert!(matches!(CandidateEntries::Pairs(&misses), CandidateEntries::Pairs(p) if p.len() == 2));
-/// assert!(matches!(CandidateEntries::All, CandidateEntries::All));
+/// // f(a, b) = u[a] * w[b] on two nodes.
+/// let a = DynIndex::new_dyn(3);
+/// let b = DynIndex::new_dyn(2);
+/// let bond = DynIndex::new_dyn(1);
+/// let u = IdxTensor::from_dense(vec![a.clone(), bond.clone()], vec![1.0_f64, 2.0, 3.0])?;
+/// let w = IdxTensor::from_dense(vec![bond, b.clone()], vec![1.0_f64, 10.0])?;
+/// let tree = TreeTN::from_tensors(vec![u, w], vec![0usize, 1])?;
+/// let mut evaluator =
+///     TreeTNCachedEvaluator::new(&tree, &[a, b], CachedEvaluatorOptions::default())?;
+/// let a_values = vec![vec![0], vec![1], vec![2]];
+/// let b_values = vec![vec![0], vec![1]];
+/// let left = CandidateSide { sites: &[0], candidates: &a_values };
+/// let right = CandidateSide { sites: &[1], candidates: &b_values };
+///
+/// // `All`: the 3 x 2 matrix, column-major, left fastest.
+/// let all = evaluator.evaluate_candidates_typed::<f64>(left, right, CandidateEntries::All)?;
+/// assert_eq!(all, vec![1.0, 2.0, 3.0, 10.0, 20.0, 30.0]);
+///
+/// // `Pairs`: a memo's misses, in the order given.
+/// let misses = [(2, 1), (0, 0), (2, 1)];
+/// let some =
+///     evaluator.evaluate_candidates_typed::<f64>(left, right, CandidateEntries::Pairs(&misses))?;
+/// assert_eq!(some, vec![30.0, 1.0, 30.0]);
+/// # Ok::<(), anyhow::Error>(())
 /// ```
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
@@ -172,14 +214,15 @@ pub enum CandidateInputError {
         /// Number of right candidates.
         n_right: usize,
     },
-    /// `n_left * n_right` entries do not fit in `usize`.
+    /// The `n_left * n_right` entries cannot be held in one vector: their
+    /// count or their size in bytes overflows the platform's limits.
     ///
     /// Remedy: request the matrix in pieces with
     /// [`CandidateEntries::Pairs`], or split a side into smaller candidate
     /// lists.
     #[error(
-        "the candidate matrix of {n_left} x {n_right} entries overflows usize; request it in \
-         pieces with CandidateEntries::Pairs or split a side"
+        "the candidate matrix of {n_left} x {n_right} entries is too large for one vector; \
+         request it in pieces with CandidateEntries::Pairs or split a side"
     )]
     MatrixSizeOverflow {
         /// Number of left candidates.
@@ -189,9 +232,9 @@ pub enum CandidateInputError {
     },
 }
 
-/// Entries per GEMM block of [`CandidateEntries::All`]: the same bound TreeTCI
-/// uses for the evaluator calls of one candidate matrix, so the product
-/// scratch stays bounded while each block still amortizes the GEMM call.
+/// Target entries per GEMM block of [`CandidateEntries::All`]: the same bound
+/// TreeTCI uses for the evaluator calls of one candidate matrix. A block holds
+/// at least one right column, so it is `max(n_left, 65_536)` entries at most.
 const CANDIDATE_BLOCK_ENTRIES: usize = 65_536;
 
 /// Order of the edges that give one split: distance of the nearer end from the
@@ -240,10 +283,13 @@ where
     ///
     /// For `All`, the `n_left * n_right` values column-major with the left
     /// candidate varying fastest (entry `(i, j)` at `i + n_left * j`). The
-    /// product is formed in blocks of right candidates so its scratch stays
-    /// bounded, but the returned vector is the caller's full
-    /// `n_left x n_right` matrix and is **not capped**: request a large
-    /// matrix as slices of `Pairs` to bound it. For `Pairs`, one value per
+    /// product is formed in blocks of whole right columns, about 65 536
+    /// entries each (at least one column, so at most `max(n_left, 65 536)`);
+    /// besides the blocks, the scratch holds the messages of the named
+    /// candidates, a few copies of `(n_left + n_right) x bond` values. The
+    /// returned vector is the caller's full `n_left x n_right` matrix and is
+    /// **not capped**: request a large matrix as slices of `Pairs` to bound
+    /// it. For `Pairs`, one value per
     /// pair, in the given order. An empty side or an empty pair list gives an
     /// empty vector. Only the candidates a request names have their messages
     /// computed.
@@ -263,16 +309,37 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`TreeTNOperationError::InvalidCandidates`] with one
-    /// [`CandidateInputError`] variant per malformed request (each naming its
-    /// remedy): a site position out of range, a site listed twice, a site on
-    /// neither side, site sets that no edge separates, a candidate of the
-    /// wrong length or with a value outside its site's dimension, a pair
-    /// naming a missing candidate, and an `All` matrix whose size overflows
-    /// `usize`. Returns [`TreeTNOperationError::ScalarKindMismatch`] when the
-    /// tree's values cannot be decoded as `T` (the rule of
-    /// [`Self::evaluate_batched_typed`]), and
-    /// [`TreeTNOperationError::Operation`] when a contraction fails.
+    /// Returns [`TreeTNOperationError::InvalidCandidates`] before any
+    /// contraction when the request is malformed. Its
+    /// [`CandidateInputError`] payload (non-exhaustive) names the case:
+    ///
+    /// - [`CandidateInputError::SiteOutOfRange`]: a site is not a position in
+    ///   the evaluator's index list. Pass positions `0..n_indices` into the
+    ///   list given to [`Self::new`], not node or index labels.
+    /// - [`CandidateInputError::DuplicateSite`]: a site is listed twice, on one
+    ///   side or on both. Give every site to exactly one side, once.
+    /// - [`CandidateInputError::MissingSite`]: a site is on neither side. The
+    ///   two sides together must list every index of the evaluator.
+    /// - [`CandidateInputError::NotAnEdgeSplit`]: no edge separates the two
+    ///   site sets. Make the left sites exactly the sites behind one edge (a
+    ///   subtree's sites), the right sites the rest.
+    /// - [`CandidateInputError::CandidateLength`]: a candidate does not have
+    ///   one value per site of its side. Give `sites.len()` values, in `sites`
+    ///   order.
+    /// - [`CandidateInputError::CandidateValueOutOfRange`]: a value is at or
+    ///   above its site's dimension. Keep values in `0..dim`.
+    /// - [`CandidateInputError::PairOutOfRange`]: a pair names a candidate that
+    ///   does not exist. Pair indices are positions in the two candidate
+    ///   lists, below `n_left` and `n_right`.
+    /// - [`CandidateInputError::MatrixSizeOverflow`]: an `All` matrix too large
+    ///   for one vector. Request it in slices of `Pairs`, or split a side.
+    ///
+    /// An empty side or an empty pair list is not an error (see Returns).
+    /// Returns [`TreeTNOperationError::ScalarKindMismatch`] when the tree's
+    /// values cannot be decoded as `T`; request the element type the tree
+    /// stores (the rule of [`Self::evaluate_batched_typed`]). Returns
+    /// [`TreeTNOperationError::Operation`] when a contraction fails; its source
+    /// chain names the failing stage.
     ///
     /// # Examples
     ///
@@ -397,9 +464,11 @@ where
         parallelism: Parallelism<'_>,
         block_entries: usize,
     ) -> std::result::Result<Vec<CachedScalar>, TreeTNOperationError> {
+        // Every call reports its own stats, a rejected one included.
+        self.last_stats = CachedEvaluationStats::default();
         self.validate_candidate_sites(left.sites, right.sites)?;
         let (from, to) = self
-            .candidate_edge(left.sites)
+            .candidate_edge(left.sites)?
             .ok_or(CandidateInputError::NotAnEdgeSplit)?;
         self.validate_candidates("left", left)?;
         self.validate_candidates("right", right)?;
@@ -420,12 +489,17 @@ where
             }
             CandidateEntries::Pairs(pairs) => select_pair_columns(pairs, n_left, n_right)?,
         };
-        self.last_stats = CachedEvaluationStats::default();
-        let (Some(&left_filler), Some(&right_filler)) =
-            (left_selected.first(), right_selected.first())
-        else {
+        // Zero requested entries (an empty side, or no pairs) is a degenerate
+        // but valid matrix: answered here, before the message path, so the
+        // filler below only runs when both sides have a candidate.
+        if left_selected.is_empty() || right_selected.is_empty() {
             return Ok(Vec::new());
-        };
+        }
+        // The filler of each direction is the other side's first candidate in
+        // the caller's order: deterministic, and valid by the checks above.
+        // Both sides have a candidate here: a selection is never larger than
+        // its side.
+        let (left_filler, right_filler) = (&left.candidates[0], &right.candidates[0]);
 
         let kind = self.tree_scalar_kind()?;
         let bond_dim = self.candidate_bond_dim(&from, &to)?;
@@ -435,7 +509,7 @@ where
             &to,
             left,
             &left_selected,
-            (right, right_filler),
+            (right.sites, right_filler),
             &mut route,
         )?;
         let right_columns = self.candidate_messages(
@@ -443,7 +517,7 @@ where
             &from,
             right,
             &right_selected,
-            (left, left_filler),
+            (left.sites, left_filler),
             &mut route,
         )?;
         let product = CandidateProduct {
@@ -497,6 +571,8 @@ where
                 .map(CachedScalar::C64)
                 .collect(),
         };
+        #[cfg(test)]
+        self.update_cache_storage_stats();
         Ok(values)
     }
 
@@ -564,11 +640,19 @@ where
     /// The directed edge `(from, to)` whose `from` side holds exactly
     /// `left_sites`; among several (site-less nodes), the one nearest the
     /// plan's root, as documented on [`Self::evaluate_candidates_typed`].
-    fn candidate_edge(&self, left_sites: &[usize]) -> Option<(V, V)> {
+    ///
+    /// `Ok(None)` means no edge separates the sites; an inconsistent plan is
+    /// an internal error, not a caller's mistake.
+    fn candidate_edge(&self, left_sites: &[usize]) -> Result<Option<(V, V)>> {
         let mut wanted = left_sites.to_vec();
         wanted.sort_unstable();
-        let root = self.plan.inner.sorted_node_names.first()?;
-        let (parent, order) = rooted_tree(&self.plan.inner.neighbors, root).ok()?;
+        let root = self
+            .plan
+            .inner
+            .sorted_node_names
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("TreeTNCachedEvaluator: the plan has no nodes"))?;
+        let (parent, order) = rooted_tree(&self.plan.inner.neighbors, root)?;
         let mut depth = HashMap::<V, usize>::default();
         for node in order {
             let node_depth = match parent.get(&node).and_then(Option::as_ref) {
@@ -584,15 +668,20 @@ where
             if sites != wanted {
                 continue;
             }
-            let distance = depth.get(from)?.min(depth.get(to)?);
+            let depth_of = |node: &V| {
+                depth.get(node).copied().ok_or_else(|| {
+                    anyhow::anyhow!("TreeTNCachedEvaluator: edge end {node:?} is not in the plan")
+                })
+            };
+            let distance = depth_of(from)?.min(depth_of(to)?);
             let (near, far) = if from < to { (from, to) } else { (to, from) };
             // The orientation breaks the tie only when both sides are empty.
-            let key = (*distance, near.clone(), far.clone(), from.clone());
+            let key = (distance, near.clone(), far.clone(), from.clone());
             if best.as_ref().is_none_or(|(best_key, _)| key < *best_key) {
                 best = Some((key, (from.clone(), to.clone())));
             }
         }
-        best.map(|(_, edge)| edge)
+        Ok(best.map(|(_, edge)| edge))
     }
 
     /// Promoted scalar kind of all node tensors: the kind of every value.
@@ -618,18 +707,23 @@ where
     /// The directed message `from -> to` of each selected candidate of `own`,
     /// bond-fastest, one column per entry of `selected`.
     ///
-    /// The existing message path reads full points, so each internal batch
-    /// fills the other side's sites with one valid candidate of that side
-    /// (`other`): the message `from -> to` depends only on the sites behind
-    /// `from`, so the filler changes no value and no cache key of this
-    /// direction. Fully cached batches build only this direction's keys.
-    fn candidate_messages(
+    /// Shim over the existing message path, which reads full points (#1481):
+    /// each internal batch fills the other side's sites with `filler`, the
+    /// sites and values of one valid candidate of that side.
+    ///
+    /// Invariant: the message `from -> to` and its cache key are functions of
+    /// the sites behind `from` alone (the directed component's
+    /// `input_positions`), so any valid filler gives the same value and the
+    /// same key; `filler_changes_neither_message_nor_key` pins it. A dedicated
+    /// entry point taking only the sending side's sites is a named follow-up.
+    /// Fully cached batches build only this direction's keys.
+    pub(super) fn candidate_messages(
         &mut self,
         from: &V,
         to: &V,
         own: CandidateSide<'_>,
         selected: &[usize],
-        other: (CandidateSide<'_>, usize),
+        filler: (&[usize], &[usize]),
         route: &mut CachedEvaluationRoute<'_, '_>,
     ) -> Result<Vec<CachedScalar>> {
         let n_indices = self.layout().n_indices;
@@ -637,8 +731,8 @@ where
         let plan = self.rooted_plan_for_center(to)?;
         self.raw_messages = self.can_use_raw_messages(to)?;
         let mut template = vec![0usize; n_indices];
-        let (other_side, filler) = other;
-        for (&site, &value) in other_side.sites.iter().zip(&other_side.candidates[filler]) {
+        let (filler_sites, filler_values) = filler;
+        for (&site, &value) in filler_sites.iter().zip(filler_values) {
             template[site] = value;
         }
         let directed = (from.clone(), to.clone());
@@ -838,14 +932,22 @@ fn select_pair_columns(
     })
 }
 
-/// `n_left * n_right`, or the overflow error of an `All` request.
+/// `n_left * n_right`, or the overflow error of an `All` request when the
+/// count, or its size in bytes at the largest scalar the result passes
+/// through, exceeds what one vector can hold (`isize::MAX` bytes).
 pub(super) fn checked_matrix_len(
     n_left: usize,
     n_right: usize,
 ) -> std::result::Result<usize, CandidateInputError> {
-    n_left
-        .checked_mul(n_right)
-        .ok_or(CandidateInputError::MatrixSizeOverflow { n_left, n_right })
+    let overflow = CandidateInputError::MatrixSizeOverflow { n_left, n_right };
+    let len = n_left.checked_mul(n_right).ok_or(overflow.clone())?;
+    let bytes = len
+        .checked_mul(std::mem::size_of::<CachedScalar>().max(std::mem::size_of::<Complex64>()))
+        .ok_or(overflow.clone())?;
+    if bytes > isize::MAX as usize {
+        return Err(overflow);
+    }
+    Ok(len)
 }
 
 /// The kind both operands of a product promote to.

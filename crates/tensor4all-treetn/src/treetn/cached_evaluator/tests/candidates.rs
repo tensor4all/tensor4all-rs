@@ -552,16 +552,81 @@ fn empty_sides_and_empty_pairs_give_empty_results() {
         sites: &RIGHT_SITES,
         candidates: &none,
     };
+    // An empty side is a degenerate but valid matrix, for `All` and for
+    // `Pairs` alike; zero requested entries never enter the message path.
     for (left, right, entries) in [
         (empty_left, right, CandidateEntries::All),
         (left, empty_right, CandidateEntries::All),
+        (empty_left, empty_right, CandidateEntries::All),
         (left, right, CandidateEntries::Pairs(&[])),
+        (empty_left, right, CandidateEntries::Pairs(&[])),
+        (left, empty_right, CandidateEntries::Pairs(&[])),
     ] {
         assert!(evaluator
             .evaluate_candidates_typed::<f64>(left, right, entries)
             .unwrap()
             .is_empty());
+        assert_eq!(evaluator.stats_for_test(), CachedEvaluationStats::default());
+        assert!(evaluator.message_caches.is_empty());
     }
+}
+
+#[test]
+fn filler_changes_neither_message_nor_key() {
+    // The message 3 -> 1 carries the sites of nodes {3, 4}; the shim fills
+    // the other sites (nodes {0, 1, 2}) with one candidate of that side. Two
+    // different valid fillers must give the same columns and the same keys.
+    let (tree, indices) = permuted_comb::<f64>();
+    let (lc, rc) = (left_candidates(), right_candidates());
+    let own = CandidateSide {
+        sites: &LEFT_SITES,
+        candidates: &lc,
+    };
+    let selected = (0..lc.len()).collect::<Vec<_>>();
+    let (first, second) = (&rc[0], &rc[2]);
+    assert_ne!(first, second);
+    let messages = |evaluator: &mut TreeTNCachedEvaluator<'_, usize>, filler: &Vec<usize>| {
+        evaluator.last_stats = CachedEvaluationStats::default();
+        evaluator
+            .candidate_messages(
+                &3,
+                &1,
+                own,
+                &selected,
+                (&RIGHT_SITES, filler),
+                &mut CachedEvaluationRoute::global(),
+            )
+            .unwrap()
+    };
+    let as_f64 = |columns: Vec<CachedScalar>| {
+        columns
+            .into_iter()
+            .map(|value| value.as_real().unwrap())
+            .collect::<Vec<_>>()
+    };
+
+    // Cold, on two evaluators: the same values to the bit.
+    let mut one =
+        TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
+    let mut two =
+        TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
+    let with_first = as_f64(messages(&mut one, first));
+    let with_second = as_f64(messages(&mut two, second));
+    assert_eq!(with_first, with_second);
+    // Three distinct candidates (the third repeats the first), bond 2.
+    assert_eq!(with_first.len(), lc.len() * 2);
+    let keys = one.message_caches[&(3, 1)].key_count();
+    assert_eq!(keys, 3);
+    assert_eq!(two.message_caches[&(3, 1)].key_count(), keys);
+
+    // Warm, on the first evaluator with the other filler: every key of this
+    // call is already cached, so the keys are the same ones.
+    let warm = as_f64(messages(&mut one, second));
+    assert_eq!(warm, with_first);
+    let stats = one.stats_for_test();
+    assert_eq!(stats.message_cache_misses, 0);
+    assert_eq!(stats.message_cache_hits, keys);
+    assert_eq!(one.message_caches[&(3, 1)].key_count(), keys);
 }
 
 fn candidate_error(error: TreeTNOperationError) -> CandidateInputError {
@@ -749,6 +814,12 @@ fn each_invalid_request_has_its_own_error() {
         })
     );
     assert_eq!(super::super::candidates::checked_matrix_len(4, 3), Ok(12));
+    // The count fits in usize but its bytes do not fit in one allocation.
+    let (n_left, n_right) = (1usize << 40, 1usize << 20);
+    assert_eq!(
+        super::super::candidates::checked_matrix_len(n_left, n_right),
+        Err(CandidateInputError::MatrixSizeOverflow { n_left, n_right })
+    );
 
     // The error renders its remedy and is the variant's source.
     let error = evaluator
@@ -826,4 +897,41 @@ fn a_complex_tree_rejects_a_real_request() {
         panic!("expected ScalarKindMismatch, got {error:?}");
     };
     assert_eq!((payload.stored, payload.requested), ("c64", "f64"));
+}
+
+#[test]
+fn every_call_reports_its_own_stats() {
+    let (tree, indices) = permuted_comb::<f64>();
+    let (lc, rc) = (left_candidates(), right_candidates());
+    let left = CandidateSide {
+        sites: &LEFT_SITES,
+        candidates: &lc,
+    };
+    let right = CandidateSide {
+        sites: &RIGHT_SITES,
+        candidates: &rc,
+    };
+    let mut evaluator =
+        TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
+    evaluator
+        .evaluate_candidates_typed::<f64>(left, right, CandidateEntries::All)
+        .unwrap();
+    let stats = evaluator.stats_for_test();
+    assert!(stats.message_cache_misses > 0);
+    // The storage stats describe the caches this call filled.
+    assert!(stats.message_cache_key_count > 0);
+    assert!(stats.message_cache_logical_bytes > 0);
+
+    // A rejected request does not leave the previous call's counts behind.
+    evaluator
+        .evaluate_candidates_typed::<f64>(
+            left,
+            CandidateSide {
+                sites: &[4, 3],
+                candidates: &[vec![0, 0]],
+            },
+            CandidateEntries::All,
+        )
+        .unwrap_err();
+    assert_eq!(evaluator.stats_for_test(), CachedEvaluationStats::default());
 }

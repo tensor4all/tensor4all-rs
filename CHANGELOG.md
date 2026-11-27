@@ -472,7 +472,9 @@
 
 - `tensor4all-treetn`: `TreeTNOperationError` gains the variant
   `InvalidCandidates { payload: CandidateInputError, context }` (#1481), so
-  exhaustive matches on it need a new arm.
+  exhaustive matches on it need a new arm. Under the 0.x policy this break
+  ships in the next minor release. The payload `CandidateInputError` is
+  `#[non_exhaustive]`, so later cases will not break callers again.
 - `tensor4all-treetci`: `TreeTciOptimizationResult` and `TreeTciRunResult`
   have a new public field, `local_threshold_factor: f64` (#1371). Neither
   struct is `#[non_exhaustive]`, so downstream struct literals and
