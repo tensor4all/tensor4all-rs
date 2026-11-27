@@ -1,7 +1,9 @@
 //! Folded layout of a matrix-valued fit: the two matrix legs as open legs of
 //! the end cores, `L` cores instead of `L + 2`.
 
-use super::{check_physical_point, col_major_gemm, MatrixShape, MatrixTCI2Result};
+use super::{
+    check_physical_point, col_major_gemm, col_major_gemm_ld, MatrixShape, MatrixTCI2Result,
+};
 use crate::error::{Result, TCIError};
 use tensor4all_core::{MatrixLuciScalar, Scalar};
 use tensor4all_simplett::{TTScalar, Tensor3Ops};
@@ -25,6 +27,23 @@ impl<T: Scalar> FoldedCore<T> {
             out.extend_from_slice(&self.data[start..start + self.left]);
         }
         out
+    }
+
+    /// `(m x k) * slab(x)` with `a` of shape `m x k`, `k = self.left`, reading the
+    /// slab in place: it is `right` runs of `left` elements at stride
+    /// `left * site`, so no slab is copied. Bit-identical to
+    /// `col_major_gemm(a, m, k, &self.slab(x), self.right)`.
+    fn gemm_slab(&self, a: &[T], m: usize, k: usize, x: usize) -> Vec<T> {
+        debug_assert_eq!(k, self.left);
+        col_major_gemm_ld(
+            a,
+            m,
+            k,
+            &self.data,
+            self.left * x,
+            self.left * self.site,
+            self.right,
+        )
     }
 }
 
@@ -127,8 +146,9 @@ impl<T: Scalar + TTScalar> FoldedMatrixTT<T> {
         self.cores.len()
     }
 
-    /// Whether there are no cores (never true for a result of
-    /// [`MatrixTCI2Result::to_folded`], which needs `L >= 1`).
+    /// Whether there are no cores. It is never true for a value obtained from
+    /// [`MatrixTCI2Result::to_folded`] (construction is private and needs
+    /// `L >= 1`); the method exists for symmetry with [`Self::len`].
     pub fn is_empty(&self) -> bool {
         self.cores.is_empty()
     }
@@ -233,11 +253,11 @@ impl<T: Scalar + TTScalar> FoldedMatrixTT<T> {
         let mut width = first.right;
         let mut current = first.slab(x[0]);
         for (core, &xk) in self.cores[1..last].iter().zip(&x[1..last]) {
-            current = col_major_gemm(&current, rows, width, &core.slab(xk), core.right);
+            current = core.gemm_slab(&current, rows, width, xk);
             width = core.right;
         }
         let tail = &self.cores[last];
-        let out = col_major_gemm(&current, rows, width, &tail.slab(x[last]), cols);
+        let out = tail.gemm_slab(&current, rows, width, x[last]);
         Ok(Matrix::from_col_major_vec(rows, cols, out))
     }
 }
@@ -386,3 +406,6 @@ impl<T: Scalar + TTScalar + Default + MatrixLuciScalar> MatrixTCI2Result<T> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

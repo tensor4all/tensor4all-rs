@@ -189,8 +189,13 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
             });
         }
 
-        // Vector of size right_dim
-        let mut current: Vec<T> = first.slice_site(idx0);
+        // Every core is read in place from its borrowed column-major buffer:
+        // element `(l, s, r)` is at `l + left * (s + site * r)`.
+        // Vector of size right_dim (the leading bond is 1, so `l = 0`).
+        let first_buffer = first.host_buffer()?;
+        let mut current: Vec<T> = (0..first.right_dim())
+            .map(|r| first_buffer[idx0 + first.site_dim() * r])
+            .collect();
 
         // Contract with remaining tensors
         for (site, &idx) in indices.iter().enumerate().skip(1) {
@@ -203,18 +208,20 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
                 });
             }
 
-            let slice = tensor.slice_site(idx);
+            let data = tensor.host_buffer()?;
             let left_dim = tensor.left_dim();
             let right_dim = tensor.right_dim();
+            let site_dim = tensor.site_dim();
 
-            // Contract: current (of size left_dim) with slice (left_dim x right_dim)
+            // Contract: current (of size left_dim) with the slab (left_dim x right_dim)
             let mut next = vec![T::zero(); right_dim];
-            for r in 0..right_dim {
+            for (r, out) in next.iter_mut().enumerate() {
+                let start = left_dim * (idx + site_dim * r);
                 let mut sum = T::zero();
                 for l in 0..left_dim {
-                    sum = sum + current[l] * slice[l + left_dim * r];
+                    sum = sum + current[l] * data[start + l];
                 }
-                next[r] = sum;
+                *out = sum;
             }
             current = next;
         }

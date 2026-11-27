@@ -42,10 +42,11 @@ use super::TciLinalg;
 use super::{crossinterpolate2_with_rng_linalg, seeded_rng, TCI2OptimizationResult, TCI2Options};
 use crate::error::{Result, TCIError};
 use rustc_hash::FxHashMap;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::Arc;
 use tensor4all_core::{MatrixLuciScalar, MultiIndex, MultiIndexCache, Scalar};
-use tensor4all_simplett::{SimpleTensorTrain, TTScalar, Tensor3Ops};
+use tensor4all_simplett::{SimpleTensorTrain, TTScalar, Tensor3, Tensor3Ops};
 use tensor4all_tensorbackend::Matrix;
 
 mod folded;
@@ -311,28 +312,36 @@ impl<T: Scalar + TTScalar + Default + MatrixLuciScalar> MatrixTCI2Result<T> {
         }
         let MatrixShape { rows, cols } = self.shape;
 
+        // Every core is read from its borrowed column-major buffer. The first core
+        // (`1 x rows x width`) and the last (`width x cols x 1`) are already the
+        // matrices `current` and `tail`; an interior core's slab at coordinate `xk`
+        // starts at `left * xk` with column stride `left * site` (see
+        // `col_major_gemm_ld`), so no slab is copied.
+        fn buffer<T: TTScalar>(core: &Tensor3<T>) -> Result<&[T]> {
+            core.as_col_major_slice()
+                .ok_or_else(|| TCIError::InvalidOperation {
+                    message: "site tensor is not host-backed".to_string(),
+                })
+        }
         let first = tci.site_tensor(0);
         let mut width = first.right_dim();
-        let mut current = vec![T::zero(); rows * width];
-        for a in 0..width {
-            for i in 0..rows {
-                current[i + rows * a] = *first.get3(0, i, a);
-            }
-        }
+        let mut current = Cow::Borrowed(buffer(first)?);
         for (k, &xk) in x.iter().enumerate() {
             let core = tci.site_tensor(k + 1);
-            let slab = core.slice_site(xk);
-            current = col_major_gemm(&current, rows, width, &slab, core.right_dim());
+            let (left, site) = (core.left_dim(), core.site_dim());
+            current = Cow::Owned(col_major_gemm_ld(
+                &current,
+                rows,
+                width,
+                buffer(core)?,
+                left * xk,
+                left * site,
+                core.right_dim(),
+            ));
             width = core.right_dim();
         }
-        let last = tci.site_tensor(n_physical + 1);
-        let mut tail = vec![T::zero(); width * cols];
-        for j in 0..cols {
-            for a in 0..width {
-                tail[a + width * j] = *last.get3(a, j, 0);
-            }
-        }
-        let out = col_major_gemm(&current, rows, width, &tail, cols);
+        let tail = buffer(tci.site_tensor(n_physical + 1))?;
+        let out = col_major_gemm(&current, rows, width, tail, cols);
         Ok(Matrix::from_col_major_vec(rows, cols, out))
     }
 }
@@ -360,10 +369,30 @@ fn check_physical_point(physical_dims: &[usize], x: &[usize]) -> Result<()> {
 
 /// Column-major `(m x k) * (k x n)` product in plain loops.
 fn col_major_gemm<T: Scalar>(a: &[T], m: usize, k: usize, b: &[T], n: usize) -> Vec<T> {
+    col_major_gemm_ld(a, m, k, b, 0, k, n)
+}
+
+/// [`col_major_gemm`] with the `k x n` operand read in place from `b`:
+/// element `(l, j)` is `b[b_offset + l + b_col_stride * j]`.
+///
+/// For the slab at site `x` of a column-major `left x site x right` core this is
+/// `b_offset = left * x`, `b_col_stride = left * site`, `k = left`, `n = right`,
+/// which multiplies by the slab without copying it. The summation order is that
+/// of the contiguous product, so the result is bit-identical to a product with
+/// a copied slab.
+fn col_major_gemm_ld<T: Scalar>(
+    a: &[T],
+    m: usize,
+    k: usize,
+    b: &[T],
+    b_offset: usize,
+    b_col_stride: usize,
+    n: usize,
+) -> Vec<T> {
     let mut out = vec![T::zero(); m * n];
     for j in 0..n {
         for l in 0..k {
-            let blj = b[l + k * j];
+            let blj = b[b_offset + l + b_col_stride * j];
             for i in 0..m {
                 out[i + m * j] = out[i + m * j] + a[i + m * l] * blj;
             }

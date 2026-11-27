@@ -1,0 +1,13 @@
+target,shape,rank,revision,median_ms,folded_ms,hash
+corr,2x3,2,pre-1516,6.88,,5f276e7f94dc2113
+corr,2x3,2,1516,3.33,,5f276e7f94dc2113
+corr,2x3,2,step2,2.54,2.54,5f276e7f94dc2113
+corr,8x8,2,pre-1516,9.42,,cb8bd04410607157
+corr,8x8,2,1516,5.77,,cb8bd04410607157
+corr,8x8,2,step2,4.92,4.90,cb8bd04410607157
+unrel,2x3,0,pre-1516,19.87,,456aa763a429d4c4
+unrel,2x3,0,1516,8.44,,456aa763a429d4c4
+unrel,2x3,0,step2,7.74,7.68,456aa763a429d4c4
+unrel,8x8,0,pre-1516,242.29,,c19c9863a4c5cc98
+unrel,8x8,0,1516,137.47,,c19c9863a4c5cc98
+unrel,8x8,0,step2,133.75,132.74,c19c9863a4c5cc98

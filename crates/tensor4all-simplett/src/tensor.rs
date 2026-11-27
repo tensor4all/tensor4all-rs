@@ -205,6 +205,67 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
             .to_vec()
     }
 
+    /// Borrow the host buffer as a column-major flat slice, without copying.
+    ///
+    /// The slice is the whole tensor, host-backed and contiguous, with the
+    /// first index fastest: element `[i_0, i_1, ..., i_{N-1}]` is at
+    /// `i_0 + d_0 * (i_1 + d_1 * (i_2 + ...))`, so it equals
+    /// [`Tensor::to_col_major_vec`] element by element. The borrow is
+    /// immutable: this crate offers no mutable counterpart, and the buffer
+    /// cannot change while the slice is alive.
+    ///
+    /// Use it to read many slabs from one tensor without allocating. For a
+    /// rank-3 tensor `[left, site, right]` the slab at a fixed site `s` is
+    /// *not* one contiguous run: it is `right` runs of `left` elements, run `r`
+    /// starting at `left * (s + site * r)`. [`Tensor3Ops::slice_site`] copies
+    /// such a slab into a fresh `Vec`; read the runs from this borrow to avoid
+    /// that copy.
+    ///
+    /// Returns `None` only if the wrapped tensor is not host-accessible
+    /// (compact), which the constructors of this crate rule out, so callers
+    /// treat `None` as an internal-invariant error rather than a data case.
+    ///
+    /// [`Tensor3Ops::slice_site`]: crate::Tensor3Ops::slice_site
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{tensor3_from_data, Tensor3Ops};
+    ///
+    /// // A 2 x 3 x 4 tensor whose value encodes its position: value = l + 2 * (s + 3 * r).
+    /// let (left, site, right) = (2, 3, 4);
+    /// let data: Vec<f64> = (0..left * site * right).map(|i| i as f64).collect();
+    /// let tensor = tensor3_from_data(data, left, site, right).unwrap();
+    ///
+    /// let buffer = tensor.as_col_major_slice().unwrap();
+    /// assert_eq!(buffer, &tensor.to_col_major_vec()[..]);
+    /// for r in 0..right {
+    ///     for s in 0..site {
+    ///         for l in 0..left {
+    ///             assert_eq!(buffer[l + left * (s + site * r)], tensor[[l, s, r]]);
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// // The slab at site 1 is `right` runs of `left` elements at stride `left * site`.
+    /// let slab = tensor.slice_site(1);
+    /// for r in 0..right {
+    ///     let start = left * (1 + site * r);
+    ///     assert_eq!(&slab[left * r..left * (r + 1)], &buffer[start..start + left]);
+    /// }
+    /// ```
+    pub fn as_col_major_slice(&self) -> Option<&[T]> {
+        self.inner.host_data().ok()
+    }
+
+    /// [`Tensor::as_col_major_slice`] with the broken-invariant case as an error.
+    pub(crate) fn host_buffer(&self) -> Result<&[T]> {
+        self.as_col_major_slice()
+            .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
+                message: "site tensor is not host-backed".to_string(),
+            })
+    }
+
     /// Iterate over all elements in column-major order.
     pub fn iter(&self) -> TensorIter<'_, T, N> {
         TensorIter {
