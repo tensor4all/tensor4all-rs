@@ -1,0 +1,29 @@
+T4A_LAUNCH {"affinity": [8], "thread_environment": {"RAYON_NUM_THREADS": "1", "BLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "VECLIB_MAXIMUM_THREADS": "1", "BLIS_NUM_THREADS": "1", "T4A_MERGE_REFINE_PROFILE": "1"}}
+T4A_PROFILE {"scope":"schedule","phase":"preflight","level":0,"index":0,"start_ns":91,"elapsed_ns":21670,"rss_kib":302888,"hwm_kib":306380,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"prepare","phase":"setup","level":0,"index":0,"start_ns":60,"elapsed_ns":1109887,"rss_kib":302888,"hwm_kib":306380,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"prepare","phase":"leaf","level":0,"index":0,"start_ns":1166942,"elapsed_ns":9301690921,"rss_kib":617328,"hwm_kib":926024,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"prepare","phase":"leaf","level":0,"index":1,"start_ns":9302969903,"elapsed_ns":9041485877,"rss_kib":608484,"hwm_kib":950148,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"prepare","phase":"leaf","level":0,"index":2,"start_ns":18344583121,"elapsed_ns":8991363723,"rss_kib":608640,"hwm_kib":950148,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"prepare","phase":"leaf","level":0,"index":3,"start_ns":27336073934,"elapsed_ns":8999263063,"rss_kib":623576,"hwm_kib":978708,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"prepare","phase":"total","level":0,"index":0,"start_ns":30,"elapsed_ns":36335493622,"rss_kib":623576,"hwm_kib":978708,"threads":2,"completed":true}
+T4A_PROFILE {"scope":"schedule","phase":"prepare_images","level":0,"index":0,"start_ns":94656,"elapsed_ns":36335556067,"rss_kib":623576,"hwm_kib":978708,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"initialize","level":0,"index":0,"start_ns":36335869292,"elapsed_ns":71835,"rss_kib":623576,"hwm_kib":978708,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"region","level":1,"index":0,"start_ns":36336001498,"elapsed_ns":60315660795,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"level","level":1,"index":0,"start_ns":36335998592,"elapsed_ns":60315969827,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"region","level":2,"index":0,"start_ns":96652031824,"elapsed_ns":251639,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"level","level":2,"index":0,"start_ns":96652029592,"elapsed_ns":318738,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"region","level":3,"index":0,"start_ns":96652401815,"elapsed_ns":109713,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"level","level":3,"index":0,"start_ns":96652401355,"elapsed_ns":169104,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"region","level":4,"index":0,"start_ns":96652623524,"elapsed_ns":114868,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"level","level":4,"index":0,"start_ns":96652623183,"elapsed_ns":176222,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"region","level":5,"index":0,"start_ns":96652852390,"elapsed_ns":98751,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"level","level":5,"index":0,"start_ns":96652851949,"elapsed_ns":156502,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"region","level":6,"index":0,"start_ns":96653060805,"elapsed_ns":96549,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"level","level":6,"index":0,"start_ns":96653060474,"elapsed_ns":153649,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"region","level":7,"index":0,"start_ns":96653266026,"elapsed_ns":96800,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"level","level":7,"index":0,"start_ns":96653265726,"elapsed_ns":160535,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"region","level":8,"index":0,"start_ns":96653463169,"elapsed_ns":98842,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"level","level":8,"index":0,"start_ns":96653462839,"elapsed_ns":139644,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"report","level":0,"index":0,"start_ns":96653637829,"elapsed_ns":7218,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":null}
+T4A_PROFILE {"scope":"schedule","phase":"total","level":0,"index":0,"start_ns":71,"elapsed_ns":96653683525,"rss_kib":956352,"hwm_kib":1316544,"threads":2,"completed":true}
+ai-run: measure done exit=0 wall=126.3s peak_mem=1.2G/8.0G (anon ~1.2G) verdict=CLEAN (foreign 0.5% on cpus 8-15, 0.0 busy CPUs elsewhere) report=/root/projects/tensor4all-rust/tensor4all-rs-1497-design/docs/experiments/1497-baseline/raw/attempt-1/ir-r8-cap64/0/ai-run.json

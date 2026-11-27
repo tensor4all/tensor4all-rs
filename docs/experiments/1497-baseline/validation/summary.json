@@ -1,0 +1,20 @@
+[
+  {
+    "name": "original",
+    "exit_code": 1,
+    "verdict": "CLEAN",
+    "result": null
+  },
+  {
+    "name": "diagnostic-off",
+    "exit_code": 1,
+    "verdict": "CLEAN",
+    "result": null
+  },
+  {
+    "name": "diagnostic-on",
+    "exit_code": 1,
+    "verdict": "CLEAN",
+    "result": null
+  }
+]

@@ -1,0 +1,2 @@
+beta,domain,R_k,L,chi,goal,ft_rtol,application,output_depth,patches,input_params,input_max_bond,split_max_bond,split_params,split_rel_norm_change,split_seconds,ft_seconds,regions,terms,max_bond,max_transient_bond,logical_params,applied,levels,peak_work_items,compressions,dropped_terms,reference_scale,absolute_tolerance,error_bound,parseval_rel,work_items_per_level
+10,full,8,24,64,64,1e-6,certified:0.5,none,4,184970,62,62,191218,0e0,0.002,96.663,1,1,605,626,2022164,4,8,4,15,0,1.8747523320172823e2,1.874752332017282e-4,7.234011301405295e-5,4.26e-12,4;1;1;1;1;1;1;1;1

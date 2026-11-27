@@ -1,0 +1,24 @@
+{
+  "reproduction_patch_application": "pass",
+  "identical_measured_Rust_sources_and_workspace_lock": [
+    "Cargo.lock",
+    "benchmarks/rust/benchmark_m6a_fourier.rs",
+    "crates/tensor4all-partitionedtreetn/src/reconstruction/mod.rs",
+    "crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs",
+    "crates/tensor4all-partitionedtreetn/src/reconstruction/target.rs",
+    "crates/tensor4all-partitionedtreetn/src/reconstruction/profile_1497.rs",
+    "target/1497-ir-harness/src/bin/ft_probe.rs",
+    "target/1497-ir-harness/src/bin/k_ell.rs",
+    "target/1497-ir-harness/src/bin/k_pipeline.rs",
+    "target/1497-ir-harness/src/bin/k_split.rs",
+    "target/1497-ir-harness/src/bin/tau_side.rs",
+    "target/1497-ir-harness/src/k_ell.rs",
+    "target/1497-ir-harness/src/k_side.rs",
+    "target/1497-ir-harness/src/lib.rs",
+    "target/1497-ir-harness/src/linalg.rs"
+  ],
+  "standalone_IR_lock_identical": true,
+  "production_diff_empty": true,
+  "profiling_off_on_reported_metrics_identical": true,
+  "helper_python_compile": "pass"
+}

@@ -1,0 +1,3 @@
+T4A_LAUNCH {"affinity": [8], "thread_environment": {"RAYON_NUM_THREADS": "1", "BLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "VECLIB_MAXIMUM_THREADS": "1", "BLIS_NUM_THREADS": "1", "T4A_MERGE_REFINE_PROFILE": "1"}}
+Error: the box [[0, 0, 1, 1, 1], [0, 0, 1, 0, 0]] still fails at depth 5; raise R or the degree
+ai-run: measure done exit=1 wall=2.4s peak_mem=20M/8.0G (anon ~14M) verdict=CLEAN (foreign 0.2% on cpus 8-15, 0.1 busy CPUs elsewhere) report=/root/projects/tensor4all-rust/tensor4all-rs-1497-design/docs/experiments/1497-baseline/raw/attempt-1/ir-r6-none/2/ai-run.json

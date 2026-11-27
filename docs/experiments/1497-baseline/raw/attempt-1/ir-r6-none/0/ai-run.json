@@ -1,0 +1,32 @@
+{
+  "mode": "measure",
+  "cmd": "/usr/bin/time -v -o /root/projects/tensor4all-rust/tensor4all-rs-1497-design/docs/experiments/1497-baseline/raw/attempt-1/ir-r6-none/0/time.txt timeout --kill-after=5 300 taskset -c 8 /usr/bin/python3 /root/projects/tensor4all-rust/tensor4all-rs-1497-design/docs/experiments/1497-baseline/run.py --prime-exec /root/projects/tensor4all-rust/tensor4all-rs-1497-design/target/release/ft_probe /root/projects/tensor4all-rust/tensor4all-rs-1497-design/docs/experiments/1497-baseline/raw/attempt-1/ir-r6-none/0/ir-output 10 6 none 64 1e-06 certified:0.5 none 1e-05 1e-10 5 -1 8 full patched 1024",
+  "cwd": "/root/projects/tensor4all-rust/tensor4all-rs-1497-design",
+  "label": null,
+  "unit": "ai-run-measure-1384657-1795763163.scope",
+  "cpus": "8-15",
+  "mem_limit": 8589934592,
+  "started": "2026-11-27T08:06:03+0100",
+  "pre_guard": {
+    "ok": true,
+    "mean_busy": 0.008,
+    "peak_busy": 0.05
+  },
+  "exit": 1,
+  "wall_sec": 2.42,
+  "mem_peak": 20881408,
+  "mem_peak_anon_sampled": 14680064,
+  "oom_kills": 0,
+  "verdict": "CLEAN",
+  "reasons": [],
+  "job_cpu_sec": 2.31,
+  "foreign_cpu_sec_on_measure_cpus": 0.13,
+  "foreign_frac": 0.0065,
+  "others_busy_cpus": 0.05,
+  "mem_stall_frac": 0.0,
+  "thresholds": {
+    "foreign_frac": 0.03,
+    "others_busy_cpus": 1.0,
+    "mem_stall_frac": 0.01
+  }
+}

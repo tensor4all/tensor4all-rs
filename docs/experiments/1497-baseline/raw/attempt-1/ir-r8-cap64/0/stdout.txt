@@ -1,0 +1,13 @@
+# beta=10, L=24, domain=full on 2^8 x 2^8, rtol=1e-5: 1204 Chebyshev patches built in 2.2s; schedule: goal=64, ft_rtol=1e-6, application=certified:0.5, output_depth=None
+chi=64: 4 patches, 184970 params, max bond 62; NBlock split max bond 62, 191218 params, rel norm change 0.0e0 (0.00s)
+chi=64 patched: before the transform VmHWM: 306380 kB, VmRSS: 300200 kB
+chi=64 patched: after the transform VmHWM: 1316544 kB, VmRSS: 956352 kB
+chi=64 patched: recompressed at cutoff 1e-10: max bond 555, 1828194 params, measured change 0.00e0 (remaining allowance 1.15e-4)
+chi=64 patched: recompressed at cutoff 1e-9: max bond 453, 1372852 params, measured change 8.53e-6 (remaining allowance 1.15e-4)
+chi=64 patched: recompressed at cutoff 1e-8: max bond 295, 752574 params, measured change 2.09e-5 (remaining allowance 1.15e-4)
+chi=64 patched: recompressed at cutoff 1e-7: max bond 101, 121246 params, measured change 1.81e-4 (remaining allowance 1.15e-4)
+chi=64 patched: recompressed at cutoff 1e-6: max bond 87, 92332 params, measured change 6.62e-4 (remaining allowance 1.15e-4)
+chi=64 patched: recompression check 10.3s
+chi=64 patched: transform 96.7s, 1 regions, 1 terms, max bond 605 (transient 626), 2022164 params, 4 applications, 8 levels, peak work items 4, 15 compressions, 0 dropped, error bound 7.23e-5 of allowance 1.87e-4 (scale 1.875e2), Parseval 4.26e-12
+chi=64 patched: live work items per level 4;1;1;1;1;1;1;1;1
+# wrote /root/projects/tensor4all-rust/tensor4all-rs-1497-design/docs/experiments/1497-baseline/raw/attempt-1/ir-r8-cap64/0/ir-output/ft_probe.csv

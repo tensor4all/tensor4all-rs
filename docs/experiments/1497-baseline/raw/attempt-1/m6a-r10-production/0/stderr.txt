@@ -1,0 +1,5 @@
+T4A_LAUNCH {"affinity": [8], "thread_environment": {"RAYON_NUM_THREADS": "1", "BLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "VECLIB_MAXIMUM_THREADS": "1", "BLIS_NUM_THREADS": "1", "T4A_MERGE_REFINE_PROFILE": "1"}}
+g0: {"max_bond":63,"params":3157428,"patches":113} in 222.5s
+T4A_PROFILE {"scope":"schedule","phase":"preflight","level":0,"index":0,"start_ns":91,"elapsed_ns":371388,"rss_kib":282800,"hwm_kib":553808,"threads":1,"completed":null}
+T4A_PROFILE {"scope":"prepare","phase":"setup","level":0,"index":0,"start_ns":50,"elapsed_ns":34119736,"rss_kib":284464,"hwm_kib":553808,"threads":1,"completed":null}
+ai-run: measure done exit=124 wall=300.1s peak_mem=2.8G/8.0G (anon ~2.5G) verdict=CLEAN (foreign 0.5% on cpus 8-15, 0.0 busy CPUs elsewhere) report=/root/projects/tensor4all-rust/tensor4all-rs-1497-design/docs/experiments/1497-baseline/raw/attempt-1/m6a-r10-production/0/ai-run.json

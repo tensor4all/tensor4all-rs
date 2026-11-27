@@ -1,0 +1,13 @@
+{
+  "case": "ir-r6-cap32",
+  "exit_code": 1,
+  "guard_verdict": "CLEAN",
+  "schedule_completed": false,
+  "phases_seconds": {},
+  "leaf_seconds": [],
+  "region_seconds_by_level": {},
+  "largest_region_count": 0,
+  "max_observed_threads": null,
+  "max_boundary_rss_kib": null,
+  "max_process_hwm_kib": null
+}

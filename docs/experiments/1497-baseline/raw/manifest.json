@@ -1,0 +1,49 @@
+{
+  "recorded_at_utc": "2026-11-27T06:56:42.316673+00:00",
+  "baseline_commit": "8ce72e4e05286723d053c66d8c3e76eed35e6d58",
+  "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+  "machine": "x86_64",
+  "source_sha256": {
+    "Cargo.lock": "f5ebfa0a593fd3e04cf045f25c42a62b7eb4116f35a25b32d858378da556615e",
+    "benchmarks/rust/benchmark_m6a_fourier.rs": "a3f07463a57f3c138ea44f3e899fc1cfdffbc47417790186ae072b5ee5b3606c",
+    "crates/tensor4all-partitionedtreetn/src/reconstruction/mod.rs": "c5ccd403c394920ed8785a70fe47ccbf2f5848ac158951e3cb180133463c900b",
+    "crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs": "c0f16a78c84da7c694f684ec148fd6db97d19f2dd0fd1fa8195bcf0a8894d7b5",
+    "crates/tensor4all-partitionedtreetn/src/reconstruction/target.rs": "31f0d19ebf1c4df2052013b5153198354f941339c25ae1ebcfc8db80129035b0",
+    "crates/tensor4all-partitionedtreetn/src/reconstruction/profile_1497.rs": "3e69b6e24a097095dbda0faa953098ca57c682a3cd1676e519f66b4ce09794cd",
+    "target/1497-ir-harness/Cargo.toml": "e8861fa51bc94d0f22160c2d852930bc986824282523d530623785a3cdff2f91",
+    "target/1497-ir-harness/Cargo.lock": "bc0fcafef490c0a604ca1531b794b808797f96f17ed8311817240c49fe696485",
+    "docs/experiments/1497-baseline/protocol.json": "35ee9a5fa207196d23bf411003b3d4c8e9e2da5cc6513ca8ff7fed96e4ce371c",
+    "docs/experiments/1497-baseline/profiling.patch": "bb0e863b7d153473bf9ae147cab78e4929b64ae0b76bfcf52449c297aa0fc3f3",
+    "docs/experiments/1497-baseline/lazy-reader.patch": "41dbbdf781dba363fd6fbbc0ccfd490de1021dd5eefb0972ac6b9bed22ccf412",
+    "docs/experiments/1497-baseline/run.py": "83a8ef40f5a0dab1fe47e27df66998acdd9769ca4173592656516c958f78decd",
+    "target/1497-ir-harness/src/bin/ft_probe.rs": "546c2563dd5b28d3cb45a21aeb04664e5acefebe7df0bd22a08e795c54d4b186",
+    "target/1497-ir-harness/src/bin/k_ell.rs": "78b1f1f481b473a71e487a48dbc9f4934116a04e84d6520e64eea2c644279c80",
+    "target/1497-ir-harness/src/bin/k_pipeline.rs": "05db6f9bf9cca6382f9bf6ae7168580eaddcb043950e41d40412a895ccff7385",
+    "target/1497-ir-harness/src/bin/k_split.rs": "dda5bdc0aa2c2eeb069b6f62d3b4fbc23e5ac43718011e2d474691e8e314dfe6",
+    "target/1497-ir-harness/src/bin/tau_side.rs": "ee0aefbe1b299e1e11a340e7af023c94d0cca78ab86a44db1de99f6ae0119791",
+    "target/1497-ir-harness/src/k_ell.rs": "f2d9aeaa62844ab7476d58efcd59a8c0414e4c1eedb307352f8c873e67290037",
+    "target/1497-ir-harness/src/k_side.rs": "93b690baba5db2d356cb8c2c921e6ecb330fd89d9a313a8c7f5d90e2ec6dc484",
+    "target/1497-ir-harness/src/lib.rs": "62c8b6b9e6a404f36886977d61f36898daef5c3e2f14967b911818c37e164be4",
+    "target/1497-ir-harness/src/linalg.rs": "0690f5c3cf1f13ebb0bf62f22c6aea3ac669bf1c6c131b410f6fed8e399efce2"
+  },
+  "binaries": {
+    "m6a": {
+      "path": "target/release/examples/benchmark_m6a_fourier",
+      "sha256": "1bf8078ca6e98c9c82cc063484b82cf4d4e7aedb8aabfb871e6fb50ee35b8165"
+    },
+    "ir": {
+      "path": "target/release/ft_probe",
+      "sha256": "f22e0dcb834e2e79e6b6c18f283f1c7e681ab976960ea3ca479f916048ca6df8"
+    }
+  },
+  "protocol_sha256": "35ee9a5fa207196d23bf411003b3d4c8e9e2da5cc6513ca8ff7fed96e4ce371c",
+  "compiler_from_build_cache": [
+    "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n"
+  ],
+  "observed_build_flag_environment": {
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null,
+    "CARGO_PROFILE_RELEASE_DEBUG": null,
+    "CARGO_PROFILE_RELEASE_OPT_LEVEL": null
+  }
+}

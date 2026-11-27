@@ -1,0 +1,90 @@
+[
+  {
+    "name": "diagnostic-off",
+    "exit_code": 0,
+    "verdict": "CLEAN",
+    "result": {
+      "accuracy": {
+        "rel_l2": 1.7468457655982474e-08,
+        "rel_max": 4.000699619145987e-09,
+        "samples": 4096
+      },
+      "arm": "patched-merge-refine",
+      "g0": {
+        "max_bond": 7,
+        "params": 16678,
+        "patches": 98
+      },
+      "g0_seconds": 2.219162239,
+      "kind": "result",
+      "merge_refine": {
+        "absolute_tolerance": 3.738015978230289e-05,
+        "applied_operator_count": 98,
+        "error_bound": 4.517981604681819e-07,
+        "max_bond_dim": 54,
+        "region_count": 1,
+        "term_count": 2,
+        "work_items_per_level": [
+          98,
+          40,
+          14,
+          3,
+          1
+        ]
+      },
+      "output": {
+        "max_bond": 54,
+        "params": 11984,
+        "regions": 1,
+        "terms": 2
+      },
+      "seconds": 0.860086472,
+      "slices": 16,
+      "topology": "tt_nblock"
+    }
+  },
+  {
+    "name": "diagnostic-on",
+    "exit_code": 0,
+    "verdict": "CLEAN",
+    "result": {
+      "accuracy": {
+        "rel_l2": 1.7468457655982474e-08,
+        "rel_max": 4.000699619145987e-09,
+        "samples": 4096
+      },
+      "arm": "patched-merge-refine",
+      "g0": {
+        "max_bond": 7,
+        "params": 16678,
+        "patches": 98
+      },
+      "g0_seconds": 2.244137716,
+      "kind": "result",
+      "merge_refine": {
+        "absolute_tolerance": 3.738015978230289e-05,
+        "applied_operator_count": 98,
+        "error_bound": 4.517981604681819e-07,
+        "max_bond_dim": 54,
+        "region_count": 1,
+        "term_count": 2,
+        "work_items_per_level": [
+          98,
+          40,
+          14,
+          3,
+          1
+        ]
+      },
+      "output": {
+        "max_bond": 54,
+        "params": 11984,
+        "regions": 1,
+        "terms": 2
+      },
+      "seconds": 0.870134444,
+      "slices": 16,
+      "topology": "tt_nblock"
+    }
+  }
+]
