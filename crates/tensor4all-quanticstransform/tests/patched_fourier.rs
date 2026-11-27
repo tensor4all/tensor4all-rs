@@ -6,7 +6,7 @@ use support::*;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_partitionedtreetn::{
     contract_adaptive,
-    reconstruction::{ReconstructionTarget, SubsetOperatorOptions},
+    reconstruction::{OutputRegion, ReconstructionTarget, SubsetOperatorOptions},
     PartitionedTreeTN, PartitionedTreeTNError, PatchingOptions, Projector, SubDomainTreeTN,
 };
 use tensor4all_quanticstransform::{
@@ -520,8 +520,7 @@ fn spectator_cells_compose_with_selected_output_regions() {
     let axes = vec![vec![sites[0].clone(), sites[2].clone()]];
     let mut options = PatchedFourierOptions::default();
     options.merge_refine.output_depth = Some(1);
-    options.merge_refine.output_regions =
-        Some(vec![Projector::from_pairs([(sites[2].clone(), 1)]).unwrap()]);
+    options.merge_refine.output_regions = Some(vec![OutputRegion::new(1, 1)]);
     let result =
         patched_fourier_transform(&state, &0, &axes, FourierOptions::forward(), &options).unwrap();
     assert_eq!(result.report().region_count, 4);
@@ -584,8 +583,7 @@ fn output_regions_restrict_the_returned_transform() {
     let tree = chain(&sites, &input, &[0, 1, 2]);
     let state = partition(&tree, &asym(&axes));
     let mut options = PatchedFourierOptions::default();
-    options.merge_refine.output_regions =
-        Some(vec![Projector::from_pairs([(sites[2].clone(), 1)]).unwrap()]);
+    options.merge_refine.output_regions = Some(vec![OutputRegion::new(1, 1)]);
     let result =
         patched_fourier_transform(&state, &0, &axes, FourierOptions::forward(), &options).unwrap();
     assert_eq!(result.regions().count(), 4);

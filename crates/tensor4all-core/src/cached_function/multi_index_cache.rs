@@ -169,14 +169,16 @@ pub enum CachedBatchError {
     Evaluation(#[source] anyhow::Error),
 }
 
-/// Bytes of hash table a [`MultiIndexCache`] may occupy by default.
+/// Bytes of retained storage a [`MultiIndexCache`] may occupy by default.
 ///
-/// The limit bounds the tables themselves (buckets, entries and control bytes)
-/// plus any per-value payload the caller declares
-/// ([`MultiIndexCache::with_value_payload_bytes`], none by default). When a run needs to keep more distinct points than
-/// that, the oldest entries are evicted and re-evaluated if asked again, rather
-/// than memory growing without bound. While a table grows the transient peak is
-/// at most 1.5 × the limit + 8 bytes (see [`MultiIndexCache`]).
+/// The limit bounds [`MultiIndexCache::retained_bytes`]: the hash tables
+/// themselves (buckets, entries and control bytes) plus any per-value payload
+/// the caller declares ([`MultiIndexCache::with_value_payload_bytes`], none by
+/// default). Heap payload that is not declared is not counted. When a run needs
+/// to keep more distinct points than that, the oldest entries are evicted and
+/// re-evaluated if asked again, rather than memory growing without bound. The
+/// transient peak while a table grows (1.5 × the limit + 8 bytes) is a bound on
+/// table bytes only, see [`MultiIndexCache`].
 pub const DEFAULT_RETAINED_BYTE_LIMIT: usize = 256 * 1024 * 1024;
 
 /// A persistent cache that maps multi-indices to values through mixed-radix
@@ -188,8 +190,8 @@ pub const DEFAULT_RETAINED_BYTE_LIMIT: usize = 256 * 1024 * 1024;
 /// borrowed, fallible, or thread-affine. Only successful evaluations are
 /// stored: an evaluation that fails is never turned into a cached value.
 ///
-/// Retained storage is bounded by [`DEFAULT_RETAINED_BYTE_LIMIT`] bytes of hash
-/// table by default ([`Self::with_retained_byte_limit`] changes it,
+/// Retained storage ([`Self::retained_bytes`]: hash tables plus declared
+/// payload) is bounded by [`DEFAULT_RETAINED_BYTE_LIMIT`] bytes by default ([`Self::with_retained_byte_limit`] changes it,
 /// [`Self::set_retained_byte_limit`] at run time, [`Self::clear`] drops every
 /// entry). The entries live in two generations of one table. When the current
 /// generation cannot grow within the limit, the older generation is evicted and
@@ -200,9 +202,13 @@ pub const DEFAULT_RETAINED_BYTE_LIMIT: usize = 256 * 1024 * 1024;
 /// control byte), plus one 16-byte group of control bytes per table (exact on
 /// x86_64; on targets with 8-byte groups such as aarch64, 8 bytes over per
 /// allocated generation, so up to 16). While a table grows, the outgoing table
-/// (half the new one's buckets) is alive next to the new one, so the transient
-/// peak is at most 1.5 × the limit + 8 bytes (half a control group); a limit of
-/// 152 bytes peaks at 236 accounted bytes for `f64` values. Allocator overhead is
+/// (half the new one's buckets) is alive next to the new one. With no declared
+/// payload the transient peak of the tables is at most 1.5 × the limit + 8 bytes
+/// (half a control group); a limit of 152 bytes peaks at 236 accounted bytes for
+/// `f64` values. That peak bound covers table bytes only: a declared payload is
+/// counted once, as `len() ×` its size, and the values holding it move into the
+/// new table rather than being copied, so the peak sentence says nothing about
+/// payload beyond that. Allocator overhead is
 /// excluded, and so is heap payload owned by values unless declared:
 /// [`Self::with_value_payload_bytes`] adds a fixed number of payload bytes per
 /// stored value to [`Self::retained_bytes`], and the limit and the generation
@@ -326,11 +332,12 @@ where
     /// At the limit the oldest generation of entries is evicted
     /// ([`Self::evicted_entries`]) and the new entry is stored; an insertion is
     /// skipped ([`Self::dropped_inserts`]) only when the limit is below the
-    /// smallest table that holds one entry (plus one value's declared payload). While a table grows, the outgoing
-    /// table is alive next to the new one: see the type-level documentation for
-    /// the transient peak (1.5 × the limit + 8 bytes; 236 bytes at a limit of
-    /// 152). The limit bounds the retained tables, not the per-call batch
-    /// buffers.
+    /// smallest table that holds one entry (plus one value's declared payload).
+    /// While a table grows, the outgoing table is alive next to the new one: see
+    /// the type-level documentation for the transient peak of the table bytes
+    /// (1.5 × the limit + 8 bytes with no declared payload; 236 bytes at a limit
+    /// of 152). The limit bounds the retained tables and the declared payload,
+    /// not undeclared heap payload and not the per-call batch buffers.
     ///
     /// # Errors
     ///
@@ -1111,7 +1118,8 @@ where
         self.backend.key_type_name()
     }
 
-    /// Limit in bytes of hash table that this cache enforces.
+    /// Limit in bytes on [`Self::retained_bytes`] (hash tables plus declared
+    /// payload) that this cache enforces.
     ///
     /// # Examples
     ///
@@ -1125,10 +1133,11 @@ where
         self.retained_byte_limit
     }
 
-    /// Change the table byte limit at run time.
+    /// Change the retained-byte limit (tables plus declared payload) at run time.
     ///
     /// Shrinking the limit below [`Self::retained_bytes`] evicts nothing at once;
-    /// the next new entry evicts generations until the tables fit.
+    /// the next new entry evicts generations until the tables and declared
+    /// payload fit.
     ///
     /// # Examples
     ///
@@ -1147,7 +1156,7 @@ where
     }
 
     /// Number of insertions skipped because the limit is below the smallest
-    /// table that holds one entry.
+    /// table that holds one entry (plus one value's declared payload).
     ///
     /// A skipped insertion only means the point will be evaluated again if it is
     /// requested later; it never makes a lookup return a wrong value. A cache at
@@ -1167,7 +1176,8 @@ where
         self.dropped_inserts
     }
 
-    /// Number of entries evicted to keep the tables within the limit.
+    /// Number of entries evicted to keep the tables and declared payload within
+    /// the limit.
     ///
     /// A saturated cache evicts its oldest generation of entries each time the
     /// current one fills up; an evicted point is evaluated again if requested.
