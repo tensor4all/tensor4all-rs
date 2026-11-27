@@ -30,12 +30,13 @@
 //! ([`tensor4all_core::DEFAULT_RETAINED_BYTE_LIMIT`], 256 MiB), and that limit
 //! bounds the hash table **and** the matrix payload: every cached point is
 //! accounted as `rows * cols * size_of::<T>()` bytes of matrix data plus the
-//! two reference-count words of its shared allocation
-//! (`2 * size_of::<usize>()`), see [`MatrixSamplingStats::payload_bytes`]. When
+//! reference-count header of its shared allocation (two words, padded when
+//! `align_of::<T>()` exceeds the word size), see [`MatrixSamplingStats::payload_bytes`]. When
 //! the limit is reached the oldest generation of points is evicted, and a point
 //! requested again is passed to the callback again. At-most-once evaluation
 //! per point therefore holds only while the point stays retained; a fit whose
-//! distinct points exceed the limit re-evaluates evicted ones.
+//! distinct points exceed the limit re-evaluates evicted ones. The limit is not
+//! caller-tunable yet, see [`crossinterpolate2_matrix`].
 
 use super::TciLinalg;
 use super::{crossinterpolate2_with_rng_linalg, seeded_rng, TCI2OptimizationResult, TCI2Options};
@@ -539,14 +540,19 @@ where
     }
 }
 
-/// Bytes one cached point adds to the retained-byte accounting: its
-/// `block_len` matrix entries plus the two reference-count words of the
-/// `Arc<[T]>` allocation (strong and weak). Saturating, so a block whose byte
-/// count overflows is simply never retained.
+/// Bytes one cached point adds to the retained-byte accounting: the size of the
+/// `Arc<[T]>` allocation holding its `block_len` matrix entries, computed from
+/// the `repr(C)` layout of `ArcInner` (strong and weak counts, then the slice,
+/// padded to the alignment of `T` and to the size of the whole allocation), so
+/// it stays exact for over-aligned `T`. Allocator overhead is excluded.
+/// Saturating, so a block whose byte count overflows is simply never retained.
 fn point_payload_bytes<T>(block_len: usize) -> usize {
-    block_len
-        .saturating_mul(std::mem::size_of::<T>())
-        .saturating_add(2 * std::mem::size_of::<usize>())
+    use std::alloc::Layout;
+    Layout::array::<T>(block_len)
+        .ok()
+        .and_then(|data| Layout::new::<[usize; 2]>().extend(data).ok())
+        .map(|(layout, _)| layout.pad_to_align().size())
+        .unwrap_or(usize::MAX)
 }
 
 /// `rows * cols`, rejecting zero and sizes whose byte count cannot be allocated.
@@ -641,6 +647,14 @@ fn validate_matrix_problem(
 /// evaluated again: "not asked for a point that is still cached" is the
 /// guarantee, and at-most-once evaluation holds only while a point stays
 /// retained. A matrix too large for the limit is never retained.
+///
+/// The limit is not caller-tunable yet: [`TCI2Options`] is shared with the
+/// scalar solver and has no cache field, and an extra option or entry point is
+/// a public-API decision that is left open. Memory that matters is therefore
+/// bounded by the 256 MiB default, and only heap payload that the accounting
+/// above declares is counted (the matrix data of each point, not allocator
+/// overhead). A fit that needs more distinct points than fit re-evaluates
+/// evicted ones, which costs callback calls, never correctness.
 ///
 /// Internally the problem is the chain `[rows, d_1, .., d_L, cols]` with
 /// `f(i, x, j) = F(x)[i, j]`, solved by the unchanged scalar TCI2 machinery.
@@ -746,7 +760,8 @@ where
 /// retained-byte limit ([`tensor4all_core::DEFAULT_RETAINED_BYTE_LIMIT`]), which
 /// bounds hash tables and matrix payloads together
 /// ([`MatrixSamplingStats::retained_bytes`]); evicted points are evaluated
-/// again.
+/// again. As there, the limit is not configurable yet (no cache field in the
+/// shared [`TCI2Options`], and no separate entry point).
 ///
 /// # Errors
 ///
