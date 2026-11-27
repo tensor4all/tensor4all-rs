@@ -46,23 +46,34 @@ chain).
 **Evaluated values.** Each call of the joint callback evaluates all components
 of a point. Before sharing, component run `i` requested its sampled set `S_i` and
 discarded the other components' values: `n_components * sum|S_i|` values. With the
-memo it is `n_components * |union S_i|`. 2x3: 12798 -> 5268 values; 8x8:
-1542080 -> 65536; three components with partial overlap: 5850 -> 2856.
+memo it is `n_components * |union S_i|`. 2x3: 7524 -> 1926 values; 8x8:
+840704 -> 27392; three components with partial overlap: 5850 -> 2856.
 
 **Source-call counts** (points requested from the callback; no wall times;
-`matrix_valued_source_call_counts` in `batched/tests/shared_sampling.rs`).
-Two variables of 5 bits, `tolerance = 1e-8`, `max_bond_dim = 8`, smooth
-entry-dependent matrix entries, no random pivots:
+`matrix_valued_source_call_counts` in `batched/tests/shared_sampling.rs`). Two
+variables of 5 bits, `tolerance = 1e-8`, `max_bond_dim = 8`, no random pivots,
+entries that are sums of two exponentials (quantics rank at most two):
 
 | Output shape | Components | Per-component runs | Shared memo | Saving |
 |---|---:|---:|---:|---:|
-| 2x3 | 6 | 2133 | 878 | 2.43x |
-| 8x8 | 64 | 24095 | 1024 | 23.5x |
+| 2x3 | 6 | 1254 | 321 | 3.9x |
+| 8x8 | 64 | 13136 | 428 | 30.7x |
+
+The counts are pinned exactly because this target is platform-stable: the search
+converges far below the tolerance, so pivot choices do not hinge on rounding
+noise. The test repeats each case with every value multiplied by
+`1 + 1e-13 * noise` (far above one-ulp libm differences) and requires the same
+counts. A first version of this test used sines of growing frequency under the
+bond cap: that target is not low-rank within the tolerance, the pivots are
+picked from rounding noise, and the counts differ between aarch64 (2133 -> 878)
+and x86_64 CI (2201 -> 890); a relative perturbation of 1e-16 already moved them.
+The per-component side moves as well, so this is solver sensitivity to the
+target's last bits, not the sharing code. The shared count equals the number of
+distinct points the components sample.
 
 The saving grows with the number of components, as in the matrix-valued
 experiment (`docs/experiments/issue-1463`): large for wide matrices, modest for
-2x3. The shared count equals the number of distinct points the components
-sample (here the whole 1024-point grid for 8x8).
+2x3.
 
 Three components of different structure (rank-one product, low-rank sum,
 localized bump) on the same grid, with component-dependent random initial pivots

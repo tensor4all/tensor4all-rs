@@ -796,20 +796,41 @@ fn matrix_callback<'a>(
     }
 }
 
-/// Source-call counts of matrix-valued targets, recorded in
-/// `docs/worklogs/2026-11-27-multicomponent-shared-sampling.md`. The seed and
-/// options are fixed, so the counts are deterministic.
+/// Source-call and evaluated-value counts of matrix-valued targets, recorded in
+/// `docs/worklogs/2026-11-27-multicomponent-shared-sampling.md`.
+///
+/// Three kinds of assertion, each with its own message:
+///
+/// 1. **One-sided bound** (what sharing is for): the shared memo calls the
+///    source no more than, and here strictly fewer than, the per-component runs.
+/// 2. **Structural identities, exact on any platform**: the shared run asks for
+///    exactly the union of the points the per-component runs sample, once each,
+///    and every callback point evaluates `n_components` values.
+/// 3. **Regression pins** of the exact counts, valid only because the target is
+///    platform-stable. The entries are sums of two exponentials (quantics rank
+///    at most two), so the search converges far below the tolerance and pivot
+///    choices do not hinge on rounding noise. A smooth target that is not
+///    low-rank within the tolerance (sines of growing frequency under a bond
+///    cap) picks pivots from noise and its counts differ between aarch64 and
+///    x86_64, for the memo-free per-component path too. The second pass of each
+///    case multiplies every value by `1 + 1e-13 * noise`, far above one-ulp libm
+///    differences, and must give the same counts.
 #[test]
 fn matrix_valued_source_call_counts() {
     let grid = grid_2d();
     let options = options(0);
-    for (rows, cols, per_component_points, shared_points) in
-        [(2usize, 3usize, 2133usize, 878usize), (8, 8, 24095, 1024)]
-    {
+    for (rows, cols, expected_per_component, expected_shared, noise) in [
+        (2usize, 3usize, 1254usize, 321usize, 0.0),
+        (2, 3, 1254, 321, 1e-13),
+        (8, 8, 13136, 428, 0.0),
+        (8, 8, 13136, 428, 1e-13),
+    ] {
         let n_components = rows * cols;
         let entry = |x: f64, y: f64, component: usize| {
             let (i, j) = ((component / cols) as f64, (component % cols) as f64);
-            1.5 + ((1.0 + i) * 3.0 * x + (1.0 + j) * 2.0 * y + 0.1 * i * j).sin()
+            let smooth = (-0.3 * (1.0 + i) * x + 0.2 * (1.0 + j) * y).exp()
+                + 0.5 * (0.4 * j * x - 0.25 * (1.0 + i) * y).exp();
+            smooth * (1.0 + noise * (x * 1e3 + y * 7e3 + i).sin())
         };
         // Per-component runs, as before sharing.
         let per_component = Recorder::new();
@@ -851,21 +872,60 @@ fn matrix_valued_source_call_counts() {
             .iter()
             .map(|(_, point)| point.clone())
             .collect();
-        assert_eq!(shared.n_points(), union.len());
-        assert_eq!(sampling.stats().num_evals, union.len());
-        assert_eq!(
-            (per_component.n_points(), shared.n_points()),
-            (per_component_points, shared_points),
-            "{rows}x{cols}"
+        let label = format!("{rows}x{cols}, relative noise {noise}");
+        let (per_component_points, shared_points) = (per_component.n_points(), shared.n_points());
+
+        // 1. One-sided: sharing never costs more source calls, and here saves some.
+        assert!(
+            shared_points <= per_component_points,
+            "shared memo calls the source no more than per-component runs ({label}): \
+             shared {shared_points} vs per-component {per_component_points}"
         );
-        assert!(shared.n_points() < per_component.n_points());
-        // Evaluated values: n_components * sum |S_i| before, n_components * |union| now.
+        assert!(
+            shared_points < per_component_points,
+            "shared memo calls the source strictly fewer times than per-component runs ({label})"
+        );
+
+        // 2. Structural identities.
         assert_eq!(
-            (per_component.values.get(), shared.values.get()),
-            (
-                n_components * per_component_points,
-                n_components * shared_points
-            )
+            shared_points,
+            union.len(),
+            "structural: the shared run asks for exactly the union of the per-component sampled sets, once each ({label})"
+        );
+        assert_eq!(
+            sampling.stats().num_evals,
+            union.len(),
+            "structural: memo num_evals equals the union of the sampled sets ({label})"
+        );
+        assert_eq!(
+            per_component.values.get(),
+            n_components * per_component_points,
+            "structural: per-component runs evaluate n_components values per point ({label})"
+        );
+        assert_eq!(
+            shared.values.get(),
+            n_components * shared_points,
+            "structural: the shared run evaluates n_components values per point ({label})"
+        );
+
+        // 3. Regression pins on the platform-stable rank-2 target.
+        assert_eq!(
+            per_component_points, expected_per_component,
+            "regression pin (rank-2 target, platform-stable): per-component points ({label})"
+        );
+        assert_eq!(
+            shared_points, expected_shared,
+            "regression pin (rank-2 target, platform-stable): shared points ({label})"
+        );
+        assert_eq!(
+            per_component.values.get(),
+            n_components * expected_per_component,
+            "regression pin (rank-2 target, platform-stable): per-component values ({label})"
+        );
+        assert_eq!(
+            shared.values.get(),
+            n_components * expected_shared,
+            "regression pin (rank-2 target, platform-stable): shared values ({label})"
         );
     }
 }
