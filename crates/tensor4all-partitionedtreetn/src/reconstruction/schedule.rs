@@ -113,6 +113,8 @@ pub enum MergePolicy {
     RankGoal(NonZeroUsize),
     /// Compress within absolute shares of the global tolerance and choose the
     /// smallest-storage affordable split, without a rank target.
+    /// Split probes that exceed work, term or child-planning limits are rejected;
+    /// the unsplit baseline must fit. Other probe errors are returned to the caller.
     Tolerance,
 }
 

@@ -1,0 +1,36 @@
+{
+  "scope": "Complete tracked text at the recorded public default-branch commits; no private/uninspected consumers or generated/renamed calls census.",
+  "command": [
+    "git",
+    "grep",
+    "-I",
+    "-n",
+    "-E",
+    "<pattern>",
+    "<commit>",
+    "--"
+  ],
+  "pattern": "\\b(MergeRefineOptions|MergeRefineReport|MergePolicy|schedule_merge_refine|patched_fourier_transform)\\b|tensor4all[-_]partitionedtreetn",
+  "repositories": [
+    {
+      "repository": "tensor4all/tenferro-rs",
+      "commit": "57a6f31f308adcf4fad78cb705fbc0083be31b13",
+      "matches": []
+    },
+    {
+      "repository": "tensor4all/tenferro-sci-rs",
+      "commit": "dc5026c2afdf3998d53f3af0b931055e06c3ee56",
+      "matches": []
+    },
+    {
+      "repository": "tensor4all/Tensor4all.jl",
+      "commit": "22ea6c8b2388acbaf62836ac381696887129b8ab",
+      "matches": []
+    },
+    {
+      "repository": "shinaoka/sphaira-rs",
+      "commit": "5cf9ea49a3e6e708d741313961010ed867e00742",
+      "matches": []
+    }
+  ]
+}

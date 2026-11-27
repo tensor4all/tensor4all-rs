@@ -10,6 +10,13 @@ Five fresh-process paired repetitions per case, with alternating order, on
 logical CPU 8 of AMD Ryzen 9 6900HX (Linux/WSL, platform faer provider, one thread).
 Every process primes the CPU for one second outside the scheduler interval.
 
+Case names identify fixed synthetic scheduler fixtures, not production Green
+functions: `original` is a six-bit single-axis unitary DFT; `interleaved` is
+a two-axis product DFT with three interleaved bits per axis. Both use the same
+seed `0x5eed_0006` SplitMix64 complex nine-site chain (six transformed sites,
+three spectators), input bonds at most four, and all 64 full-depth input
+patches, with `rtol=1e-8`, `atol=0`. The recorded harness constructs them explicitly.
+
 The [pre-registration comment](https://github.com/tensor4all/tensor4all-rs/pull/1407#issuecomment-7025598593) and
 [maintainer decision](https://github.com/tensor4all/tensor4all-rs/pull/1407#issuecomment-7025360934)
 precede every timed run. Limits were not changed after seeing measurements.
@@ -53,6 +60,11 @@ counts increase from 47 to 127 (original) and 63 to 255 (interleaved). These
 counters describe extra work consistent with always probing eligible axes;
 they are not a measured phase-time attribution. The interleaved tolerance
 output stores 712 parameters instead of 4,296, at the measured runtime cost.
+On the original fixture both policies already retain 712 parameters in one
+term: there is no measured final-storage improvement for its 1.6254x paired
+runtime ratio. Tolerance supplies rank-independent accuracy-driven selection;
+that capability, not an original-case speed or storage gain, is the trade-off
+submitted for review. These numbers do not justify choosing it for every input.
 No phase microbenchmark or post-hoc optimization was substituted for the
 registered complete workload.
 

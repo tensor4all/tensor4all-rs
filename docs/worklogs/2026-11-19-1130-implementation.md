@@ -1,5 +1,35 @@
 # Tolerance merge policy implementation (#1130)
 
+## Resource-probe correction and integration order (2026-11-27)
+
+An optional split exceeding child-planning, work-item or term limits now loses
+to the feasible incumbent instead of aborting the schedule. The unsplit
+baseline remains mandatory and must fit; numerical, validation and backend
+errors still propagate. Candidate order, accuracy allocations and counters for
+executed work are unchanged. In particular, partial work in a rejected probe
+still contributes to executed-work counters, but not to the retained error ledger.
+
+The exact two-bit/nonuniform-leaf `(1, 0)` / `(2, 2)` reproduction fails on
+the previous implementation and passes after the correction. Related tests
+cover both retained limits, earlier regions' usage, joint metadata/retained
+limits, deterministic fallback and a validation failure that must propagate.
+Real and complex data preserve the unsplit terms exactly. Affected-crate tests,
+the schedule units, both Fourier suites, doctests and strict Clippy pass.
+
+The [external-consumer survey](../experiments/issue-1130-implementation/consumer-survey-2026-11-27.json)
+finds no reconstruction API identifiers or partitioned-crate dependency names
+in complete tracked text at the four recorded tenferro, tenferro-sci, Julia
+and sphaira revisions. It is a bounded public-source survey, not a private or
+uninspected consumer census.
+
+Recommended landing order: review and land #1511's output-region API correction
+first, then adapt this PR to its `OutputRegion` and `pruned_regions` contract.
+They modify the same scheduler and report, so resolving the three textual
+conflicts must be followed by output-selection/coverage checks under Exact,
+RankGoal and Tolerance. This PR does not import the unmerged branch or claim
+those combined tests have run. #1497 must not freeze its lane seam before that
+integration. Historical timing/RSS measurements remain pinned to `d60f0751`.
+
 ## Current integration and output-layout limits (2026-11-26)
 
 The implementation is rebased onto `373c246b`, including #1479's SRC component

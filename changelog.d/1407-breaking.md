@@ -6,3 +6,5 @@
   decisions are unchanged. The greedy reconstructor's `ReconstructionOptions::target_bond_dim`
   is unchanged. Migration: `None -> MergePolicy::Exact`, `Some(n) -> MergePolicy::RankGoal(n.try_into()?)`.
   New `MergeRefineReport` fields also require updates to exhaustive struct literals.
+  Addition and truncation-attempt counters include executed discarded probes;
+  they can exceed retained-work counts and should not be compared as retained counts.

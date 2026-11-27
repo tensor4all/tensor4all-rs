@@ -274,6 +274,91 @@ fn candidate_counts_only_children_retained_after_restriction() {
 }
 
 #[test]
+fn over_limit_split_preserves_feasible_nonuniform_unsplit_candidate() {
+    fn check<T: tensor4all_core::TensorElement + From<f64>>() {
+        let mut geom = geometry(&[2]);
+        geom.spectators = vec![Projector::new()];
+        let root = geom.root_output(0);
+        let term = SubDomainTreeTN::from_treetn(
+            TreeTN::from_tensors(
+                vec![IdxTensor::from_dense(
+                    geom.axes[0].outputs.clone(),
+                    [1.0, 2.0, 3.0, 4.0].into_iter().map(T::from).collect(),
+                )
+                .unwrap()],
+                vec![0usize],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        // The reviewer's exact reproduction: a two-bit axis, nonuniform leaves
+        // (1, 0) and (2, 2), two distinct parents and no sibling pair.
+        let items = BTreeMap::from([
+            (vec![(1, 0)], Item::single(term.clone())),
+            (vec![(2, 2)], Item::single(term.clone())),
+        ]);
+        let shape = merge_shape(&items).unwrap();
+        assert_eq!((shape.parents, shape.pairs), (2, 0));
+        for (max_work_items, max_terms, previous) in [(3, 8, 0), (8, 3, 0), (4, 4, 1)] {
+            let options = MergeRefineOptions {
+                merge_policy: MergePolicy::Tolerance,
+                max_work_items,
+                max_terms,
+                ..Default::default()
+            };
+            let context = ProbeContext {
+                geometry: &geom,
+                center: &0,
+                options: &options,
+                share: 0.0,
+            };
+            let trial = RegionTrial {
+                context: &context,
+                region: &root,
+                items: &items,
+                wanted: None,
+                budget: 0.0,
+                shape,
+                max_children: child_limit(&context, shape).unwrap(),
+                retained: RetainedWork {
+                    items: previous,
+                    terms: previous,
+                },
+            };
+            let error = trial
+                .candidate(&[0], Kind::Single(0), &mut MergeCounters::default())
+                .err()
+                .unwrap();
+            assert!(matches!(
+                error,
+                PartitionedTreeTNError::ResourceLimit { .. }
+            ));
+            let mut counters = MergeCounters::default();
+            let chosen = trial.choose(1, &mut counters).unwrap();
+            assert_eq!(chosen.kind, Kind::Unsplit);
+            assert_eq!(chosen.regions.len(), 1);
+            assert_eq!(chosen.regions[0].0, root);
+            assert_eq!(chosen.regions[0].2, 0.0);
+            assert_eq!(
+                (chosen.retained.items, chosen.retained.terms),
+                (previous + 2, previous + 2)
+            );
+            assert_eq!(counters.refined_regions, 0);
+            assert_eq!(counters.stopped_regions, 1);
+            // The rejected probe must not replace or alter either retained term.
+            let expected = term.data().to_dense().unwrap();
+            for item in chosen.regions[0].1.values() {
+                assert_eq!(item.terms.len(), 1);
+                let actual = item.terms[0].data().to_dense().unwrap();
+                assert_eq!(actual.sub(&expected).unwrap().maxabs().unwrap(), 0.0);
+            }
+        }
+    }
+    check::<f64>();
+    check::<num_complex::Complex64>();
+}
+
+#[test]
 fn serial_joint_probes_keep_the_chosen_partition_and_its_ledger() {
     let mut geom = geometry(&[2, 2]);
     geom.spectators = vec![Projector::new()];
@@ -341,6 +426,106 @@ fn serial_joint_probes_keep_the_chosen_partition_and_its_ledger() {
     assert!(next.is_empty());
     assert!(components.is_empty());
     assert_eq!(counters.additions, 27);
+
+    // Each single-axis candidate fits, but planning four joint children does
+    // not. Keep the first single on the deterministic tie, without aborting.
+    let mut counters = MergeCounters::default();
+    let selected = RegionTrial {
+        max_children: (2, "max_work_items"),
+        ..trial
+    }
+    .choose(1, &mut counters)
+    .unwrap();
+    assert_eq!(selected.kind, Kind::Single(0));
+    assert_eq!(selected.regions.len(), 2);
+    assert_eq!(counters.additions, 15);
+    assert_eq!(counters.refined_regions, 1);
+    assert_eq!(counters.stopped_regions, 1);
+}
+
+#[test]
+fn joint_retained_limits_reject_only_resource_failures() {
+    let mut geom = geometry(&[2, 2]);
+    geom.spectators = vec![Projector::new()];
+    let root = geom.root_output(0);
+    let term = SubDomainTreeTN::from_treetn(
+        TreeTN::from_tensors(
+            vec![IdxTensor::from_dense(
+                geom.axes
+                    .iter()
+                    .flat_map(|axis| axis.outputs.clone())
+                    .collect(),
+                (1..=16).map(f64::from).collect(),
+            )
+            .unwrap()],
+            vec![0usize],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let items = BTreeMap::from([
+        (vec![(1, 0), (0, 0)], Item::single(term.clone())),
+        (vec![(2, 2), (0, 0)], Item::single(term)),
+    ]);
+    let shape = merge_shape(&items).unwrap();
+    for (max_work_items, max_terms) in [(5, 16), (16, 5)] {
+        let options = MergeRefineOptions {
+            merge_policy: MergePolicy::Tolerance,
+            max_work_items,
+            max_terms,
+            ..Default::default()
+        };
+        let context = ProbeContext {
+            geometry: &geom,
+            center: &0,
+            options: &options,
+            share: 0.0,
+        };
+        let trial = RegionTrial {
+            context: &context,
+            region: &root,
+            items: &items,
+            wanted: None,
+            budget: 0.0,
+            shape,
+            max_children: child_limit(&context, shape).unwrap(),
+            retained: RetainedWork::default(),
+        };
+        let error = trial
+            .candidate(&[0, 1], Kind::Joint, &mut MergeCounters::default())
+            .err()
+            .unwrap();
+        assert!(matches!(
+            error,
+            PartitionedTreeTNError::ResourceLimit { value: 6, .. }
+        ));
+        assert!(trial
+            .probe(&[0, 1], Kind::Joint, &mut MergeCounters::default())
+            .unwrap()
+            .is_none());
+        let chosen = trial.choose(1, &mut MergeCounters::default()).unwrap();
+        // Dense single-node projections retain their full payload, so these
+        // splits do not pay. Resource handling must not change that decision.
+        assert_eq!(chosen.kind, Kind::Unsplit);
+        assert_eq!((chosen.retained.items, chosen.retained.terms), (2, 2));
+        assert_eq!(chosen.regions.len(), 1);
+        assert_eq!(chosen.regions[0].0.prefix, vec![(0, 0), (0, 0)]);
+        // Coordinate overflow is a validation failure, not a rejected resource
+        // probe. It must remain observable even when an incumbent exists.
+        let mut invalid_root = root.clone();
+        invalid_root.prefix[0] = (usize::BITS as usize, usize::MAX);
+        let error = RegionTrial {
+            region: &invalid_root,
+            ..trial
+        }
+        .probe(&[0], Kind::Single(0), &mut MergeCounters::default())
+        .err()
+        .unwrap();
+        assert!(matches!(
+            error,
+            PartitionedTreeTNError::InvalidOptions { .. }
+        ));
+    }
 }
 
 /// The middle cut really needs rank four, while the end cuts contain redundant

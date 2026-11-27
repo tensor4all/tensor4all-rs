@@ -234,6 +234,21 @@ where
         })
     }
 
+    /// Resource limits reject an optional split, not the feasible incumbent.
+    /// Numerical, validation and backend errors still abort the schedule.
+    fn probe(
+        &self,
+        axes: &[usize],
+        kind: Kind,
+        counters: &mut MergeCounters,
+    ) -> Result<Option<Candidate<V>>> {
+        match self.candidate(axes, kind, counters) {
+            Ok(candidate) => Ok(Some(candidate)),
+            Err(PartitionedTreeTNError::ResourceLimit { .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     fn choose(&self, level_index: usize, counters: &mut MergeCounters) -> Result<Candidate<V>> {
         let context = self.context;
         let region = self.region;
@@ -243,7 +258,9 @@ where
         let axes = context.geometry.refining_axes(region, level_index);
         let mut passing = Vec::new();
         for &axis in &axes {
-            let probe = self.candidate(&[axis], Kind::Single(axis), counters)?;
+            let Some(probe) = self.probe(&[axis], Kind::Single(axis), counters)? else {
+                continue;
+            };
             if split_pays(unsplit_parameters, probe.parameters) {
                 passing.push(axis);
                 if prefers(
@@ -258,8 +275,11 @@ where
             // The losing probe (or replaced incumbent) is released here. Only the
             // incumbent and a single probe own candidate tensors at any instant.
         }
-        if passing.len() > 1 {
-            let probe = self.candidate(&passing, Kind::Joint, counters)?;
+        if let Some(probe) = if passing.len() > 1 {
+            self.probe(&passing, Kind::Joint, counters)?
+        } else {
+            None
+        } {
             if split_pays(unsplit_parameters, probe.parameters)
                 && prefers(
                     probe.parameters,
