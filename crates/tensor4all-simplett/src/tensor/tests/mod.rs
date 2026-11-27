@@ -186,3 +186,47 @@ fn test_iter_mut_writes_every_element_once_in_column_major_order() {
     assert_eq!(iter.size_hint(), (0, Some(0)));
     assert!(iter.next().is_none());
 }
+
+/// Fills a rank-3 tensor with distinct values and checks that the borrowed
+/// buffer equals the exported vector and indexes as `l + left * (s + site * r)`.
+fn check_col_major_slice<T>(left: usize, site: usize, right: usize, value: impl Fn(usize) -> T)
+where
+    T: TensorScalar + PartialEq + std::fmt::Debug,
+{
+    let data: Vec<T> = (0..left * site * right).map(value).collect();
+    let tensor = Tensor3::from_fn([left, site, right], |[l, s, r]| {
+        data[l + left * (s + site * r)]
+    })
+    .unwrap();
+
+    let buffer = tensor.as_col_major_slice().unwrap();
+    assert_eq!(buffer, &tensor.to_col_major_vec()[..]);
+    assert_eq!(buffer, &data[..]);
+    for r in 0..right {
+        for s in 0..site {
+            for l in 0..left {
+                assert_eq!(buffer[l + left * (s + site * r)], tensor[[l, s, r]]);
+            }
+        }
+    }
+}
+
+#[test]
+fn as_col_major_slice_matches_export_and_documented_index_f64() {
+    check_col_major_slice(1, 1, 1, |i| i as f64 + 0.5);
+    check_col_major_slice(2, 3, 4, |i| i as f64 * 1.25 - 3.0);
+    check_col_major_slice(5, 1, 2, |i| i as f64);
+}
+
+#[test]
+fn as_col_major_slice_matches_export_and_documented_index_c64() {
+    use num_complex::Complex64;
+    check_col_major_slice(1, 1, 1, |i| Complex64::new(i as f64, -1.0));
+    check_col_major_slice(3, 2, 4, |i| Complex64::new(i as f64, 0.5 * i as f64 + 1.0));
+}
+
+#[test]
+fn as_col_major_slice_of_an_empty_tensor_is_empty() {
+    let tensor: Tensor3<f64> = Tensor3::from_elem([0, 2, 2], 0.0).unwrap();
+    assert_eq!(tensor.as_col_major_slice(), Some(&[][..]));
+}

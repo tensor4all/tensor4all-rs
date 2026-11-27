@@ -507,3 +507,73 @@ fn folded_single_site_core_is_the_dense_slab_stack() {
         }
     }
 }
+
+/// The pre-borrow readout: every slab is copied out with `slice_site` and the
+/// end cores are read element by element with `get3`.
+fn evaluate_with_slice_site(fit: &MatrixTCI2Result<f64>, x: &[usize]) -> Vec<f64> {
+    let tci = &fit.result.tci;
+    let MatrixShape { rows, cols } = fit.shape;
+    let first = tci.site_tensor(0);
+    let mut width = first.right_dim();
+    let mut current = vec![0.0; rows * width];
+    for a in 0..width {
+        for i in 0..rows {
+            current[i + rows * a] = *first.get3(0, i, a);
+        }
+    }
+    for (k, &xk) in x.iter().enumerate() {
+        let core = tci.site_tensor(k + 1);
+        let slab = core.slice_site(xk);
+        current = col_major_gemm(&current, rows, width, &slab, core.right_dim());
+        width = core.right_dim();
+    }
+    let last = tci.site_tensor(x.len() + 1);
+    let mut tail = vec![0.0; width * cols];
+    for j in 0..cols {
+        for a in 0..width {
+            tail[a + width * j] = *last.get3(a, j, 0);
+        }
+    }
+    col_major_gemm(&current, rows, width, &tail, cols)
+}
+
+#[test]
+fn evaluate_is_bit_identical_to_slice_site_extraction() {
+    for dims in [vec![3], vec![3, 4], vec![3, 2, 4]] {
+        let fit = fit_for_folding(dims.clone());
+        let mut x = vec![0; dims.len()];
+        loop {
+            let got = fit.evaluate(&x).unwrap();
+            let want = evaluate_with_slice_site(&fit, &x);
+            let got_bits: Vec<u64> = got
+                .as_col_major_slice()
+                .iter()
+                .map(|v| v.to_bits())
+                .collect();
+            let want_bits: Vec<u64> = want.iter().map(|v| v.to_bits()).collect();
+            assert_eq!(got_bits, want_bits, "dims {dims:?}, x = {x:?}");
+            // Odometer over the physical coordinates.
+            let Some(k) = (0..dims.len()).rev().find(|&k| x[k] + 1 < dims[k]) else {
+                break;
+            };
+            x[k] += 1;
+            x[k + 1..].fill(0);
+        }
+    }
+}
+
+#[test]
+fn strided_gemm_reads_a_slab_in_place() {
+    // A 2 x 3 x 2 core, column-major: element (l, s, r) = 1 + l + 2 s + 6 r.
+    let core: Vec<f64> = (0..12).map(|i| 1.0 + i as f64).collect();
+    let a = [1.0, 2.0, 3.0, 4.0]; // 2 x 2
+    for s in 0..3 {
+        let slab: Vec<f64> = (0..2)
+            .flat_map(|r| (0..2).map(move |l| 1.0 + l as f64 + 2.0 * s as f64 + 6.0 * r as f64))
+            .collect();
+        assert_eq!(
+            col_major_gemm_ld(&a, 2, 2, &core, 2 * s, 2 * 3, 2),
+            col_major_gemm(&a, 2, 2, &slab, 2)
+        );
+    }
+}
