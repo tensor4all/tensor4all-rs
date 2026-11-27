@@ -1,0 +1,26 @@
+T4A_PARENT_PROBE {"label":"joint","ns":53520,"input_items":1,"additions":0,"parents":[{"ordinal":0,"ns":53120,"items":1,"additions":0}]}
+T4A_EMIT {"ns":30988}
+T4A_PARENT_PROBE {"label":"joint","ns":29245,"input_items":1,"additions":0,"parents":[{"ordinal":0,"ns":29044,"items":1,"additions":0}]}
+T4A_EMIT {"ns":11322}
+T4A_CANDIDATE {"label":"joint","ns":133200,"complete":true}
+T4A_EMIT {"ns":6643}
+T4A_REGION {"level":1,"ordinal":0,"ns":144181,"os_threads":2}
+T4A_EMIT {"ns":38703}
+T4A_PARENT_PROBE {"label":"joint","ns":40165,"input_items":1,"additions":0,"parents":[{"ordinal":0,"ns":39975,"items":1,"additions":0}]}
+T4A_EMIT {"ns":11562}
+T4A_PARENT_PROBE {"label":"joint","ns":25688,"input_items":1,"additions":0,"parents":[{"ordinal":0,"ns":25548,"items":1,"additions":0}]}
+T4A_EMIT {"ns":10961}
+T4A_CANDIDATE {"label":"joint","ns":95419,"complete":true}
+T4A_EMIT {"ns":6092}
+T4A_REGION {"level":2,"ordinal":0,"ns":104927,"os_threads":2}
+T4A_EMIT {"ns":31579}
+T4A_PARENT_PROBE {"label":"joint","ns":29255,"input_items":1,"additions":0,"parents":[{"ordinal":0,"ns":29095,"items":1,"additions":0}]}
+T4A_EMIT {"ns":11201}
+T4A_PARENT_PROBE {"label":"joint","ns":23975,"input_items":1,"additions":0,"parents":[{"ordinal":0,"ns":23865,"items":1,"additions":0}]}
+T4A_EMIT {"ns":10901}
+T4A_CANDIDATE {"label":"joint","ns":82214,"complete":true}
+T4A_EMIT {"ns":6152}
+T4A_REGION {"level":2,"ordinal":1,"ns":91622,"os_threads":2}
+T4A_EMIT {"ns":30418}
+ai-run: measure done exit=0 wall=0.1s peak_mem=10M/8.0G verdict=CONTAMINATED (foreign 4.1% on cpus 8-15, 0.4 busy CPUs elsewhere) report=/root/projects/tensor4all-rust/tensor4all-rs-1497-design/docs/experiments/1497-merge-granularity/raw/tiny/ai-run.json
+ai-run:   CONTAMINATED: other processes used 4.1% of the measurement CPUs

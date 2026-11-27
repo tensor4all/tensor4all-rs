@@ -1,0 +1,16 @@
+{
+  "case": "m6a-r10-production",
+  "exit_code": 124,
+  "guard_verdict": "CLEAN",
+  "schedule_completed": false,
+  "phases_seconds": {
+    "schedule/preflight": 0.000371388,
+    "prepare/setup": 0.034119736
+  },
+  "leaf_seconds": [],
+  "region_seconds_by_level": {},
+  "largest_region_count": 0,
+  "max_observed_threads": 1,
+  "max_boundary_rss_kib": 284464,
+  "max_process_hwm_kib": 553808
+}

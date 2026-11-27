@@ -1,0 +1,22 @@
+[
+  "ai-run",
+  "measure",
+  "--mem",
+  "8G",
+  "--cpus",
+  "8-15",
+  "--report",
+  "/root/projects/tensor4all-rust/tensor4all-rs-1497-design/docs/experiments/1497-merge-granularity/raw/tiny/ai-run.json",
+  "--",
+  "timeout",
+  "--kill-after=5",
+  "300",
+  "taskset",
+  "-c",
+  "8",
+  "/root/projects/tensor4all-rust/tensor4all-rs-impl-1130/target/release/deps/qft_reconstruction-45038d5f8c81a864",
+  "--exact",
+  "output_selection::minimal_two_bit_exact_fanout_has_two_second_level_region_jobs",
+  "--nocapture",
+  "--test-threads=1"
+]

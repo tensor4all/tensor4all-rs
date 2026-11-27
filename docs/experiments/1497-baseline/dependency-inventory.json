@@ -1,0 +1,146 @@
+[
+  {
+    "owner": "Fourier front end",
+    "path": "crates/tensor4all-quanticstransform/src/patched_fourier.rs",
+    "matches": [
+      {
+        "line": 132,
+        "declaration": "pub fn patched_fourier_transform<V>("
+      }
+    ]
+  },
+  {
+    "owner": "Fourier operator construction",
+    "path": "crates/tensor4all-quanticstransform/src/multiaxis_fourier.rs",
+    "matches": [
+      {
+        "line": 130,
+        "declaration": "pub fn quantics_fourier_operator_multiaxis("
+      }
+    ]
+  },
+  {
+    "owner": "Schedule",
+    "path": "crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs",
+    "matches": [
+      {
+        "line": 1434,
+        "declaration": "pub fn schedule_merge_refine<V, OperatorV>("
+      }
+    ]
+  },
+  {
+    "owner": "Target snapshot/scale",
+    "path": "crates/tensor4all-partitionedtreetn/src/reconstruction/target.rs",
+    "matches": [
+      {
+        "line": 126,
+        "declaration": "pub fn from_partition(partition: &PartitionedTreeTN<V>) -> Result<Self> {"
+      }
+    ]
+  },
+  {
+    "owner": "Subset preparation",
+    "path": "crates/tensor4all-partitionedtreetn/src/reconstruction/target.rs",
+    "matches": [
+      {
+        "line": 441,
+        "declaration": "pub(super) fn prepare_subset_images<OperatorV>("
+      }
+    ]
+  },
+  {
+    "owner": "Certified application",
+    "path": "crates/tensor4all-treetn/src/operator/certified.rs",
+    "matches": [
+      {
+        "line": 225,
+        "declaration": "pub fn apply_linear_operator_certified<T, V>("
+      },
+      {
+        "line": 342,
+        "declaration": "pub fn apply_linear_operator_certified_to_indices<T, V>("
+      }
+    ]
+  },
+  {
+    "owner": "Application",
+    "path": "crates/tensor4all-treetn/src/operator/apply.rs",
+    "matches": [
+      {
+        "line": 417,
+        "declaration": "pub fn apply_linear_operator<T, V>("
+      },
+      {
+        "line": 660,
+        "declaration": "pub fn apply_linear_operator_to_indices<T, V>("
+      },
+      {
+        "line": 774,
+        "declaration": "pub fn apply_linear_operator_to_numbered_tags<V>("
+      }
+    ]
+  },
+  {
+    "owner": "Tree norm",
+    "path": "crates/tensor4all-treetn/src/treetn/ops.rs",
+    "matches": [
+      {
+        "line": 236,
+        "declaration": "pub fn norm(&mut self) -> std::result::Result<f64, TreeTNOperationError> {"
+      }
+    ]
+  },
+  {
+    "owner": "Tree truncation",
+    "path": "crates/tensor4all-treetn/src/treetn/truncate.rs",
+    "matches": [
+      {
+        "line": 109,
+        "declaration": "pub fn truncate_mut("
+      }
+    ]
+  },
+  {
+    "owner": "Tree exact sum",
+    "path": "crates/tensor4all-treetn/src/treetn/sum.rs",
+    "matches": [
+      {
+        "line": 236,
+        "declaration": "pub fn exact_sum("
+      }
+    ]
+  },
+  {
+    "owner": "Concrete subdomain operations",
+    "path": "crates/tensor4all-partitionedtreetn/src/subdomain_tree_tn.rs",
+    "matches": [
+      {
+        "line": 501,
+        "declaration": "pub fn project(&self, projector: &Projector) -> Result<Option<Self>> {"
+      },
+      {
+        "line": 555,
+        "declaration": "pub fn add(&self, other: &Self) -> Result<Self> {"
+      },
+      {
+        "line": 702,
+        "declaration": "pub fn truncate(&mut self, center: &V, options: TruncationOptions) -> Result<()> {"
+      },
+      {
+        "line": 904,
+        "declaration": "pub fn norm(&self) -> Result<f64> {"
+      }
+    ]
+  },
+  {
+    "owner": "Explicit core eager seam",
+    "path": "crates/tensor4all-core/src/defaults/eager_session.rs",
+    "matches": [
+      {
+        "line": 48,
+        "declaration": "pub(crate) fn with_eager_on<T, E>("
+      }
+    ]
+  }
+]

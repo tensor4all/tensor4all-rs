@@ -1,0 +1,1 @@
+{"arm":"patched-merge-refine","cap":64,"certified_share":0.5,"check_dense":false,"contract":"svd","g0_cap":64,"g0_patch_order":"k","g0_rtol":1e-6,"kind":"config","out_patch_order":"sites","r":10,"ref_seed":42,"rtol":1e-6,"samples":4096,"seed":42,"slices":4,"temperature":0.01,"topology":"tt_nblock"}

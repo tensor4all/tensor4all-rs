@@ -1,0 +1,191 @@
+diff --git a/crates/tensor4all-partitionedtreetn/src/reconstruction/mod.rs b/crates/tensor4all-partitionedtreetn/src/reconstruction/mod.rs
+index 18c6e440..f8dea595 100644
+--- a/crates/tensor4all-partitionedtreetn/src/reconstruction/mod.rs
++++ b/crates/tensor4all-partitionedtreetn/src/reconstruction/mod.rs
+@@ -24,6 +24,7 @@ use crate::{
+ };
+ 
+ mod application;
++mod profile_1497;
+ mod engine;
+ mod schedule;
+ mod target;
+diff --git a/crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs b/crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs
+index 997d5a72..3ed74e54 100644
+--- a/crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs
++++ b/crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs
+@@ -1444,6 +1444,9 @@ where
+     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+     OperatorV: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+ {
++    let profile_1497 = super::profile_1497::Profile::new("schedule");
++    let _profile_total = profile_1497.span("total", 0, 0);
++    let profile_preflight = profile_1497.span("preflight", 0, 0);
+     validate_tolerance(tolerance)?;
+     if options.target_bond_dim == Some(0) {
+         return Err(invalid("target_bond_dim must be positive when specified"));
+@@ -1499,6 +1502,7 @@ where
+         // the zero-for-missing coverage contract every leaf is missing, so the
+         // target is exactly zero and the schedule returns no region.
+         let reference_scale = preimage.reference_scale();
++        profile_1497.complete();
+         return Ok(MergeRefineResult {
+             regions: Vec::new(),
+             report: MergeRefineReport {
+@@ -1526,7 +1530,10 @@ where
+         });
+     }
+ 
+-    let prepared = ReconstructionTarget::prepare_subset_images(
++    drop(profile_preflight);
++    let prepared = {
++    let _profile_prepare = profile_1497.span("prepare_images", 0, 0);
++    ReconstructionTarget::prepare_subset_images(
+         preimage,
+         center,
+         operator,
+@@ -1544,7 +1551,9 @@ where
+                 tolerance,
+             },
+         },
+-    )?;
++    )?
++    };
++    let profile_initialize = profile_1497.span("initialize", 0, 0);
+     let super::target::PreparedImages { images, scale } = prepared;
+     let allowance = absolute_allowance(tolerance, scale)?;
+     // Live output regions, keyed by their prefix value, each holding one item per
+@@ -1619,7 +1628,9 @@ where
+     let mut work_items_per_level = Vec::with_capacity(output_depth + 1);
+     work_items_per_level.push(leaf_count);
+     check_term_budget(&level, options.max_terms)?;
++    drop(profile_initialize);
+     for level_index in 1..=output_depth {
++        let _profile_level = profile_1497.span("level", level_index, 0);
+         let levels_left = output_depth - level_index + 1;
+         let charges = level_charge_bound(&level, &geometry, level_index, wanted.as_deref())?;
+         // Without a rank goal nothing is approximated: a zero share still drops an
+@@ -1633,7 +1644,8 @@ where
+         let mut level_components: BTreeMap<OutputKey, f64> = BTreeMap::new();
+         let mut spent = 0.0_f64;
+         let mut next: BTreeMap<OutputKey, BTreeMap<InputKey, Item<V>>> = BTreeMap::new();
+-        for (region, items) in std::mem::take(&mut level) {
++        for (region_ordinal, (region, items)) in std::mem::take(&mut level).into_iter().enumerate() {
++            let _profile_region = profile_1497.span("region", level_index, region_ordinal);
+             let context = ProbeContext {
+                 geometry: &geometry,
+                 center,
+@@ -1788,6 +1800,7 @@ where
+     // that depth, including the regions that stopped refining early and kept
+     // merging their siblings. The caller consumes their terms through `regions()`.
+ 
++    let _profile_report = profile_1497.span("report", 0, 0);
+     let mut max_bond_dim = 0usize;
+     let mut logical_parameters = 0usize;
+     // Group retained terms by output region: terms of one output prefix region
+@@ -1847,6 +1860,7 @@ where
+         max_transient_bond_dim: counters.max_transient_bond_dim,
+         logical_parameters,
+     };
++    profile_1497.complete();
+     Ok(MergeRefineResult { regions, report })
+ }
+ 
+diff --git a/crates/tensor4all-partitionedtreetn/src/reconstruction/target.rs b/crates/tensor4all-partitionedtreetn/src/reconstruction/target.rs
+index f6ffd325..56300ba5 100644
+--- a/crates/tensor4all-partitionedtreetn/src/reconstruction/target.rs
++++ b/crates/tensor4all-partitionedtreetn/src/reconstruction/target.rs
+@@ -449,6 +449,9 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
+     where
+         OperatorV: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+     {
++        let profile_1497 = super::profile_1497::Profile::new("prepare");
++        let _profile_total = profile_1497.span("total", 0, 0);
++        let profile_setup = profile_1497.span("setup", 0, 0);
+         let mut operator_nodes = operator.mpo().node_names();
+         operator_nodes.sort();
+         if operator_nodes.len() != selection.len() {
+@@ -628,7 +631,9 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
+             _ => None,
+         };
+         let mut images = Vec::with_capacity(preimage.patches.len());
+-        for (term, term_center) in terms.into_iter().zip(centers) {
++        drop(profile_setup);
++        for (leaf_ordinal, (term, term_center)) in terms.into_iter().zip(centers).enumerate() {
++            let _profile_leaf = profile_1497.span("leaf", 0, leaf_ordinal);
+             let exact_options = ApplyOptions {
+                 svd_policy: Some(SvdTruncationPolicy::new(0.0)),
+                 max_bond_dim: None,
+@@ -683,6 +688,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
+             });
+         }
+ 
++        profile_1497.complete();
+         Ok(PreparedImages { images, scale })
+     }
+ 
+diff --git a/crates/tensor4all-partitionedtreetn/src/reconstruction/profile_1497.rs b/crates/tensor4all-partitionedtreetn/src/reconstruction/profile_1497.rs
+new file mode 100644
+index 00000000..0dd73bf2
+--- /dev/null
++++ b/crates/tensor4all-partitionedtreetn/src/reconstruction/profile_1497.rs
+@@ -0,0 +1,59 @@
++//! Temporary serial-only observation for issue #1497. No numerical policy changes.
++use std::cell::Cell;
++use std::time::Instant;
++
++pub(super) struct Profile {
++    scope: &'static str,
++    origin: Option<Instant>,
++    completed: Cell<bool>,
++}
++
++impl Profile {
++    pub(super) fn new(scope: &'static str) -> Self {
++        Self {
++            scope,
++            origin: (std::env::var_os("T4A_MERGE_REFINE_PROFILE").as_deref()
++                == Some(std::ffi::OsStr::new("1")))
++                .then(Instant::now),
++            completed: Cell::new(false),
++        }
++    }
++
++    pub(super) fn span(&self, phase: &'static str, level: usize, index: usize) -> Span<'_> {
++        Span { profile: self, phase, level, index, started: self.origin.map(|_| Instant::now()) }
++    }
++
++    pub(super) fn complete(&self) {
++        self.completed.set(true);
++    }
++}
++
++pub(super) struct Span<'a> {
++    profile: &'a Profile,
++    phase: &'static str,
++    level: usize,
++    index: usize,
++    started: Option<Instant>,
++}
++
++impl Drop for Span<'_> {
++    fn drop(&mut self) {
++        let (Some(started), Some(origin)) = (self.started, self.profile.origin) else { return };
++        let elapsed_ns = started.elapsed().as_nanos();
++        let start_ns = started.duration_since(origin).as_nanos();
++        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
++        let read = |key: &str| {
++            status.lines().find_map(|line| {
++                line.strip_prefix(key)?.split_whitespace().next()?.parse::<u64>().ok()
++            }).map_or_else(|| "null".to_string(), |value| value.to_string())
++        };
++        let completed = if self.phase == "total" {
++            if self.profile.completed.get() { "true" } else { "false" }
++        } else { "null" };
++        eprintln!(
++            "T4A_PROFILE {{\"scope\":\"{}\",\"phase\":\"{}\",\"level\":{},\"index\":{},\"start_ns\":{},\"elapsed_ns\":{},\"rss_kib\":{},\"hwm_kib\":{},\"threads\":{},\"completed\":{}}}",
++            self.profile.scope, self.phase, self.level, self.index, start_ns, elapsed_ns,
++            read("VmRSS:"), read("VmHWM:"), read("Threads:"), completed
++        );
++    }
++}

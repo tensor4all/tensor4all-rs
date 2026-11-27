@@ -1,0 +1,121 @@
+diff --git a/benchmarks/rust/benchmark_m6a_fourier.rs b/benchmarks/rust/benchmark_m6a_fourier.rs
+index 59372a1a..6f944e93 100644
+--- a/benchmarks/rust/benchmark_m6a_fourier.rs
++++ b/benchmarks/rust/benchmark_m6a_fourier.rs
+@@ -73,6 +73,14 @@ use g0_grid::{frequency_sums, Grid, MU};
+ type Tree = TreeTN<IdxTensor, usize>;
+ type Partition = PartitionedTreeTN<usize>;
+ 
++// Diagnostic reader for #1497: keep the front end's lazy superposition.
++// Accuracy readout is batched per term, after the transform timer has stopped.
++enum TransformOutput {
++    Partition(Partition),
++    Lazy(tensor4all_partitionedtreetn::reconstruction::MergeRefineResult<usize>),
++}
++
++
+ // ---------------------------------------------------------------------------
+ // Arguments
+ 
+@@ -514,10 +522,24 @@ fn accuracy(values: &[Complex64], exact: &[Complex64]) -> Value {
+ }
+ 
+ fn evaluate(
+-    partition: &Partition,
++    output: &TransformOutput,
+     indices: &[DynIndex],
+     points: &[usize],
+ ) -> Result<Vec<Complex64>> {
++    if let TransformOutput::Lazy(result) = output {
++        let mut total = vec![Complex64::new(0.0, 0.0); points.len() / indices.len()];
++        for (_, terms) in result.regions() {
++            for term in terms {
++                let one = TransformOutput::Partition(Partition::from_subdomain(term.clone())?);
++                let values = evaluate(&one, indices, points)?;
++                for (sum, value) in total.iter_mut().zip(values) {
++                    *sum += value;
++                }
++            }
++        }
++        return Ok(total);
++    }
++    let TransformOutput::Partition(partition) = output else { unreachable!("lazy returned above") };
+     let shape = [indices.len(), points.len() / indices.len()];
+     Ok(partition
+         .evaluate_batched(indices, ColMajorArrayRef::new(points, &shape)?)?
+@@ -560,7 +582,7 @@ fn run_arm(
+     grid: &Grid,
+     norm: f64,
+     outputs: &[DynIndex],
+-) -> Result<(Partition, Vec<DynIndex>, Value)> {
++) -> Result<(TransformOutput, Vec<DynIndex>, Value)> {
+     let center = 0usize;
+     match args.arm.as_str() {
+         "patched-contract" => {
+@@ -614,7 +636,7 @@ fn run_arm(
+             let out = contract_adaptive(&operand, &g0, &center, &contract_options, &patching)?;
+             let seconds = start.elapsed().as_secs_f64();
+             Ok((
+-                out,
++                TransformOutput::Partition(out),
+                 outputs.to_vec(),
+                 json!({"g0_seconds": g0_seconds, "g0": partition_stats(&g0), "seconds": seconds}),
+             ))
+@@ -633,7 +655,7 @@ fn run_arm(
+             let seconds = start.elapsed().as_secs_f64();
+             let g0_stats = json!({"patches": 1, "max_bond": g0.link_dims().into_iter().max()});
+             Ok((
+-                single_patch(out)?,
++                TransformOutput::Partition(single_patch(out)?),
+                 outputs.to_vec(),
+                 json!({"g0_seconds": g0_seconds, "g0": g0_stats, "seconds": seconds}),
+             ))
+@@ -665,10 +687,15 @@ fn run_arm(
+             let report = json!({
+                 "error_bound": result.report().error_bound,
+                 "absolute_tolerance": result.report().absolute_tolerance,
++                "region_count": result.report().region_count,
++                "term_count": result.report().term_count,
++                "max_bond_dim": result.report().max_bond_dim,
++                "applied_operator_count": result.report().applied_operator_count,
++                "work_items_per_level": result.report().work_items_per_level,
+             });
+             // The transform keeps the selected site indices.
+             Ok((
+-                result.into_partition()?,
++                TransformOutput::Lazy(result),
+                 grid.sites.clone(),
+                 json!({"g0_seconds": g0_seconds, "g0": partition_stats(&g0), "seconds": seconds, "merge_refine": report}),
+             ))
+@@ -771,12 +798,12 @@ fn run_arm(
+                         json!(g0_seconds + seconds + sum_seconds),
+                     );
+                 }
+-                return Ok((single_patch(sum)?, outputs.to_vec(), timing));
++                return Ok((TransformOutput::Partition(single_patch(sum)?), outputs.to_vec(), timing));
+             }
+             drop(raw_images);
+             let out = PartitionedTreeTN::from_subdomains(images)?;
+             let indices = outputs.to_vec();
+-            Ok((out, indices, timing))
++            Ok((TransformOutput::Partition(out), indices, timing))
+         }
+         other => bail!("unknown --arm {other}"),
+     }
+@@ -830,7 +857,15 @@ fn main() -> Result<()> {
+         "arm": args.arm,
+         "topology": args.topology,
+         "accuracy": accuracy_value,
+-        "output": partition_stats(&out),
++        "output": match &out {
++            TransformOutput::Partition(partition) => partition_stats(partition),
++            TransformOutput::Lazy(result) => json!({
++                "regions": result.report().region_count,
++                "terms": result.report().term_count,
++                "params": result.report().logical_parameters,
++                "max_bond": result.report().max_bond_dim,
++            }),
++        },
+         "slices": slices.len(),
+     });
+     if let (Some(object), Some(timing)) = (result.as_object_mut(), timing.as_object()) {

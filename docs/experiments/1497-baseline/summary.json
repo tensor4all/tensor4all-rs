@@ -1,0 +1,166 @@
+[
+  {
+    "case": "m6a-r4-cap8",
+    "processes": 3,
+    "successful": 3,
+    "feasibility_only": false,
+    "frontend_seconds": 0.853274544,
+    "leaf_share": 0.6026107230713004,
+    "region_share": 0.3230478406709307,
+    "max_region_width": 1,
+    "leaf_counts": [
+      98,
+      98,
+      98
+    ],
+    "max_os_threads_at_boundaries": 1,
+    "process_peak_rss_mib": 52.33984375,
+    "cgroup_peak_mib": 33.015625,
+    "exit_codes": [
+      0,
+      0,
+      0
+    ],
+    "directories": [
+      "raw/attempt-1/m6a-r4-cap8/0",
+      "raw/attempt-1/m6a-r4-cap8/1",
+      "raw/attempt-1/m6a-r4-cap8/2"
+    ],
+    "boundary_rss_mib": {
+      "start": 28.99609375,
+      "after_applications": 40.625,
+      "after_schedule": 52.41796875,
+      "hwm_during_schedule": 52.41796875
+    }
+  },
+  {
+    "case": "m6a-r6-cap16",
+    "processes": 3,
+    "successful": 3,
+    "feasibility_only": false,
+    "frontend_seconds": 33.315780052,
+    "leaf_share": 0.11300335530030466,
+    "region_share": 0.882901901130539,
+    "max_region_width": 1,
+    "leaf_counts": [
+      118,
+      118,
+      118
+    ],
+    "max_os_threads_at_boundaries": 1,
+    "process_peak_rss_mib": 888.84765625,
+    "cgroup_peak_mib": 871.0546875,
+    "exit_codes": [
+      0,
+      0,
+      0
+    ],
+    "directories": [
+      "raw/attempt-1/m6a-r6-cap16/0",
+      "raw/attempt-1/m6a-r6-cap16/1",
+      "raw/attempt-1/m6a-r6-cap16/2"
+    ],
+    "boundary_rss_mib": {
+      "start": 40.15625,
+      "after_applications": 111.69921875,
+      "after_schedule": 856.5234375,
+      "hwm_during_schedule": 888.84765625
+    }
+  },
+  {
+    "case": "m6a-r10-production",
+    "processes": 1,
+    "successful": 0,
+    "feasibility_only": true,
+    "frontend_seconds": null,
+    "leaf_share": null,
+    "region_share": null,
+    "max_region_width": 0,
+    "leaf_counts": [],
+    "max_os_threads_at_boundaries": 1,
+    "process_peak_rss_mib": 2830.89453125,
+    "cgroup_peak_mib": 2817.98046875,
+    "exit_codes": [
+      124
+    ],
+    "directories": [
+      "raw/attempt-1/m6a-r10-production/0"
+    ]
+  },
+  {
+    "case": "ir-r6-none",
+    "processes": 3,
+    "successful": 0,
+    "feasibility_only": false,
+    "frontend_seconds": null,
+    "leaf_share": null,
+    "region_share": null,
+    "max_region_width": 0,
+    "leaf_counts": [],
+    "max_os_threads_at_boundaries": null,
+    "process_peak_rss_mib": 45.1328125,
+    "cgroup_peak_mib": 19.91015625,
+    "exit_codes": [
+      1,
+      1,
+      1
+    ],
+    "directories": [
+      "raw/attempt-1/ir-r6-none/0",
+      "raw/attempt-1/ir-r6-none/1",
+      "raw/attempt-1/ir-r6-none/2"
+    ]
+  },
+  {
+    "case": "ir-r6-cap32",
+    "processes": 3,
+    "successful": 0,
+    "feasibility_only": false,
+    "frontend_seconds": null,
+    "leaf_share": null,
+    "region_share": null,
+    "max_region_width": 0,
+    "leaf_counts": [],
+    "max_os_threads_at_boundaries": null,
+    "process_peak_rss_mib": 44.6484375,
+    "cgroup_peak_mib": 19.91796875,
+    "exit_codes": [
+      1,
+      1,
+      1
+    ],
+    "directories": [
+      "raw/attempt-1/ir-r6-cap32/0",
+      "raw/attempt-1/ir-r6-cap32/1",
+      "raw/attempt-1/ir-r6-cap32/2"
+    ]
+  },
+  {
+    "case": "ir-r8-cap64",
+    "processes": 1,
+    "successful": 1,
+    "feasibility_only": true,
+    "frontend_seconds": 96.663,
+    "leaf_share": 0.3758811911900107,
+    "region_share": 0.623987750814686,
+    "max_region_width": 1,
+    "leaf_counts": [
+      4
+    ],
+    "max_os_threads_at_boundaries": 2,
+    "process_peak_rss_mib": 1285.6875,
+    "cgroup_peak_mib": 1259.04296875,
+    "exit_codes": [
+      0
+    ],
+    "directories": [
+      "raw/attempt-1/ir-r8-cap64/0"
+    ],
+    "boundary_rss_mib": {
+      "start": 295.7890625,
+      "after_applications": 608.9609375,
+      "after_schedule": 933.9375,
+      "hwm_during_schedule": 1285.6875
+    }
+  }
+]

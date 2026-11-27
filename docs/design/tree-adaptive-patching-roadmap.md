@@ -495,6 +495,11 @@ on a workload chosen under the M9 rules.
 
 ### M7. Shared-memory parallel execution (L)
 
+Patched Fourier's level-coupled scheduler has a separate
+[parallel merge-refine proposal](./merge-refine-parallel-execution.md) (#1497).
+It records the prerequisite, arithmetic-order and resource decisions for
+maintainer review before an `_on_lanes` implementation.
+
 Outcome: interpolation and contraction run patch-parallel on one node with
 reproducible results.
 

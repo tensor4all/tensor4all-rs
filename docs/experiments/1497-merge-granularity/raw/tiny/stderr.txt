@@ -1,0 +1,25 @@
+T4A_PARENT_PROBE {"label":"joint","ns":45636,"input_items":1,"additions":0,"parents":[{"ordinal":0,"ns":45065,"items":1,"additions":0}]}
+T4A_EMIT {"ns":28734}
+T4A_PARENT_PROBE {"label":"joint","ns":72957,"input_items":1,"additions":0,"parents":[{"ordinal":0,"ns":72737,"items":1,"additions":0}]}
+T4A_EMIT {"ns":14597}
+T4A_CANDIDATE {"label":"joint","ns":170531,"complete":true}
+T4A_EMIT {"ns":6512}
+T4A_REGION {"level":1,"ordinal":0,"ns":181051,"os_threads":2}
+T4A_EMIT {"ns":45034}
+T4A_PARENT_PROBE {"label":"joint","ns":42360,"input_items":1,"additions":0,"parents":[{"ordinal":0,"ns":42109,"items":1,"additions":0}]}
+T4A_EMIT {"ns":11702}
+T4A_PARENT_PROBE {"label":"joint","ns":25949,"input_items":1,"additions":0,"parents":[{"ordinal":0,"ns":25829,"items":1,"additions":0}]}
+T4A_EMIT {"ns":11121}
+T4A_CANDIDATE {"label":"joint","ns":98114,"complete":true}
+T4A_EMIT {"ns":6142}
+T4A_REGION {"level":2,"ordinal":0,"ns":107562,"os_threads":2}
+T4A_EMIT {"ns":31369}
+T4A_PARENT_PROBE {"label":"joint","ns":29696,"input_items":1,"additions":0,"parents":[{"ordinal":0,"ns":29556,"items":1,"additions":0}]}
+T4A_EMIT {"ns":11402}
+T4A_PARENT_PROBE {"label":"joint","ns":24165,"input_items":1,"additions":0,"parents":[{"ordinal":0,"ns":24065,"items":1,"additions":0}]}
+T4A_EMIT {"ns":11241}
+T4A_CANDIDATE {"label":"joint","ns":83327,"complete":true}
+T4A_EMIT {"ns":6141}
+T4A_REGION {"level":2,"ordinal":1,"ns":92784,"os_threads":2}
+T4A_EMIT {"ns":30066}
+ai-run: measure done exit=0 wall=0.1s peak_mem=10M/8.0G verdict=CLEAN (foreign 2.7% on cpus 8-15, 0.2 busy CPUs elsewhere) report=/root/projects/tensor4all-rust/tensor4all-rs-1497-design/docs/experiments/1497-merge-granularity/raw/tiny/ai-run.json

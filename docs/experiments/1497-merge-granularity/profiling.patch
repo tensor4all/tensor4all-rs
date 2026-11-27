@@ -1,0 +1,394 @@
+diff --git a/benchmarks/rust/benchmark_m6a_fourier.rs b/benchmarks/rust/benchmark_m6a_fourier.rs
+index cad9334d..f6db1375 100644
+--- a/benchmarks/rust/benchmark_m6a_fourier.rs
++++ b/benchmarks/rust/benchmark_m6a_fourier.rs
+@@ -74,6 +74,14 @@ use g0_grid::{frequency_sums, Grid, MU};
+ type Tree = TreeTN<IdxTensor, usize>;
+ type Partition = PartitionedTreeTN<usize>;
+ 
++// Diagnostic reader for #1497: keep the front end's lazy superposition.
++// Accuracy readout is batched per term, after the transform timer has stopped.
++enum TransformOutput {
++    Partition(Partition),
++    Lazy(tensor4all_partitionedtreetn::reconstruction::MergeRefineResult<usize>),
++}
++
++
+ // ---------------------------------------------------------------------------
+ // Arguments
+ 
+@@ -515,10 +523,24 @@ fn accuracy(values: &[Complex64], exact: &[Complex64]) -> Value {
+ }
+ 
+ fn evaluate(
+-    partition: &Partition,
++    output: &TransformOutput,
+     indices: &[DynIndex],
+     points: &[usize],
+ ) -> Result<Vec<Complex64>> {
++    if let TransformOutput::Lazy(result) = output {
++        let mut total = vec![Complex64::new(0.0, 0.0); points.len() / indices.len()];
++        for (_, terms) in result.regions() {
++            for term in terms {
++                let one = TransformOutput::Partition(Partition::from_subdomain(term.clone())?);
++                let values = evaluate(&one, indices, points)?;
++                for (sum, value) in total.iter_mut().zip(values) {
++                    *sum += value;
++                }
++            }
++        }
++        return Ok(total);
++    }
++    let TransformOutput::Partition(partition) = output else { unreachable!("lazy returned above") };
+     let shape = [indices.len(), points.len() / indices.len()];
+     Ok(partition
+         .evaluate_batched(indices, ColMajorArrayRef::new(points, &shape)?)?
+@@ -561,7 +583,7 @@ fn run_arm(
+     grid: &Grid,
+     norm: f64,
+     outputs: &[DynIndex],
+-) -> Result<(Partition, Vec<DynIndex>, Value)> {
++) -> Result<(TransformOutput, Vec<DynIndex>, Value)> {
+     let center = 0usize;
+     match args.arm.as_str() {
+         "patched-contract" => {
+@@ -615,7 +637,7 @@ fn run_arm(
+             let out = contract_adaptive(&operand, &g0, &center, &contract_options, &patching)?;
+             let seconds = start.elapsed().as_secs_f64();
+             Ok((
+-                out,
++                TransformOutput::Partition(out),
+                 outputs.to_vec(),
+                 json!({"g0_seconds": g0_seconds, "g0": partition_stats(&g0), "seconds": seconds}),
+             ))
+@@ -634,7 +656,7 @@ fn run_arm(
+             let seconds = start.elapsed().as_secs_f64();
+             let g0_stats = json!({"patches": 1, "max_bond": g0.link_dims().into_iter().max()});
+             Ok((
+-                single_patch(out)?,
++                TransformOutput::Partition(single_patch(out)?),
+                 outputs.to_vec(),
+                 json!({"g0_seconds": g0_seconds, "g0": g0_stats, "seconds": seconds}),
+             ))
+@@ -666,10 +688,20 @@ fn run_arm(
+             let report = json!({
+                 "error_bound": result.report().error_bound,
+                 "absolute_tolerance": result.report().absolute_tolerance,
++                "region_count": result.report().region_count,
++                "term_count": result.report().term_count,
++                "max_bond_dim": result.report().max_bond_dim,
++                "applied_operator_count": result.report().applied_operator_count,
++                "work_items_per_level": result.report().work_items_per_level,
++                "additions": result.report().additions,
++                "projections": result.report().projections,
++                "compression_attempts": result.report().compression_attempts,
++                "compressions": result.report().compressions,
++                "pruned_regions": result.report().pruned_regions,
+             });
+             // The transform keeps the selected site indices.
+             Ok((
+-                result.into_partition()?,
++                TransformOutput::Lazy(result),
+                 grid.sites.clone(),
+                 json!({"g0_seconds": g0_seconds, "g0": partition_stats(&g0), "seconds": seconds, "merge_refine": report}),
+             ))
+@@ -772,12 +804,12 @@ fn run_arm(
+                         json!(g0_seconds + seconds + sum_seconds),
+                     );
+                 }
+-                return Ok((single_patch(sum)?, outputs.to_vec(), timing));
++                return Ok((TransformOutput::Partition(single_patch(sum)?), outputs.to_vec(), timing));
+             }
+             drop(raw_images);
+             let out = PartitionedTreeTN::from_subdomains(images)?;
+             let indices = outputs.to_vec();
+-            Ok((out, indices, timing))
++            Ok((TransformOutput::Partition(out), indices, timing))
+         }
+         other => bail!("unknown --arm {other}"),
+     }
+@@ -831,7 +863,15 @@ fn main() -> Result<()> {
+         "arm": args.arm,
+         "topology": args.topology,
+         "accuracy": accuracy_value,
+-        "output": partition_stats(&out),
++        "output": match &out {
++            TransformOutput::Partition(partition) => partition_stats(partition),
++            TransformOutput::Lazy(result) => json!({
++                "regions": result.report().region_count,
++                "terms": result.report().term_count,
++                "params": result.report().logical_parameters,
++                "max_bond": result.report().max_bond_dim,
++            }),
++        },
+         "slices": slices.len(),
+     });
+     if let (Some(object), Some(timing)) = (result.as_object_mut(), timing.as_object()) {
+diff --git a/crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs b/crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs
+index c2d2abdc..0ea5fb26 100644
+--- a/crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs
++++ b/crates/tensor4all-partitionedtreetn/src/reconstruction/schedule.rs
+@@ -1907,7 +1907,8 @@ where
+                 &mut counters,
+             )?;
+         } else {
+-            for (region, items) in std::mem::take(&mut level) {
++            for (ordinal, (region, items)) in std::mem::take(&mut level).into_iter().enumerate() {
++                let _region = profiling1497::Region::new(level_index, ordinal);
+                 let context = ProbeContext {
+                     geometry: &geometry,
+                     center,
+@@ -1958,6 +1959,7 @@ where
+                     }
+                     let unsplit_parameters = region_parameters(&merged)?;
+                     for &axis in &axes {
++                        let mut candidate = profiling1497::Candidate::new(format!("axis-{axis}"));
+                         let mut children = Vec::with_capacity(2);
+                         let mut child_parameters = 0usize;
+                         for child in geometry.child_keys(
+@@ -1974,6 +1976,7 @@ where
+                                 &projector,
+                                 &mut counters,
+                                 &mut child_incurred,
++                                &format!("axis-{axis}"),
+                             )?;
+                             // The probe costs its measured components even when this
+                             // axis stops, but only a kept child is reported as a
+@@ -1993,6 +1996,7 @@ where
+                         } else {
+                             counters.stopped_regions = checked_add(counters.stopped_regions, 1)?;
+                         }
++                        candidate.complete();
+                     }
+                     if passing.is_empty() {
+                         // Every refining axis stopped here. The discarded child probes were
+@@ -2017,6 +2021,7 @@ where
+                 } else {
+                     // Only a single passing axis can reuse its probes, so the others are
+                     // released before the joint children are materialized.
++                    let mut candidate = profiling1497::Candidate::new("joint");
+                     probes.clear();
+                     let child_keys = geometry.child_keys(
+                         &region,
+@@ -2034,10 +2039,12 @@ where
+                             &projector,
+                             &mut counters,
+                             &mut incurred,
++                            "joint",
+                         )?;
+                         spent = finite(spent + incurred)?;
+                         children.push((child, child_items, incurred));
+                     }
++                    candidate.complete();
+                     children
+                 };
+                 counters.record_refinement(passing.len(), children.len())?;
+@@ -2366,18 +2373,23 @@ fn restrict_and_merge<V>(
+     projector: &Projector,
+     counters: &mut MergeCounters,
+     incurred: &mut f64,
++    label: &str,
+ ) -> Result<BTreeMap<InputKey, Item<V>>>
+ where
+     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+ {
++    let mut profile = profiling1497::Probe::new(label, items.len(), counters.additions);
+     let mut children: BTreeMap<InputKey, Item<V>> = BTreeMap::new();
+     for (input_key, item) in items {
++        let start = profile.timer();
++        let before = counters.additions;
+         let restricted = item.restrict(projector)?;
+         // Every item ascends one selected bit per axis per level. Genuine siblings
+         // are summed pairwise as they arrive; a leaf whose sibling is absent keeps
+         // its own region, which is already the union of its subtree, so ascending
+         // is exact and free.
+-        match children.entry(ScheduleGeometry::input_parent(input_key)) {
++        let parent = ScheduleGeometry::input_parent(input_key);
++        match children.entry(parent.clone()) {
+             Entry::Vacant(slot) => {
+                 slot.insert(restricted);
+             }
+@@ -2389,12 +2401,14 @@ where
+                 slot.insert(combined);
+             }
+         }
++        profile.record(parent, start, counters.additions - before);
+     }
+     let projections = items
+         .len()
+         .checked_mul(2)
+         .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
+     counters.projections = checked_add(counters.projections, projections)?;
++    profile.finish(counters.additions);
+     Ok(children)
+ }
+ 
+@@ -2417,9 +2431,11 @@ fn merge_own_region<V>(
+ where
+     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+ {
++    let mut candidate = profiling1497::Candidate::new("own");
+     let projector = context.geometry.output_projector(region)?;
+     let mut incurred = 0.0_f64;
+-    let merged = restrict_and_merge(context, items, &projector, counters, &mut incurred)?;
++    let merged = restrict_and_merge(context, items, &projector, counters, &mut incurred, "own")?;
++    candidate.complete();
+     Ok((merged, incurred))
+ }
+ 
+@@ -2613,6 +2629,7 @@ where
+ 
+ mod spectators;
+ mod tolerance;
++mod profiling1497;
+ 
+ #[cfg(test)]
+ mod tests;
+diff --git a/crates/tensor4all-partitionedtreetn/src/reconstruction/schedule/tolerance.rs b/crates/tensor4all-partitionedtreetn/src/reconstruction/schedule/tolerance.rs
+index 8abcadd2..c22bb5ab 100644
+--- a/crates/tensor4all-partitionedtreetn/src/reconstruction/schedule/tolerance.rs
++++ b/crates/tensor4all-partitionedtreetn/src/reconstruction/schedule/tolerance.rs
+@@ -195,6 +195,7 @@ where
+         kind: Kind,
+         counters: &mut MergeCounters,
+     ) -> Result<Candidate<V>> {
++        let mut candidate = profiling1497::Candidate::new(format!("{kind:?}"));
+         let context = self.context;
+         let region = self.region;
+         let items = self.items;
+@@ -220,12 +221,13 @@ where
+             let projector = context.geometry.output_projector(&key)?;
+             let mut incurred = 0.0;
+             let mut merged =
+-                restrict_and_merge(&child_context, items, &projector, counters, &mut incurred)?;
++                restrict_and_merge(&child_context, items, &projector, counters, &mut incurred, &format!("{kind:?}"))?;
+             merged.retain(|_, item| !item.terms.is_empty());
+             retained.include(&merged, context.options)?;
+             parameters = checked_add(parameters, region_parameters(&merged)?)?;
+             regions.push((key, merged, incurred));
+         }
++        candidate.complete();
+         Ok(Candidate {
+             regions,
+             parameters,
+@@ -327,7 +329,8 @@ where
+     let mut components = BTreeMap::new();
+     let mut retained = RetainedWork::default();
+     // INVARIANT: shapes and level entries use the same deterministic BTree order.
+-    for ((region, items), shape) in level.into_iter().zip(shapes) {
++    for (ordinal, ((region, items), shape)) in level.into_iter().zip(shapes).enumerate() {
++        let _region = profiling1497::Region::new(level_index, ordinal);
+         let budget = if total_pairs == 0 {
+             0.0
+         } else {
+diff --git a/crates/tensor4all-partitionedtreetn/src/reconstruction/schedule/profiling1497.rs b/crates/tensor4all-partitionedtreetn/src/reconstruction/schedule/profiling1497.rs
+new file mode 100644
+index 00000000..6a0ad555
+--- /dev/null
++++ b/crates/tensor4all-partitionedtreetn/src/reconstruction/schedule/profiling1497.rs
+@@ -0,0 +1,105 @@
++//! Diagnostic-only serial scopes; copied into a disposable pinned checkout.
++use super::InputKey;
++use std::collections::BTreeMap;
++use std::time::Instant;
++
++fn enabled() -> bool {
++    std::env::var_os("T4A_MERGE_GRANULARITY").is_some()
++}
++
++#[derive(Default)]
++struct Parent {
++    ns: u128,
++    items: usize,
++    additions: usize,
++}
++
++pub(super) struct Probe {
++    label: String,
++    start: Option<Instant>,
++    parents: BTreeMap<InputKey, Parent>,
++    input_items: usize,
++    additions_before: usize,
++}
++
++impl Probe {
++    pub(super) fn new(label: &str, input_items: usize, additions_before: usize) -> Self {
++        Self { label: label.into(), start: enabled().then(Instant::now), parents: BTreeMap::new(), input_items, additions_before }
++    }
++
++    pub(super) fn timer(&self) -> Option<Instant> {
++        self.start.map(|_| Instant::now())
++    }
++
++    pub(super) fn record(&mut self, key: InputKey, start: Option<Instant>, additions: usize) {
++        if let Some(start) = start {
++            let elapsed = start.elapsed().as_nanos();
++            let parent = self.parents.entry(key).or_default();
++            parent.ns += elapsed;
++            parent.items += 1;
++            parent.additions += additions;
++        }
++    }
++
++    pub(super) fn finish(self, additions_after: usize) {
++        if let Some(start) = self.start {
++            let elapsed = start.elapsed().as_nanos();
++            let emission = Instant::now();
++            let parents = self.parents.values().enumerate().map(|(ordinal, p)| {
++                format!("{{\"ordinal\":{ordinal},\"ns\":{},\"items\":{},\"additions\":{}}}", p.ns, p.items, p.additions)
++            }).collect::<Vec<_>>().join(",");
++            eprintln!("T4A_PARENT_PROBE {{\"label\":\"{}\",\"ns\":{elapsed},\"input_items\":{},\"additions\":{},\"parents\":[{parents}]}}", self.label, self.input_items, additions_after - self.additions_before);
++            eprintln!("T4A_EMIT {{\"ns\":{}}}", emission.elapsed().as_nanos());
++        }
++    }
++}
++
++pub(super) struct Candidate {
++    label: String,
++    start: Option<Instant>,
++    complete: bool,
++}
++
++impl Candidate {
++    pub(super) fn new(label: impl Into<String>) -> Self {
++        Self { label: label.into(), start: enabled().then(Instant::now), complete: false }
++    }
++    pub(super) fn complete(&mut self) { self.complete = true; }
++}
++
++impl Drop for Candidate {
++    fn drop(&mut self) {
++        if let Some(start) = self.start {
++            let elapsed = start.elapsed().as_nanos();
++            let emission = Instant::now();
++            eprintln!("T4A_CANDIDATE {{\"label\":\"{}\",\"ns\":{elapsed},\"complete\":{}}}", self.label, self.complete);
++            eprintln!("T4A_EMIT {{\"ns\":{}}}", emission.elapsed().as_nanos());
++        }
++    }
++}
++
++pub(super) struct Region {
++    level: usize,
++    ordinal: usize,
++    start: Option<Instant>,
++}
++
++impl Region {
++    pub(super) fn new(level: usize, ordinal: usize) -> Self {
++        Self { level, ordinal, start: enabled().then(Instant::now) }
++    }
++}
++
++impl Drop for Region {
++    fn drop(&mut self) {
++        if let Some(start) = self.start {
++            let elapsed = start.elapsed().as_nanos();
++            let emission = Instant::now();
++            let threads = std::fs::read_to_string("/proc/self/status").ok().and_then(|status| {
++                status.lines().find_map(|line| line.strip_prefix("Threads:").and_then(|value| value.trim().parse::<usize>().ok()))
++            }).map_or_else(|| "null".to_owned(), |count| count.to_string());
++            eprintln!("T4A_REGION {{\"level\":{},\"ordinal\":{},\"ns\":{elapsed},\"os_threads\":{threads}}}", self.level, self.ordinal);
++            eprintln!("T4A_EMIT {{\"ns\":{}}}", emission.elapsed().as_nanos());
++        }
++    }
++}

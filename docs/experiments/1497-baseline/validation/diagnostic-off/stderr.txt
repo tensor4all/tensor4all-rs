@@ -1,0 +1,4 @@
+T4A_LAUNCH {"affinity": [8], "thread_environment": {"RAYON_NUM_THREADS": "1", "BLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "VECLIB_MAXIMUM_THREADS": "1", "BLIS_NUM_THREADS": "1", "T4A_MERGE_REFINE_PROFILE": "0"}}
+g0: {"max_bond":7,"params":16678,"patches":98} in 2.2s
+Error: invalid reconstruction options: a region retains multiple terms; use regions() to access the superposition
+ai-run: measure done exit=1 wall=5.2s peak_mem=33M/8.0G (anon ~26M) verdict=CLEAN (foreign 0.4% on cpus 8-15, 0.0 busy CPUs elsewhere) report=/root/projects/tensor4all-rust/tensor4all-rs-1497-design/docs/experiments/1497-baseline/validation/diagnostic-off/ai-run.json

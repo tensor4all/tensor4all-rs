@@ -1,0 +1,32 @@
+{
+  "mode": "measure",
+  "cmd": "timeout --kill-after=5 300 taskset -c 8 /usr/bin/python3 /root/projects/tensor4all-rust/tensor4all-rs-1497-design/docs/experiments/1497-merge-granularity/run.py --prime-exec /root/projects/tensor4all-rust/tensor4all-rs-impl-1130/target/release/examples/benchmark_m6a_fourier --topology tt_nblock --seed 42 --ref-seed 42 --g0-rtol 1e-6 --g0-patch-order k --arm patched-merge-refine --rtol 1e-6 --certified-share 0.5 --slices 4 --samples 4096 --r 6 --temperature 0.1 --g0-cap 16 --cap 64 --check-dense false",
+  "cwd": "/root/projects/tensor4all-rust/tensor4all-rs-1497-design",
+  "label": null,
+  "unit": "ai-run-measure-1451443-1795781238.scope",
+  "cpus": "8-15",
+  "mem_limit": 8589934592,
+  "started": "2026-11-27T13:07:18+0100",
+  "pre_guard": {
+    "ok": true,
+    "mean_busy": 0.0047,
+    "peak_busy": 0.04
+  },
+  "exit": 0,
+  "wall_sec": 69.03,
+  "mem_peak": 915034112,
+  "mem_peak_anon_sampled": 893968384,
+  "oom_kills": 0,
+  "verdict": "CLEAN",
+  "reasons": [],
+  "job_cpu_sec": 68.98,
+  "foreign_cpu_sec_on_measure_cpus": 2.36,
+  "foreign_frac": 0.0043,
+  "others_busy_cpus": 0.01,
+  "mem_stall_frac": 0.0,
+  "thresholds": {
+    "foreign_frac": 0.03,
+    "others_busy_cpus": 1.0,
+    "mem_stall_frac": 0.01
+  }
+}

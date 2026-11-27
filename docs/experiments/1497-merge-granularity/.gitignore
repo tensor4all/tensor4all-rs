@@ -1,0 +1,8 @@
+# Recomputed by report.py from authoritative stdout/stderr/guard records.
+raw/**/summary.json
+raw-preflight-contaminated-1/**/summary.json
+# Compiler artifact discovery cache; selected binary pins are in manifest.json.
+**/test-build.jsonl
+# Retain the controller build logs despite the workspace-wide log ignore.
+!raw/build.log
+!raw/test-build.log

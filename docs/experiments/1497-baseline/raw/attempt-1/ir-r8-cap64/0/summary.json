@@ -1,0 +1,95 @@
+{
+  "case": "ir-r8-cap64",
+  "exit_code": 0,
+  "guard_verdict": "CLEAN",
+  "schedule_completed": true,
+  "phases_seconds": {
+    "schedule/preflight": 2.167e-05,
+    "prepare/setup": 0.001109887,
+    "prepare/leaf": 36.333803584,
+    "prepare/total": 36.335493622,
+    "schedule/prepare_images": 36.335556067,
+    "schedule/initialize": 7.1835e-05,
+    "schedule/region": 60.316527957,
+    "schedule/level": 60.317244221,
+    "schedule/report": 7.218e-06,
+    "schedule/total": 96.653683525
+  },
+  "leaf_seconds": [
+    9.301690921,
+    9.041485877,
+    8.991363723,
+    8.999263063
+  ],
+  "region_seconds_by_level": {
+    "1": [
+      60.315660795
+    ],
+    "2": [
+      0.000251639
+    ],
+    "3": [
+      0.000109713
+    ],
+    "4": [
+      0.000114868
+    ],
+    "5": [
+      9.8751e-05
+    ],
+    "6": [
+      9.6549e-05
+    ],
+    "7": [
+      9.68e-05
+    ],
+    "8": [
+      9.8842e-05
+    ]
+  },
+  "largest_region_count": 1,
+  "max_observed_threads": 2,
+  "max_boundary_rss_kib": 956352,
+  "max_process_hwm_kib": 1316544,
+  "leaf_share": 0.3759174224808728,
+  "region_share": 0.6240478971647139,
+  "ir_rows": [
+    {
+      "beta": "10",
+      "domain": "full",
+      "R_k": "8",
+      "L": "24",
+      "chi": "64",
+      "goal": "64",
+      "ft_rtol": "1e-6",
+      "application": "certified:0.5",
+      "output_depth": "none",
+      "patches": "4",
+      "input_params": "184970",
+      "input_max_bond": "62",
+      "split_max_bond": "62",
+      "split_params": "191218",
+      "split_rel_norm_change": "0e0",
+      "split_seconds": "0.002",
+      "ft_seconds": "96.663",
+      "regions": "1",
+      "terms": "1",
+      "max_bond": "605",
+      "max_transient_bond": "626",
+      "logical_params": "2022164",
+      "applied": "4",
+      "levels": "8",
+      "peak_work_items": "4",
+      "compressions": "15",
+      "dropped_terms": "0",
+      "reference_scale": "1.8747523320172823e2",
+      "absolute_tolerance": "1.874752332017282e-4",
+      "error_bound": "7.234011301405295e-5",
+      "parseval_rel": "4.26e-12",
+      "work_items_per_level": "4;1;1;1;1;1;1;1;1"
+    }
+  ],
+  "frontend_seconds": 96.663,
+  "leaf_frontend_share": 0.3758811911900107,
+  "region_frontend_share": 0.623987750814686
+}

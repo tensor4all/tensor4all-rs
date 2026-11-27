@@ -1,0 +1,149 @@
+{
+  "purpose": "Single-revision serial phase-share and resource diagnostic for issue 1497; no parallel candidate or speedup claim.",
+  "declared_at_utc": "2026-11-27T01:40:26.636085+00:00",
+  "baseline_commit": "8ce72e4e05286723d053c66d8c3e76eed35e6d58",
+  "initial_design_inspection_commit": "379868e01f2df19cfc2bee11eae8e3fb8e05b0b9",
+  "upstream_ir_commit": "4c9503f6045ce0af929e2bfb5bbde49c75779111",
+  "upstream_ir_repo": "https://github.com/lingrui96/gw-rs",
+  "root_lock_sha256": "f5ebfa0a593fd3e04cf045f25c42a62b7eb4116f35a25b32d858378da556615e",
+  "profile": "release, debug=0, no target-cpu=native",
+  "measurement_cpus": "8-15",
+  "observer_cpus": "0-7",
+  "mem_bytes": 8589934592,
+  "per_process_wall_cap_seconds": 300,
+  "thread_environment": {
+    "RAYON_NUM_THREADS": "1",
+    "BLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1",
+    "BLIS_NUM_THREADS": "1"
+  },
+  "m6a_common_args": [
+    "--topology",
+    "tt_nblock",
+    "--seed",
+    "42",
+    "--ref-seed",
+    "42",
+    "--g0-rtol",
+    "1e-6",
+    "--g0-patch-order",
+    "k",
+    "--arm",
+    "patched-merge-refine",
+    "--rtol",
+    "1e-6",
+    "--certified-share",
+    "0.5",
+    "--slices",
+    "4",
+    "--samples",
+    "4096"
+  ],
+  "ir_common": {
+    "beta": 10,
+    "goal": 64,
+    "ft_rtol": 1e-06,
+    "application": "certified:0.5",
+    "output_depth": "none",
+    "input_rtol": 1e-05,
+    "ir_eps": 1e-10,
+    "wmax": 5,
+    "mu": -1,
+    "degree": 8,
+    "domain": "full",
+    "route": "patched",
+    "src_cap": 1024
+  },
+  "cases": [
+    {
+      "id": "m6a-r4-cap8",
+      "family": "m6a",
+      "repeats": 3,
+      "feasibility_only": false,
+      "args": [
+        "--r",
+        "4",
+        "--temperature",
+        "0.1",
+        "--g0-cap",
+        "8",
+        "--cap",
+        "16",
+        "--check-dense",
+        "true"
+      ]
+    },
+    {
+      "id": "m6a-r6-cap16",
+      "family": "m6a",
+      "repeats": 3,
+      "feasibility_only": false,
+      "args": [
+        "--r",
+        "6",
+        "--temperature",
+        "0.1",
+        "--g0-cap",
+        "16",
+        "--cap",
+        "64",
+        "--check-dense",
+        "false"
+      ]
+    },
+    {
+      "id": "m6a-r10-production",
+      "family": "m6a",
+      "repeats": 1,
+      "feasibility_only": true,
+      "args": [
+        "--r",
+        "10",
+        "--temperature",
+        "0.01",
+        "--g0-cap",
+        "64",
+        "--cap",
+        "64",
+        "--check-dense",
+        "false"
+      ]
+    },
+    {
+      "id": "ir-r6-none",
+      "family": "ir",
+      "repeats": 3,
+      "feasibility_only": false,
+      "r": 6,
+      "cap": "none"
+    },
+    {
+      "id": "ir-r6-cap32",
+      "family": "ir",
+      "repeats": 3,
+      "feasibility_only": false,
+      "r": 6,
+      "cap": "32"
+    },
+    {
+      "id": "ir-r8-cap64",
+      "family": "ir",
+      "repeats": 1,
+      "feasibility_only": true,
+      "r": 8,
+      "cap": "64"
+    }
+  ],
+  "priming": "Identical two-second CPU busy loop before each process; outside reported operation timings.",
+  "sampling": "All repetitions are fresh processes; instrumented spans use Instant and end-of-span /proc/self/status; stream diagnostics so completed work survives a later refusal.",
+  "statistic": "Retain every process; median successful per-process times and phase shares for three-repeat bounded cells; feasibility cells report outcome and single observation, not a timing distribution.",
+  "validity": "Only ai-run verdict=CLEAN is usable. Keep contaminated attempts and rerun the complete diagnostic matrix with unchanged protocol; no selective favorable retries. No candidate is being compared.",
+  "need_gate": "A job family is an implementation priority only if its median share is at least 20% of the completed patched_fourier_transform front-end time in a real-workload-derived cell. Report input-producer time, front-end setup and failed cells separately; no speedup inferred. If region jobs have max width one, classify outer-region scaling unavailable regardless of share.",
+  "checks": "M6a dense/sample DFT accuracy and full existing result output; IR existing Parseval check/report. These are baseline correctness observations, not a proof of lane determinism. Preserve failures and nonfinite metrics.",
+  "limitations": "Downscaled cases diagnose the original generators; they do not establish production-resolution efficiency. No tolerance changes, no parallel implementation. Memory estimates and end-of-span RSS are not exact per-phase peak attribution.",
+  "max_complete_attempts": 2,
+  "validation_runs": "Before the matrix, compare the preserved unmodified M6a binary and the diagnostic binary with profiling disabled/enabled on the registered R=4 cell; these are correctness observations, not a speedup experiment."
+}

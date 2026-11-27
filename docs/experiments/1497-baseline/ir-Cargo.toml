@@ -1,0 +1,27 @@
+[package]
+name = "g_ir_patching"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone diagnostic package with its own lockfile, copied under target/.
+# tensor4all-rs is resolved through local paths into the detached, pinned
+# baseline checkout; Cargo.lock pins its registry and git dependencies.
+[workspace]
+
+[dependencies]
+anyhow = "1.0"
+# Already a dependency of sparse-ir; used for the per-patch thin SVDs.
+faer = "0.24"
+num-complex = "0.4"
+rand = "0.9"
+sparse-ir = "0.15"
+tensor4all-core = { path = "../../crates/tensor4all-core", features = ["global-defaults"] }
+tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend" }
+tensor4all-treetn = { path = "../../crates/tensor4all-treetn" }
+tensor4all-interpolativeqtt = { path = "../../crates/tensor4all-interpolativeqtt" }
+tensor4all-partitionedtreetn = { path = "../../crates/tensor4all-partitionedtreetn" }
+# `partitioned` provides `patched_fourier_transform` (issue #22).
+tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform", features = ["partitioned"] }
+
+[profile.release]
+debug = false
