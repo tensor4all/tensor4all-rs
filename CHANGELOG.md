@@ -4,6 +4,12 @@
 
 ### Behavior changes
 
+- `PreparedContraction::new` now rejects shared labels with inconsistent
+  dimensions during planning, including retained labels whose index identity
+  is equal but whose extents differ (#1381). Such invalid prepared plans could
+  previously be constructed; ordinary dense contraction already rejected the
+  inconsistency during execution. The regression is
+  `retained_label_dimension_mismatch_is_rejected_during_planning`.
 - `tensor4all-treersi`, `tenferro-cuda` builds (#1379): the lower-triangular
   solve of the local rank decision now runs on a single-thread CPU context
   owned by the run, not the process-global CPU context. It no longer contends
@@ -460,13 +466,39 @@
   measured difference. The exact image is never formed, so two interleaved
   axes at R = 20 now fit in memory.
 
-### Breaking Rust API changes
+### Removed
 
-- Removed `tensor4all_core::contract_owned` and
-  `contract_owned_with_options` (#1381). Use `contract(&[&a, &b, ...])` or
-  `contract_with_options`; `PreparedContraction` reuses index planning for
-  repeated compatible operands. Ordinary and prepared calls share one
-  dense/structured/AD execution dispatch.
+The removals below target **0.4.0 (unreleased)**, the next minor after the
+current workspace version 0.3.0 (#1381).
+
+- `tensor4all_core::contract_owned` and its `defaults` exports.
+  Before: `contract_owned(tensors)?`.
+  After: `let refs: Vec<_> = tensors.iter().collect(); contract(&refs)?`.
+- `tensor4all_core::contract_owned_with_options` and its `defaults` exports.
+  Before: `contract_owned_with_options(tensors, options)?`.
+  After: `let refs: Vec<_> = tensors.iter().collect(); contract_with_options(&refs, options)?`.
+- The doc-hidden `tensor4all_core::legacy::einsum_native_tensors_owned`
+  bridge, in both `global-defaults` and refusing builds.
+  Before: `tensor4all_core::legacy::einsum_native_tensors_owned(operands, output_ids)?`.
+  After, for existing backend-level native-tensor callers:
+  `tensor4all_tensorbackend::einsum_native_tensors_owned_in(&context, operands, output_ids)?`.
+  The tensorbackend-owned `einsum_native_tensors_owned` and `_in` APIs remain;
+  high-level `IdxTensor` callers use `contract` / `contract_with_options`.
+
+The first two migrations borrow the caller-owned tensors without cloning
+their payloads; they no longer consume the vector or select an owned-only
+kernel. `PreparedContraction` reuses planning for compatible operands.
+
+The [pinned usage survey](docs/design/core-contraction-api.md#public-removal-survey-1381)
+found only core's implementation, wrappers and seven unit-test call sites
+for the two owned contraction names; no other workspace crate called them.
+The core legacy einsum bridge's production caller was that removed
+implementation. No matching identifiers were found in the surveyed tenferro,
+tenferro-sci or Julia-binding snapshots; `tenferro-mpi-capi` was design-only
+at the surveyed revision. This is a bounded source survey, not a claim about
+all published, private or uninspected downstream code.
+
+### Breaking Rust API changes
 
 - `tensor4all-treetci`: `TreeTciOptimizationResult` and `TreeTciRunResult`
   have a new public field, `local_threshold_factor: f64` (#1371). Neither
