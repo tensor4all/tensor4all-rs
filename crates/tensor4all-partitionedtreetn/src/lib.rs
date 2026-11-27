@@ -37,6 +37,7 @@
 pub mod adaptive_interpolation;
 mod error;
 mod error_norm;
+mod linsolve;
 mod partitioned_tree_tn;
 mod patching;
 mod projector;
@@ -45,6 +46,7 @@ mod subdomain_tree_tn;
 
 pub use error::{PartitionedTreeTNError, Result};
 pub use error_norm::{ErrorNorm, ErrorTolerance, L2Reference};
+pub use linsolve::{partitioned_linsolve, LinsolveRoute, PartitionedLinsolveResult};
 pub use partitioned_tree_tn::{
     PartitionedContractionOptions, PartitionedTreeTN, AUTOMATIC_REFINEMENT_LIMIT,
     DEFAULT_GROUP_SUM_LIMIT_BYTES,
