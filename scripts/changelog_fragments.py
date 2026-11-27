@@ -31,14 +31,15 @@ KINDS = {
 }
 FRAGMENT_DIR = "changelog.d"
 LEGACY_ORDER = "legacy-order.txt"  # one-time ordering hint written by the migration
-NAME_RE = re.compile(r"^(\d+)-([a-z]+)(?:-(\d+))?\.md$")
+NAME_RE = re.compile(r"^(\d+)-([a-z]+)(?:-([2-9]|[1-9]\d+))?\.md$")  # no -1: it would collide with the bare name
+LIST_MARK_RE = re.compile(r"^([-*+]|\d+[.)])\s")
 UNRELEASED_RE = re.compile(r"^##\s+Unreleased\b", re.I | re.M)
 
 
 def validate_name(name):
     m = NAME_RE.match(name)
     if not m:
-        return None, f"{name}: name must be <PR-number>-<kind>[-<n>].md"
+        return None, f"{name}: name must be <PR-number>-<kind>[-<n>].md (n >= 2)"
     if m.group(2) not in KINDS:
         return None, f"{name}: unknown kind '{m.group(2)}' (known: {', '.join(KINDS)})"
     return (int(m.group(1)), m.group(2), int(m.group(3) or 1)), None
@@ -51,8 +52,10 @@ def validate_body(name, text):
         return [f"{name}: empty body"]
     if not lines[0].startswith("- ") or not lines[0][2:].strip():
         errs.append(f"{name}: body must start with a '- ' entry")
-    if any(l.startswith("- ") for l in lines[1:]):
-        errs.append(f"{name}: one entry per fragment (found a second top-level '- ')")
+    if any(LIST_MARK_RE.match(l) for l in lines[1:]):
+        errs.append(f"{name}: one entry per fragment (found a second top-level list item)")
+    if any(l and not l[0].isspace() for l in lines[1:]):
+        errs.append(f"{name}: continuation lines must be indented two spaces")
     if any(l.startswith("#") for l in lines):
         errs.append(f"{name}: no headings in a fragment; the kind in the file name picks the section")
     return errs
@@ -122,6 +125,10 @@ def git(root, *args):
     return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=True).stdout
 
 
+def git_has(root, ref, path):
+    return subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{ref}:{path}"], capture_output=True).returncode == 0
+
+
 def check(root, base, pr=None):
     errs = []
     frags, e = load(root)
@@ -129,6 +136,17 @@ def check(root, base, pr=None):
     if UNRELEASED_RE.search((root / "CHANGELOG.md").read_text()):
         errs.append("CHANGELOG.md: contains '## Unreleased'; add a changelog.d/<PR>-<kind>.md fragment instead")
     if base:
+        cl_changed = git(root, "diff", "--name-only", f"{base}...HEAD", "--", "CHANGELOG.md").split()
+        deleted = git(root, "diff", "--name-only", "--diff-filter=D", f"{base}...HEAD", "--", FRAGMENT_DIR).split()
+        pinned = git_has(root, base, f"{FRAGMENT_DIR}/{LEGACY_ORDER}")
+        migrating = not pinned and (root / FRAGMENT_DIR / LEGACY_ORDER).exists()
+        if cl_changed and not deleted and not migrating:
+            errs.append("CHANGELOG.md: edited directly; only a release (which consumes fragments) changes it. Add changelog.d/<PR>-<kind>.md")
+        if pinned:
+            old = git(root, "show", f"{base}:{FRAGMENT_DIR}/{LEGACY_ORDER}").split()
+            now = legacy_order(root)
+            if [n for n in old if n in now] != now:
+                errs.append(f"{LEGACY_ORDER}: may only lose entries (at release), not gain or reorder them")
         changed = git(root, "diff", "--name-only", "--diff-filter=AM", f"{base}...HEAD", "--", FRAGMENT_DIR).split()
         for f in changed:
             name = Path(f).name

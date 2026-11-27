@@ -64,7 +64,38 @@ class Check(unittest.TestCase):
         self.assertFalse(any("8-added.md" in e for e in errs), errs)
 
 
+    def _pr(self, files, edit):
+        d = repo(files)
+        git = lambda *c: subprocess.run(["git", "-C", str(d), "-c", "user.name=t", "-c", "user.email=t@t", *c], check=True)
+        git("init", "-q", "-b", "main"); git("add", "-A"); git("commit", "-qm", "base"); git("checkout", "-qb", "pr")
+        edit(d); git("add", "-A"); git("commit", "-qm", "pr")
+        return cf.check(d, "main", pr=7)
+
+    def test_direct_changelog_edit_fails_even_below_a_release_heading(self):
+        errs = self._pr({}, lambda d: (d / "CHANGELOG.md").write_text("# Changelog\n\n## v0.3.0\n- stray (#9)\n"))
+        self.assertTrue(any("edited directly" in e for e in errs), errs)
+
+    def test_release_may_edit_changelog(self):
+        self.assertEqual(self._pr({"3-added.md": "- three\n"}, lambda d: cf.release(d, "v1.0")), [])
+
+    def test_legacy_order_cannot_gain_entries(self):
+        errs = self._pr({"3-added.md": "- a\n", "legacy-order.txt": "3-added.md\n"},
+                        lambda d: (d / "changelog.d" / "legacy-order.txt").write_text("3-added.md\n7-added.md\n"))
+        self.assertTrue(any("may only lose" in e for e in errs), errs)
+
+    def test_second_list_item_unindented_continuation_and_n1(self):
+        self.assertTrue(cf.check(repo({"7-added.md": GOOD + "* second\n"}), None))
+        self.assertTrue(cf.check(repo({"7-added.md": GOOD + "flush left\n"}), None))
+        self.assertTrue(cf.check(repo({"7-added-1.md": GOOD}), None))
+
+
 class Assemble(unittest.TestCase):
+    def test_legacy_order_pins_order_and_new_fragments_come_first(self):
+        d = repo({"9-added.md": "- nine\n", "3-added.md": "- three\n", "5-added.md": "- five\n",
+                  "legacy-order.txt": "3-added.md\n9-added.md\n"})
+        (d / "changelog.d" / "12-added.md").write_text("- twelve\n")
+        self.assertEqual(cf.assemble(d, "v1"), "## v1\n\n### Added\n\n- twelve\n- five\n- three\n- nine\n")
+
     def test_groups_by_kind_newest_pr_first_and_release_deletes(self):
         d = repo({"3-added.md": "- three\n", "5-added.md": "- five\n", "4-behavior.md": "- four\n",
                   "5-added-2.md": "- five b\n"})

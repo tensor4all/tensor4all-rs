@@ -99,7 +99,7 @@ changelog.d/<PR-number>-<kind>.md
 ```
 
 - **`<PR-number>`** is this pull request's number. Open the PR first, then add the file.
-  A second entry for the same PR and kind is `<PR-number>-<kind>-2.md`.
+  A second entry for the same PR and kind is `<PR-number>-<kind>-2.md` (`-3`, ...; never `-1`).
 - **`<kind>`** picks the section: `behavior` (Behavior changes), `added` (Added),
   `breaking` (Breaking Rust API changes), `diagnostics` (Diagnostics), or `performance`
   (Performance). A new heading is a separate decision, not a new kind.
@@ -115,12 +115,15 @@ changelog.d/<PR-number>-<kind>.md
 
 `python3 scripts/changelog_fragments.py check --base origin/main --pr <N>` runs what CI
 runs: it fails an unknown kind, a missing or mismatched PR number, an empty body, more than
-one entry in a file, and any `## Unreleased` section in `CHANGELOG.md`.
+one entry in a file, any `## Unreleased` section in `CHANGELOG.md`, and any other direct edit of
+`CHANGELOG.md` (only a release, which consumes fragments, changes it).
 
 At release, `python3 scripts/changelog_fragments.py release <version>` concatenates the
 fragments into a `## <version>` section (grouped by kind, newest PR first) and deletes them.
 `changelog.d/legacy-order.txt` pins the order of the entries migrated from the old
-`## Unreleased` section for that first release and is deleted with them. A fragment ending in
+`## Unreleased` section for that first release and is deleted with them; it may only lose
+entries. Migrated fragments keep the number cited in their original commit subject (often the
+issue), so the PR-number match does not apply to them. A fragment ending in
 a blank line keeps it; only migrated entries need that.
 
 ## Validate locally
