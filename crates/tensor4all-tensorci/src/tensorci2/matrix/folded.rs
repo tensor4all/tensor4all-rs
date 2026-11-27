@@ -62,9 +62,14 @@ fn core_data<T: TTScalar, C: Tensor3Ops<T>>(core: &C) -> Vec<T> {
 ///
 /// With `r_0` the bond between the row core and the first physical core, the
 /// leading end changes from `rows * r_0 + r_0 * d_1 * r_1` numbers to
-/// `rows * d_1 * r_1`; the trailing end likewise. Folding **may grow** storage
-/// (for instance `rows` large with `r_0 = 1`, or `d_1` large), and shrinks it
-/// when `r_0` is large relative to `d_1`. Compare
+/// `rows * d_1 * r_1`; the trailing end likewise. Folding **may grow** storage:
+/// (for `L >= 2`) the leading end grows exactly when `rows * d_1 * r_1 > r_0 * (rows + d_1 * r_1)`,
+/// and the trailing end when `d_L * r_{L-1} * cols > r_L * (cols + d_L * r_{L-1})`.
+/// For example `rows = 8`, `d_1 = 2`, `r_0 = r_1 = 12` stores 192 numbers
+/// instead of 12 * 8 + 12 * 2 * 12 = 384 (a shrink), while `r_0 = 2`, `r_1 = 12`
+/// stores 192 instead of 16 + 48 = 64 (growth). In the measured fits (see
+/// `docs/experiments/issue-1463`) the total changed by -0.3% to +4.0%; only
+/// the corr 8x8 case grew. Compare
 /// [`MatrixTCI2Result::retained_bytes`] with [`Self::retained_bytes`] for the
 /// fit at hand. The `L + 2` layout stays the default everywhere; use the
 /// folded one only when a caller asks for the matrix indices as open legs.
@@ -290,8 +295,14 @@ impl<T: Scalar + TTScalar + Default + MatrixLuciScalar> MatrixTCI2Result<T> {
     /// Folds the matrix legs into the end cores: `L` cores instead of `L + 2`.
     ///
     /// Explicit and non-default; see [`FoldedMatrixTT`] for what folding is, for
-    /// the storage effect (it may grow) and for the guarantee that the same
+    /// the storage effect and for the guarantee that the same
     /// function is represented. Costs one contraction per end, done here once.
+    ///
+    /// Storage **may grow**: an end core pair `rows * r_0 + r_0 * d_1 * r_1`
+    /// becomes `rows * d_1 * r_1`, which is larger when `r_0` is small against
+    /// `rows` and `d_1 * r_1` (e.g. corr 8x8 in the issue-1463 pilot grew by
+    /// 4.0%). Check [`MatrixTCI2Result::retained_bytes`] against
+    /// [`FoldedMatrixTT::retained_bytes`] before keeping the folded result.
     ///
     /// # Errors
     ///
