@@ -1,0 +1,31 @@
+{
+  "kind": "functional-validation-only",
+  "base_commit": "35174fddbd7280cea4c07fb0dc27b59f57dc5880",
+  "source_diff_sha256": "5f25fe0e935a2ef0a4ce874820e761e28ef470061f9d61c2cd54b92a71241ded",
+  "harness": "benchmarks/rust/benchmark_merge_policy_1130.rs",
+  "harness_sha256": "ca60a78f146010e88c4d1769108c07cdd7e4ee76826011d2c255aba68b8115c8",
+  "binary_sha256": "31bd3782c2b0f761d90c74af3cf3da91b53004c1c963493cc07e13aeea8b37c4",
+  "profile": "release",
+  "build_command": "ai-run build --mem 6G -- cargo build --release -j 2 -p tensor4all-benchmarks --features fourier --example benchmark_merge_policy_1130",
+  "execution": "ai-run build --mem 6G; ulimit -v 5242880; finished binary with each of original/interleaved and goal8/tolerance; no measure argument",
+  "address_space_limit_bytes": 5368709120,
+  "gate_memory_cap_bytes": 6442450944,
+  "thread_environment": {
+    "RAYON_NUM_THREADS": "1",
+    "BLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1"
+  },
+  "platform": "Linux x86_64",
+  "cpu_provider": "platform default (faer on Linux)",
+  "timing_and_rss_comparison": "not performed; awaiting registered implementation PR and agreed slowdown limits",
+  "results": [
+    "functional-interleaved-goal8.json",
+    "functional-interleaved-tolerance.json",
+    "functional-original-goal8.json",
+    "functional-original-tolerance.json"
+  ],
+  "toolchain": "stable-x86_64-unknown-linux-gnu (default)",
+  "rustc_version": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8"
+}

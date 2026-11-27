@@ -29,8 +29,9 @@ removal).
   (re-exported from `crates/tensor4all-core/src/lib.rs`).
 - Planning validates shared-label dimensions once, including retained labels
   whose index identity is equal but whose dimensions differ. Prepared plans
-  validate metadata before sharing the ordinary execution dispatch. Labels are built lazily for ordinary calls, preserving the binary
-  fast path without N-ary planning. Structured and AD operands use the compact
+  validate metadata before sharing the ordinary execution dispatch. Labels
+  are built lazily for ordinary calls, preserving the binary fast path without
+  N-ary planning. Structured and AD operands use the compact
   N-ary contraction owner; there is no sequential-pair fallback.
 - Semantics tests: `crates/tensor4all-core/src/defaults/contract/tests/mod.rs`.
 - `outer_product` for disconnected inputs:
@@ -105,8 +106,23 @@ rejection of invalid metadata alongside the dispatch refactor, not a new
 restriction on well-formed contractions. Structured/AD planning uses the
 same check before dispatching to its kernel.
 
+The explicit-session `contract_with_options_on_session` route also uses this
+planner. Invalid shared-label dimensions now fail before operand adaptation or
+session materialization, with the planner's shape-mismatch message instead of a
+downstream session error. The public error remains `IdxTensorError::Operation`.
+
 `retained_label_dimension_mismatch_is_rejected_during_planning` exercises
-both ordinary and prepared entry points with identity 701 at dimensions
-2 and 3 and requires the same shape-mismatch error. It already names and
-covers this behavior, so the review follow-up does not add a duplicate test
-or change numerical tolerances.
+ordinary, prepared and explicit-session entry points with identity 701 at
+dimensions 2 and 3 and requires the same shape-mismatch error. It covers the
+shared planner error, including the newly documented session route.
+No numerical tolerance changed.
+
+## Prepared-call profiling (#1381)
+
+With contract profiling enabled, prepared dense N-ary and retained contractions
+now record through the same collector as ordinary dense calls. A mixed sweep
+therefore reports calls and time that were previously absent for those prepared
+entries. Singleton clones, the binary shortcut without retained indices and
+structured/AD dispatch keep their existing profiling behavior. The numerical
+result is unchanged; `prepared_dense_nary_records_profile_output_dimensions`
+checks a real three-operand result and one entry with output dimensions `[2,4]`.

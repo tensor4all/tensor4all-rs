@@ -1,0 +1,23 @@
+    Finished `test` profile [unoptimized] target(s) in 0.11s
+     Running unittests src/lib.rs (<cargo-target>/debug/deps/tensor4all_partitionedtreetn-8c418c16901016e1)
+
+running 1 test
+test reconstruction::schedule::tolerance::tests::serial_joint_probes_keep_the_chosen_partition_and_its_ledger ... FAILED
+
+failures:
+
+---- reconstruction::schedule::tolerance::tests::serial_joint_probes_keep_the_chosen_partition_and_its_ledger stdout ----
+
+thread 'reconstruction::schedule::tolerance::tests::serial_joint_probes_keep_the_chosen_partition_and_its_ledger' (2319435) panicked at crates/tensor4all-partitionedtreetn/src/reconstruction/schedule/tolerance/tests.rs:218:5:
+assertion `left == right` failed
+  left: Single(0)
+ right: Joint
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    reconstruction::schedule::tolerance::tests::serial_joint_probes_keep_the_chosen_partition_and_its_ledger
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 215 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p tensor4all-partitionedtreetn --lib`

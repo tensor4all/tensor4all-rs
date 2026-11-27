@@ -30,18 +30,20 @@
 //! with the number of refined regions.
 //!
 //! [`MergeRefineOptions::output_regions`] names the output regions the caller
-//! needs. `None` (the default) computes every region at the requested output
+//! needs, as a static list of [`OutputRegion`] bit prefixes. `None` (the default)
+//! computes every region at the requested output
 //! depth, and `Some(regions)` prunes a child prefix that intersects none of them
 //! before it is restricted, merged or kept, mirroring how
 //! [`MergeRefineOptions::coverage`] decides which input leaves are present. The
 //! retained output is then limited to those regions, and the reported bound
-//! covers the computed regions only. The counters do not shrink the same way:
+//! covers the computed regions only; [`MergeRefineReport::pruned_regions`] counts
+//! the children the selection cut, separately from the bound. The counters do not shrink the same way:
 //! they count the work that is executed, and the operator is still applied over
 //! the whole output domain once per input leaf (and, with a rank goal, probes are
 //! accumulated before a child is discarded), so `applied_operator_count` and the
 //! first `work_items_per_level` entries stay at the unselected schedule's values.
 //!
-//! With [`MergeRefineOptions::target_bond_dim`] unset the trajectory is uniform
+//! With [`MergePolicy::Exact`] the trajectory is uniform
 //! and exact: every region is refined down to the requested depth and
 //! [`MergeRefineReport::error_bound`] stays zero. With a rank goal it becomes
 //! adaptive and decides each axis of a region on its own. A region is first merged
@@ -57,6 +59,11 @@
 //! still consolidates the input prefixes it held instead of freezing them. A merged
 //! pair is combined whenever the result fits the goal or lowers the
 //! bond dimension, so a rank-one object is not forced into a preset output tiling.
+//! [`MergePolicy::Tolerance`] probes every eligible axis without a rank gate,
+//! choosing minimum logical storage among the unsplit, single-axis, and joint
+//! candidates. Its absolute allocations combine disjoint regions in L2 and
+//! carry unused allowance between potentially merging levels; see
+//! [`MergeRefineLevelReport`]. Candidates are processed serially.
 //! A merged or unpaired contribution is dropped only when
 //! its measured norm fits its share of the global allowance, and that norm stays in
 //! the report. One or more coordinate axes may be transformed in one synchronized
@@ -67,6 +74,7 @@ use std::{
     collections::{btree_map::Entry, BTreeMap, BTreeSet},
     fmt::Debug,
     hash::Hash,
+    num::NonZeroUsize,
 };
 
 use tensor4all_core::IdxTensor;
@@ -84,7 +92,44 @@ use crate::{
     DynIndex, PartitionedTreeTN, PartitionedTreeTNError, Projector, Result, SubDomainTreeTN,
 };
 
-/// Output-refinement depth, resource policy, and soft rank goal for
+/// Pair-merging policy for [`schedule_merge_refine`].
+///
+/// `Exact` preserves direct sums; `RankGoal` uses a soft rank target, while
+/// `Tolerance` chooses ranks and output splits from the global error allowance.
+///
+/// # Examples
+/// ```
+/// use tensor4all_partitionedtreetn::reconstruction::MergePolicy;
+/// let goal = MergePolicy::RankGoal(8_usize.try_into()?);
+/// assert_ne!(goal, MergePolicy::Exact);
+/// assert_eq!(MergePolicy::default(), MergePolicy::Exact);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MergePolicy {
+    /// Preserve exact sums and refine uniformly to the requested output depth.
+    #[default]
+    Exact,
+    /// Adapt output refinement toward this positive, soft maximum bond dimension.
+    /// Accuracy takes precedence; retained bonds may exceed the goal.
+    RankGoal(NonZeroUsize),
+    /// Compress within absolute shares of the global tolerance and choose the
+    /// smallest-storage affordable split, without a rank target.
+    /// Split probes that exceed work, term or child-planning limits are rejected;
+    /// the unsplit baseline must fit. Other probe errors are returned to the caller.
+    Tolerance,
+}
+
+impl MergePolicy {
+    fn rank_goal(self) -> Option<usize> {
+        match self {
+            Self::RankGoal(goal) => Some(goal.get()),
+            Self::Exact | Self::Tolerance => None,
+        }
+    }
+}
+
+/// Output-refinement depth, resource limits, and pair-merging policy for
 /// [`schedule_merge_refine`].
 ///
 /// This type selects no numerical accuracy of its own: [`ReconstructionTolerance`]
@@ -95,24 +140,23 @@ use crate::{
 ///
 /// ```
 /// use tensor4all_partitionedtreetn::reconstruction::{
-///     CoverageContract, MergeRefineOptions, OperatorApplication,
+///     CoverageContract, MergePolicy, MergeRefineOptions, OperatorApplication,
 /// };
 /// let options = MergeRefineOptions::<usize>::default();
 /// assert_eq!(options.output_depth, None);
 /// assert_eq!(options.max_work_items, 4096);
 /// assert_eq!(options.max_terms, 1 << 20);
-/// assert_eq!(options.target_bond_dim, None);
+/// assert_eq!(options.merge_policy, MergePolicy::Exact);
 /// assert_eq!(options.coverage, CoverageContract::Complete);
 /// assert!(options.output_regions.is_none());
 /// assert!(matches!(options.application, OperatorApplication::Exact));
 /// ```
 #[derive(Debug, Clone)]
 pub struct MergeRefineOptions<V> {
-    /// Number of most significant output bits to fix, at most the number of
-    /// selected indices. `None` (the default) refines every selected bit and
-    /// returns a strict partition of single-output-coordinate regions. A smaller
-    /// depth stops after that many level transitions and returns disjoint output
-    /// prefix regions whose terms overlap inside a region.
+    /// Maximum executed level, at most the longest coordinate group. `None`
+    /// (default) executes that full depth. `Exact` refines every selected bit;
+    /// the other policies may stop output axes earlier while input merges continue.
+    /// An explicit early stop can retain overlapping input-prefix terms in a region.
     pub output_depth: Option<usize>,
     /// Maximum live work items, default `4096`. A limit below the number of
     /// present input leaves is rejected before any operator is applied, and every
@@ -120,27 +164,24 @@ pub struct MergeRefineOptions<V> {
     /// count grow with the number of refined regions. Differing spectator
     /// constraints are refined into disjoint cells before tensor operations; both
     /// the varying-coordinate grid and the refined leaf count obey this limit.
+    /// In tolerance mode this also bounds the output-key metadata of any one
+    /// candidate before tensor work. Its retained work-item count is checked
+    /// after restriction, so empty input contributions consume no retained slots.
     pub max_work_items: usize,
-    /// Desired maximum bond dimension per retained term, default `None`.
-    /// `None` disables truncation and keeps the trajectory uniform and exact.
-    /// `Some(goal)` enables adaptive refinement, decided per axis: every output
-    /// region is first merged without splitting, and it stops on every axis as soon
-    /// as that candidate already fits the goal. A candidate above the goal refines an
-    /// axis only when that axis' children store no more parameters in total than the
-    /// merged candidate they replace, because a split keeps one region per output
-    /// child and a projected child still keeps every output site axis; a rank drop by
-    /// one is not a gain. An axis that does not pay off stops while the region's other
-    /// axes keep refining, and the region's input siblings keep merging on every axis.
-    /// A region whose axes have all stopped keeps its output key and merges its input
-    /// siblings there on the remaining levels, and a merged pair is combined whenever
-    /// the candidate fits the goal or lowers the bond dimension, otherwise its
-    /// operands stay separate terms. A truncation candidate must also fit the item's
-    /// share of the global allowance, so a soft rank goal never forces an accuracy
-    /// violation. `Some(0)` is invalid.
-    pub target_bond_dim: Option<usize>,
+    /// Pair compression and output refinement, default [`MergePolicy::Exact`].
+    ///
+    /// `RankGoal` preserves the soft-goal schedule. Choose `Tolerance` when the
+    /// required rank is unknown: every eligible axis is probed and the smallest
+    /// affordable representation wins. Each accepted residual is measured against
+    /// an absolute share of [`ReconstructionTolerance`]. The approximation bound
+    /// never overrides work/term limits. When in doubt, use `Exact` for reference
+    /// calculations and `Tolerance` with an explicit nonzero tolerance for compression.
+    pub merge_policy: MergePolicy,
     /// Maximum retained terms across live regions, default `1 << 20`. The
     /// adaptive merge policy can keep operands separate, so this bounds that
     /// growth and returns a resource-limit error instead of exceeding the budget.
+    /// Tolerance candidates count actual terms after restriction and merging;
+    /// empty children do not reserve terms merely because their keys were planned.
     pub max_terms: usize,
     /// Explicit coordinate axes, default `None`.
     ///
@@ -170,13 +211,25 @@ pub struct MergeRefineOptions<V> {
     ///
     /// `None` computes every region at [`Self::output_depth`]. `Some(regions)`
     /// computes only the regions that intersect one of `regions`, and a region
-    /// that intersects none of them is never restricted, merged, retained or
-    /// counted, so both the work and the result shrink with the selection. Each
-    /// `regions` entry fixes a contiguous prefix of the output indices of every
-    /// coordinate group and leaves the remaining output indices free, so a
-    /// region at the full output depth names one single output coordinate and a
-    /// shallower region names every coordinate below it. Listing no region is
-    /// invalid.
+    /// that intersects none of them is never restricted, merged, retained, or
+    /// counted as a result, so both the work and the result shrink with the selection. Each
+    /// [`OutputRegion`] is a static bit prefix per coordinate group: it fixes the
+    /// leading output bits of that group and leaves the rest free, so a region at
+    /// the full output depth names one single output coordinate and a shallower
+    /// region names every coordinate below it. The list is plain data (no
+    /// predicate, no caller-implemented trait), so a run is reproducible from the
+    /// options alone. Listing no region is invalid.
+    ///
+    /// # Coverage
+    ///
+    /// Under a selection the result is not the full transform.
+    /// [`MergeRefineReport::error_bound`] is a promise about *accuracy* of the
+    /// computed regions only; [`MergeRefineReport::pruned_regions`] is the separate
+    /// promise about *coverage*: it counts the child regions the selection cut
+    /// from the kept refinements. A region that was never computed is not a region
+    /// with zero error, so read both fields: `pruned_regions == 0` means the
+    /// selection skipped nothing (a region whose terms were all dropped as
+    /// negligible is omitted from the result separately, see `dropped_terms`).
     ///
     /// The trajectory refines prefixes, so this option filters whole work items
     /// instead of re-tiling the output: a region that only partially overlaps a
@@ -184,8 +237,9 @@ pub struct MergeRefineOptions<V> {
     /// [`Self::output_depth`] yields the schedule cell that contains it, or the
     /// several cells that intersect it when the requested per-axis depths differ.
     /// The input side is selected by [`Self::coverage`]; the two selections
-    /// compose.
-    pub output_regions: Option<Vec<Projector>>,
+    /// compose. The field is owned (`Vec`) rather than a borrowed slice so the
+    /// options stay a lifetime-free, `Clone` value.
+    pub output_regions: Option<Vec<OutputRegion>>,
     /// How the operator is applied to each input leaf, default
     /// [`OperatorApplication::Exact`]. See [`OperatorApplication`] for what each
     /// choice charges to the error budget.
@@ -289,12 +343,63 @@ impl<V> Default for MergeRefineOptions<V> {
             max_work_items: 4096,
             coordinate_groups: None,
             output_regions: None,
-            target_bond_dim: None,
+            merge_policy: MergePolicy::Exact,
             max_terms: 1 << 20,
             coverage: CoverageContract::default(),
             application: OperatorApplication::Exact,
         }
     }
+}
+
+/// Allocation, retained error, and executed work for one scheduler level.
+///
+/// Tolerance mode carries unspent allowance only between levels. Rank-goal mode
+/// retains its historical conservative charge for discarded probes as well;
+/// `budget_spent` distinguishes that reservation cost from retained error.
+///
+/// # Examples
+/// ```
+/// use tensor4all_partitionedtreetn::reconstruction::MergeRefineLevelReport;
+/// let level = MergeRefineLevelReport {
+///     level: 1, allocated_error: 0.25, error_bound: 0.125,
+///     remaining_before: 1.0, remaining_after: 0.875,
+///     budget_spent: 0.125, unused_allocation: 0.125,
+///     merging_levels_left: Some(4), ..Default::default()
+/// };
+/// assert_eq!(level.remaining_after, level.remaining_before - level.budget_spent);
+/// assert_eq!(level.unused_allocation, level.allocated_error - level.error_bound);
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct MergeRefineLevelReport {
+    /// One-based executed level number.
+    pub level: usize,
+    /// Potentially merging levels still to execute, including this level.
+    /// `Some` only in tolerance mode; other policies do not use this forecast.
+    pub merging_levels_left: Option<usize>,
+    /// Absolute error allowance reserved for this level; zero in exact mode.
+    pub allocated_error: f64,
+    /// Retained measured components combined over disjoint output regions in L2.
+    pub error_bound: f64,
+    /// Allocator's remaining absolute allowance before this level.
+    pub remaining_before: f64,
+    /// Allocator's remaining allowance after subtracting `budget_spent`.
+    pub remaining_after: f64,
+    /// Reservation cost: equals `error_bound` in tolerance mode. Rank-goal mode
+    /// also charges discarded probes, preserving its existing allocation policy.
+    pub budget_spent: f64,
+    /// `allocated_error - error_bound`. This is an accounting view, not an extra
+    /// credit. In tolerance mode it carries forward in `remaining_after`; in
+    /// rank-goal mode some may be unavailable because discarded probes were charged.
+    pub unused_allocation: f64,
+    /// Pairwise additions executed, including discarded probes.
+    pub additions: usize,
+    /// Truncation attempts executed, including discarded probes.
+    pub compression_attempts: usize,
+    /// Storage-reducing truncations accepted in executed candidates, including
+    /// candidates not finally retained. Only kept residuals enter `error_bound`.
+    pub compressions: usize,
+    /// Negligible contributions dropped in executed candidates, including probes.
+    pub dropped_terms: usize,
 }
 
 /// Structural counters of one merge-refine schedule run.
@@ -310,11 +415,14 @@ impl<V> Default for MergeRefineOptions<V> {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_partitionedtreetn::reconstruction::MergeRefineReport;
+/// use tensor4all_partitionedtreetn::reconstruction::{MergePolicy, MergeRefineLevelReport, MergeRefineReport};
 /// let report = MergeRefineReport {
 ///     reference_scale: 5.0,
 ///     absolute_tolerance: 0.0,
 ///     error_bound: 0.0,
+///     merge_policy: MergePolicy::Exact,
+///     application_error_bound: 0.0,
+///     levels: vec![MergeRefineLevelReport { level: 1, ..Default::default() }],
 ///     level_count: 1,
 ///     applied_operator_count: 2,
 ///     additions: 2,
@@ -328,6 +436,7 @@ impl<V> Default for MergeRefineOptions<V> {
 ///     refined_regions: 1,
 ///     stopped_regions: 0,
 ///     region_count: 2,
+///     pruned_regions: 0,
 ///     term_count: 2,
 ///     max_bond_dim: 1,
 ///     max_transient_bond_dim: 1,
@@ -360,6 +469,14 @@ pub struct MergeRefineReport {
     /// application error is the sum of the leaves' certified bounds, so it is
     /// proved rather than measured; the rest of the bound is still measured.
     pub error_bound: f64,
+    /// Policy selected for this run.
+    pub merge_policy: MergePolicy,
+    /// Original leaf-application bound, charged once before output restriction.
+    /// Together with the sum of `levels[*].error_bound`, gives `error_bound`.
+    pub application_error_bound: f64,
+    /// One record per executed level, in execution order. Exact mode records
+    /// zero allocations; tolerance mode exposes unused allowance carried forward.
+    pub levels: Vec<MergeRefineLevelReport>,
     /// Number of executed level transitions.
     pub level_count: usize,
     /// Complete-transform applications, one per original input patch, before
@@ -370,34 +487,50 @@ pub struct MergeRefineReport {
     /// Region restrictions, including the initial spectator restrictions and
     /// those performed by level transitions.
     pub projections: usize,
-    /// Contributions dropped as negligible under the global allowance. Their
-    /// measured norm stays inside [`Self::error_bound`].
+    /// Contributions dropped in executed candidates, including discarded probes.
+    /// Only the retained candidate's dropped norms enter `error_bound`.
     pub dropped_terms: usize,
-    /// Measured norm of the dropped contributions; part of [`Self::error_bound`].
+    /// Sum of norms dropped in executed work, including discarded probes.
+    /// This diagnostic is not added directly to `error_bound`.
     pub dropped_error: f64,
-    /// Merged items that exceeded the soft rank goal and probed truncation.
+    /// Merged items that probed truncation under the selected policy.
     pub compression_attempts: usize,
-    /// Probes that strictly lowered the bond dimension and fit their share.
+    /// Truncations that lowered storage and fit their share; rank-goal mode
+    /// requires a smaller maximum bond. Includes discarded candidates.
     pub compressions: usize,
     /// Live work items across all spectator cells after each level, starting
     /// with level zero after spectator restriction.
     pub work_items_per_level: Vec<usize>,
     /// Largest number of live work items.
     pub peak_work_items: usize,
-    /// Output regions refined into child prefix regions. Counted once per region
+    /// Output-region refinement decisions, including decisions whose selected
+    /// children all cancel or are pruned. This counts selected split decisions,
+    /// rather than nonempty regions retained in the result. Counted once per region
     /// and level in which at least one axis refined, because refining is a decision
     /// made per axis at one level.
     pub refined_regions: usize,
     /// Region-axis refinement decisions that stopped: the region's merged candidate
     /// already fit the goal (which stops every axis still refining), or splitting
-    /// that axis would have stored more parameters than that candidate. Counted once
-    /// per region and axis, not once per remaining level, so a single-axis run counts
+    /// that axis would have stored more parameters than that candidate. Tolerance
+    /// also stops an axis whose split exceeds candidate resource limits. Counted
+    /// once per region and axis, not once per remaining level, so a single-axis run counts
     /// one per stopping region. A stopped axis keeps the region's output prefix on
     /// that axis for good, and a region whose axes have all stopped keeps its output
     /// key and continues merging its input siblings at every later level, so its
     /// terms are not frozen at the stop level; they report through
     /// [`MergeRefineResult::regions`].
     pub stopped_regions: usize,
+    /// Child regions of the refinements this run carried out that
+    /// [`MergeRefineOptions::output_regions`] excluded, so they were never
+    /// computed. Each pruned child is counted once, at the level where it was cut,
+    /// not once per descendant. Only refinements that were kept count: a rank-goal
+    /// probe that was discarded, or an axis that stopped, refined nothing and cuts
+    /// nothing, and a region that stopped refining keeps its unsplit prefix. This is a coverage count and is kept apart from
+    /// [`Self::error_bound`], which says nothing about regions that were never
+    /// computed: `0` means the selection skipped nothing (always the case without
+    /// a selection), and a positive value means the result covers only part of the
+    /// output domain.
+    pub pruned_regions: usize,
     /// Disjoint output regions in the result.
     pub region_count: usize,
     /// Terms across all regions; terms inside one region overlap and must not be
@@ -819,7 +952,8 @@ where
 #[derive(Debug, Clone)]
 pub struct CoordinateGroup {
     /// This axis' selected indices in input significance order, most significant
-    /// first.
+    /// first. The scheduler requires between one and `usize::BITS` indices per
+    /// group so every input and output prefix fits its packed coordinate.
     pub inputs: Vec<DynIndex>,
     /// This axis' selected indices in output significance order: `outputs[0]`
     /// carries this axis' most significant frequency bit.
@@ -862,6 +996,62 @@ impl CoordinateGroup {
     /// ```
     pub fn with_outputs(inputs: Vec<DynIndex>, outputs: Vec<DynIndex>) -> Self {
         Self { inputs, outputs }
+    }
+}
+
+/// One requested output region: a static bit prefix per coordinate axis.
+///
+/// This is the public selection key of [`MergeRefineOptions::output_regions`].
+/// It is plain data, so two callers can compare, hash, log and replay it, and it
+/// names no tensor index: the placement convention that carries output bit `r_j`
+/// on a selected position stays inside the scheduler. A region is
+/// `(depth, prefix)` per axis: the `depth` most significant output bits of that
+/// axis are fixed, and `prefix` holds their value with the most significant bit
+/// first, so `prefix < 2^depth`. `depth == 0` fixes nothing on that axis.
+///
+/// With the default single coordinate axis, use [`OutputRegion::new`]. With
+/// explicit [`MergeRefineOptions::coordinate_groups`], use
+/// [`OutputRegion::per_axis`] with one `(depth, prefix)` pair per group, in the
+/// order of the groups.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtreetn::reconstruction::{MergeRefineOptions, OutputRegion};
+/// // The two most significant output bits are `10`.
+/// let region = OutputRegion::new(2, 0b10);
+/// assert_eq!(region.axes(), &[(2, 0b10)]);
+/// let options = MergeRefineOptions::<usize> {
+///     output_regions: Some(vec![region.clone()]),
+///     ..Default::default()
+/// };
+/// assert_eq!(options.output_regions.as_deref(), Some(&[region][..]));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OutputRegion {
+    axes: Vec<(usize, usize)>,
+}
+
+impl OutputRegion {
+    /// A region on the single default coordinate axis: the `depth` most
+    /// significant output bits equal `prefix`.
+    pub fn new(depth: usize, prefix: usize) -> Self {
+        Self {
+            axes: vec![(depth, prefix)],
+        }
+    }
+
+    /// A region on explicit coordinate groups: one `(depth, prefix)` pair per
+    /// group, in the order of [`MergeRefineOptions::coordinate_groups`].
+    pub fn per_axis(axes: impl IntoIterator<Item = (usize, usize)>) -> Self {
+        Self {
+            axes: axes.into_iter().collect(),
+        }
+    }
+
+    /// The `(depth, prefix)` pair of every axis.
+    pub fn axes(&self) -> &[(usize, usize)] {
+        &self.axes
     }
 }
 
@@ -937,6 +1127,11 @@ impl ScheduleGeometry {
             if axis.inputs.is_empty() {
                 return Err(invalid(
                     "every coordinate group needs at least one selected index",
+                ));
+            }
+            if axis.inputs.len() > usize::BITS as usize {
+                return Err(invalid(
+                    "a coordinate group exceeds usize coordinate capacity; use at most usize::BITS indices per group",
                 ));
             }
             if axis.inputs.len() != axis.outputs.len() {
@@ -1031,7 +1226,7 @@ impl ScheduleGeometry {
     ///
     /// Every axis advances one bit per level, so the `2^axes` grandchildren of one
     /// region all reach this key and are merged pairwise as they arrive.
-    fn input_parent(&self, key: &InputKey) -> InputKey {
+    fn input_parent(key: &InputKey) -> InputKey {
         key.iter()
             .map(|(depth, value)| {
                 if *depth == 0 {
@@ -1053,44 +1248,31 @@ impl ScheduleGeometry {
 
     /// Read the per-axis output prefix a requested output region fixes.
     ///
-    /// Fails when the projector fixes a non-contiguous set of output indices on
-    /// some axis, because a free output index followed by a fixed one describes a
-    /// region the level structure cannot restrict; when it fixes a coordinate
-    /// other than zero or one, which the binary level structure cannot express and
-    /// which a look-alike index of another dimension could smuggle in, since index
-    /// identity ignores the dimension; or when it names an index that is not one of
-    /// the selection's outputs, which would silently request everything.
-    fn output_prefix(&self, projector: &Projector) -> Result<InputKey> {
-        for index in projector.projected_indices() {
-            if !self.axes.iter().any(|axis| axis.outputs.contains(index)) {
-                return Err(invalid(
-                    "a requested output region must fix only output indices of the selection",
-                ));
-            }
+    /// Fails when the region lists a different number of axes than the geometry,
+    /// when an axis fixes more bits than it has output indices, or when a prefix
+    /// does not fit its depth, because such a region names no output prefix.
+    fn output_prefix(&self, region: &OutputRegion) -> Result<InputKey> {
+        if region.axes.len() != self.axes.len() {
+            return Err(invalid(
+                "a requested output region must give one (depth, prefix) pair per coordinate group",
+            ));
         }
         let mut key = Vec::with_capacity(self.axes.len());
-        for axis in &self.axes {
-            let mut depth = 0usize;
-            let mut value = 0usize;
-            let mut free_seen = false;
-            for index in &axis.outputs {
-                match projector.get(index) {
-                    Some(bit) => {
-                        if free_seen {
-                            return Err(invalid(
-                                "a requested output region must fix a contiguous prefix of each coordinate group and leave the trailing output indices free",
-                            ));
-                        }
-                        if bit > 1 {
-                            return Err(invalid(
-                                "a requested output region must fix binary output coordinates",
-                            ));
-                        }
-                        depth += 1;
-                        value = (value << 1) | bit;
-                    }
-                    None => free_seen = true,
-                }
+        for (axis, &(depth, value)) in self.axes.iter().zip(&region.axes) {
+            if depth > axis.outputs.len() {
+                return Err(invalid(
+                    "a requested output region must not fix more bits than its coordinate group has output indices",
+                ));
+            }
+            if depth >= usize::BITS as usize {
+                return Err(invalid(
+                    "a requested output region must fix fewer bits than a machine word",
+                ));
+            }
+            if value >> depth != 0 {
+                return Err(invalid(
+                    "a requested output region's prefix must be smaller than 2^depth",
+                ));
             }
             key.push((depth, value));
         }
@@ -1131,28 +1313,61 @@ impl ScheduleGeometry {
         key: &OutputKey,
         axes: &[usize],
         wanted: Option<&[InputKey]>,
-    ) -> Vec<OutputKey> {
-        let mut children = vec![key.clone()];
+        child_limit: (usize, &'static str),
+    ) -> Result<Vec<OutputKey>> {
+        let (max_children, limit) = child_limit;
+        let intersects = |child: &OutputKey| {
+            wanted.is_none_or(|wanted| {
+                wanted
+                    .iter()
+                    .any(|region| prefixes_overlap(&child.prefix, region))
+            })
+        };
+        let mut children = if intersects(key) {
+            vec![key.clone()]
+        } else {
+            Vec::new()
+        };
+        if children.len() > max_children {
+            return Err(PartitionedTreeTNError::ResourceLimit {
+                operation: "merge-refine child planning",
+                limit,
+                value: children.len(),
+            });
+        }
         for &axis_index in axes {
-            let depth = key.prefix[axis_index].0 + 1;
-            let mut next = Vec::with_capacity(children.len() * 2);
+            // INVARIANT: axes come from refining_axes for this validated key.
+            let depth = checked_add(key.prefix[axis_index].0, 1)?;
+            let mut next = Vec::new();
             for child in children {
                 for bit in 0..2usize {
                     let mut extended = child.clone();
-                    extended.prefix[axis_index] = (depth, (child.prefix[axis_index].1 << 1) | bit);
+                    extended.prefix[axis_index] = (
+                        depth,
+                        child.prefix[axis_index]
+                            .1
+                            .checked_mul(2)
+                            .and_then(|value| value.checked_add(bit))
+                            .ok_or_else(|| {
+                                invalid("output prefix exceeds usize coordinate capacity")
+                            })?,
+                    );
+                    if !intersects(&extended) {
+                        continue;
+                    }
+                    if next.len() >= max_children {
+                        return Err(PartitionedTreeTNError::ResourceLimit {
+                            operation: "merge-refine child planning",
+                            limit,
+                            value: checked_add(next.len(), 1)?,
+                        });
+                    }
                     next.push(extended);
                 }
             }
             children = next;
         }
-        if let Some(wanted) = wanted {
-            children.retain(|child| {
-                wanted
-                    .iter()
-                    .any(|region| prefixes_overlap(&child.prefix, region))
-            });
-        }
-        children
+        Ok(children)
     }
 
     /// Total number of selected bits across every axis.
@@ -1297,7 +1512,7 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// that only partially overlaps a refined region, or that has per-axis depths the
 /// refined level cannot reproduce, yields the schedule cells that intersect it.
 ///
-/// With [`MergeRefineOptions::target_bond_dim`] unset and the exact
+/// With [`MergePolicy::Exact`] and the exact
 /// [`MergeRefineOptions::application`], nothing is truncated and the reported
 /// bound is exactly zero. With a goal the trajectory is adaptive and the decision
 /// is made per axis: an output region is merged without splitting first and stops on
@@ -1338,10 +1553,12 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// # Errors
 /// Returns [`PartitionedTreeTNError::InvalidOptions`] for a non-binary or empty
 /// selection, an `output_depth` above the selection depth, an empty
-/// [`MergeRefineOptions::output_regions`], an output region that does not fix a
-/// contiguous prefix of output indices on every coordinate group or that names an
-/// index outside the selection, a `max_work_items`
-/// limit below the present input-leaf count, a zero `target_bond_dim`, a preimage
+/// coordinate group or one wider than `usize::BITS`, an empty
+/// [`MergeRefineOptions::output_regions`], an [`OutputRegion`] that lists a
+/// different number of axes than the coordinate groups, fixes more bits than
+/// its group has output indices or at least `usize::BITS` bits, or has a prefix
+/// that does not fit its depth, a `max_work_items`
+/// limit below the present input-leaf count, a preimage
 /// whose leaves do not form a valid dyadic prefix code or do not cover the
 /// requested contract, non-finite tolerances, and non-finite or non-positive
 /// checked counts; [`PartitionedTreeTNError::ResourceLimit`] when a level holds
@@ -1445,9 +1662,6 @@ where
     OperatorV: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     validate_tolerance(tolerance)?;
-    if options.target_bond_dim == Some(0) {
-        return Err(invalid("target_bond_dim must be positive when specified"));
-    }
     if let OperatorApplication::Certified { share, .. } = options.application {
         if !(share > 0.0 && share <= 1.0) {
             return Err(invalid(
@@ -1475,7 +1689,7 @@ where
         Some(regions) => Some(
             regions
                 .iter()
-                .map(|projector| geometry.output_prefix(projector))
+                .map(|region| geometry.output_prefix(region))
                 .collect::<Result<Vec<_>>>()?,
         ),
     };
@@ -1505,6 +1719,9 @@ where
                 reference_scale,
                 absolute_tolerance: absolute_allowance(tolerance, reference_scale)?,
                 error_bound: 0.0,
+                merge_policy: options.merge_policy,
+                application_error_bound: 0.0,
+                levels: Vec::new(),
                 level_count: 0,
                 applied_operator_count: 0,
                 additions: 0,
@@ -1517,6 +1734,7 @@ where
                 peak_work_items: 0,
                 refined_regions: 0,
                 stopped_regions: 0,
+                pruned_regions: 0,
                 region_count: 0,
                 term_count: 0,
                 max_bond_dim: 0,
@@ -1525,6 +1743,12 @@ where
             },
         });
     }
+
+    let tolerance_plans = if options.merge_policy == MergePolicy::Tolerance {
+        Some(tolerance::plan(preimage, &geometry, output_depth)?)
+    } else {
+        None
+    };
 
     let prepared = ReconstructionTarget::prepare_subset_images(
         preimage,
@@ -1589,7 +1813,9 @@ where
             "the measured application error exceeds the global allowance; relax the tolerance or the measured application's options",
         ));
     }
-    // Conservative l1 allocation, spent level by level: the measured application
+    // The legacy rank-goal allocator conservatively reserves probe costs in L1.
+    // Tolerance mode instead spends only each retained level component in L2.
+    // In either mode the measured application
     // error is charged first, and what is left is split over the levels that are
     // still to come and over the share-sized charges the current level can make.
     // A charge is one dropped norm or one accepted truncation residual, so it is
@@ -1619,148 +1845,208 @@ where
     let mut work_items_per_level = Vec::with_capacity(output_depth + 1);
     work_items_per_level.push(leaf_count);
     check_term_budget(&level, options.max_terms)?;
+    let mut level_reports = Vec::with_capacity(output_depth);
     for level_index in 1..=output_depth {
+        let before = (
+            counters.additions,
+            counters.compression_attempts,
+            counters.compressions,
+            counters.dropped_terms,
+        );
+        let remaining_before = remaining;
+        let tolerance_plan = tolerance_plans
+            .as_ref()
+            .and_then(|plans| plans.get(level_index - 1));
         let levels_left = output_depth - level_index + 1;
-        let charges = level_charge_bound(&level, &geometry, level_index, wanted.as_deref())?;
-        // Without a rank goal nothing is approximated: a zero share still drops an
-        // exactly cancelling contribution but never a small nonzero one, so the
-        // reported bound stays exactly zero as documented.
-        let share = if options.target_bond_dim.is_none() {
+        let charges = if tolerance_plan.is_some() {
+            0
+        } else {
+            level_charge_bound(
+                &level,
+                &geometry,
+                level_index,
+                wanted.as_deref(),
+                usize::MAX,
+            )?
+        };
+        // The legacy exact path uses zero share: it can drop exact cancellation
+        // but never a small nonzero contribution. Tolerance mode computes its
+        // separate region/child shares inside tolerance::advance.
+        let share = if options.merge_policy.rank_goal().is_none() {
             0.0
         } else {
             level_share(remaining, levels_left, charges)?
         };
+        let allocated_error = if let Some(plan) = tolerance_plan {
+            if plan.active {
+                finite(remaining / plan.merging_levels_left as f64)?
+            } else {
+                0.0
+            }
+        } else if options.merge_policy.rank_goal().is_some() && charges > 0 {
+            finite(remaining / levels_left as f64)?
+        } else {
+            0.0
+        };
         let mut level_components: BTreeMap<OutputKey, f64> = BTreeMap::new();
         let mut spent = 0.0_f64;
         let mut next: BTreeMap<OutputKey, BTreeMap<InputKey, Item<V>>> = BTreeMap::new();
-        for (region, items) in std::mem::take(&mut level) {
+        if tolerance_plan.is_some() {
             let context = ProbeContext {
                 geometry: &geometry,
                 center,
                 options,
-                share,
+                share: 0.0,
             };
-            let axes = geometry.refining_axes(&region, level_index);
-            if axes.is_empty() {
-                // Every axis has stopped refining or fixed all of its output bits,
-                // so the region keeps its output key and runs the merge half of the
-                // level: it consolidates its input siblings there for the remaining
-                // levels instead of freezing one term per leaf.
-                let (merged, incurred) =
-                    merge_own_region(&context, &region, &items, &mut counters)?;
-                spent = finite(spent + incurred)?;
-                if incurred > 0.0 {
-                    level_components.insert(region.clone(), incurred);
-                }
-                next.insert(region, merged);
-                continue;
-            }
-            // Refine each axis on its own decision and fix output bits only on the
-            // axes that pass, so an axis that does not pay off keeps the region's
-            // prefix and stops for good while its siblings keep refining. Without a
-            // rank goal every axis refines, which is the uniform exact trajectory
-            // and needs no probe.
-            let mut passing: Vec<usize> = Vec::with_capacity(axes.len());
-            // Probe children of each passing axis, in `passing` order.
-            let mut probes: Vec<Vec<ChildRegion<V>>> = Vec::new();
-            if let Some(goal) = options.target_bond_dim {
-                // Merge this region's own input siblings first: that candidate is
-                // exactly what a region that stops keeps, so it is the baseline the
-                // decision and every axis' split guard compare against.
-                let (merged, incurred) =
-                    merge_own_region(&context, &region, &items, &mut counters)?;
-                spent = finite(spent + incurred)?;
-                if max_rank(&merged) <= goal {
-                    // The merge this region would keep already fits the goal, so no
-                    // axis is split and no child is probed. Every refining axis stops
-                    // here: the key keeps its prefix, so none of them refines again.
-                    counters.stopped_regions = checked_add(counters.stopped_regions, axes.len())?;
+            (next, level_components) = tolerance::advance(
+                &context,
+                std::mem::take(&mut level),
+                level_index,
+                wanted.as_deref(),
+                allocated_error,
+                &mut counters,
+            )?;
+        } else {
+            for (region, items) in std::mem::take(&mut level) {
+                let context = ProbeContext {
+                    geometry: &geometry,
+                    center,
+                    options,
+                    share,
+                };
+                let axes = geometry.refining_axes(&region, level_index);
+                if axes.is_empty() {
+                    // Every axis has stopped refining or fixed all of its output bits,
+                    // so the region keeps its output key and runs the merge half of the
+                    // level: it consolidates its input siblings there for the remaining
+                    // levels instead of freezing one term per leaf.
+                    let (merged, incurred) =
+                        merge_own_region(&context, &region, &items, &mut counters)?;
+                    spent = finite(spent + incurred)?;
                     if incurred > 0.0 {
                         level_components.insert(region.clone(), incurred);
                     }
                     next.insert(region, merged);
                     continue;
                 }
-                let unsplit_parameters = region_parameters(&merged)?;
-                for &axis in &axes {
-                    let mut children = Vec::with_capacity(2);
-                    let mut child_parameters = 0usize;
-                    for child in geometry.child_keys(&region, &[axis], wanted.as_deref()) {
+                // Refine each axis on its own decision and fix output bits only on the
+                // axes that pass, so an axis that does not pay off keeps the region's
+                // prefix and stops for good while its siblings keep refining. Without a
+                // rank goal every axis refines, which is the uniform exact trajectory
+                // and needs no probe.
+                let mut passing: Vec<usize> = Vec::with_capacity(axes.len());
+                // Probe children of each passing axis, in `passing` order.
+                let mut probes: Vec<Vec<ChildRegion<V>>> = Vec::new();
+                if let Some(goal) = options.merge_policy.rank_goal() {
+                    // Merge this region's own input siblings first: that candidate is
+                    // exactly what a region that stops keeps, so it is the baseline the
+                    // decision and every axis' split guard compare against.
+                    let (merged, incurred) =
+                        merge_own_region(&context, &region, &items, &mut counters)?;
+                    spent = finite(spent + incurred)?;
+                    if max_rank(&merged) <= goal {
+                        // The merge this region would keep already fits the goal, so no
+                        // axis is split and no child is probed. Every refining axis stops
+                        // here: the key keeps its prefix, so none of them refines again.
+                        counters.stopped_regions =
+                            checked_add(counters.stopped_regions, axes.len())?;
+                        if incurred > 0.0 {
+                            level_components.insert(region.clone(), incurred);
+                        }
+                        next.insert(region, merged);
+                        continue;
+                    }
+                    let unsplit_parameters = region_parameters(&merged)?;
+                    for &axis in &axes {
+                        let mut children = Vec::with_capacity(2);
+                        let mut child_parameters = 0usize;
+                        for child in geometry.child_keys(
+                            &region,
+                            &[axis],
+                            wanted.as_deref(),
+                            (usize::MAX, "max_work_items"),
+                        )? {
+                            let projector = geometry.output_projector(&child)?;
+                            let mut child_incurred = 0.0_f64;
+                            let child_items = restrict_and_merge(
+                                &context,
+                                &items,
+                                &projector,
+                                &mut counters,
+                                &mut child_incurred,
+                            )?;
+                            // The probe costs its measured components even when this
+                            // axis stops, but only a kept child is reported as a
+                            // component of the level.
+                            spent = finite(spent + child_incurred)?;
+                            child_parameters =
+                                checked_add(child_parameters, region_parameters(&child_items)?)?;
+                            children.push((child, child_items, child_incurred));
+                        }
+                        // Splitting one axis must pay for its extra region: one split keeps
+                        // one region per output child and a projected child still keeps
+                        // every output site axis, so that axis' children may store no more
+                        // parameters in total than the merged candidate they replace.
+                        if split_pays(unsplit_parameters, child_parameters) {
+                            passing.push(axis);
+                            probes.push(children);
+                        } else {
+                            counters.stopped_regions = checked_add(counters.stopped_regions, 1)?;
+                        }
+                    }
+                    if passing.is_empty() {
+                        // Every refining axis stopped here. The discarded child probes were
+                        // charged above and stay out of the reported bound; the merged
+                        // candidate this region keeps is not.
+                        if incurred > 0.0 {
+                            level_components.insert(region.clone(), incurred);
+                        }
+                        next.insert(region, merged);
+                        continue;
+                    }
+                    // The merged candidate was a probe as well: it was charged above and
+                    // stays out of the reported bound because the children are kept.
+                } else {
+                    passing = axes;
+                }
+                // One passing axis already has its children from the probe, so its split
+                // costs its two probes and nothing more. Two or more passing axes need
+                // the joint children over exactly those axes.
+                let children = if passing.len() == 1 && options.merge_policy.rank_goal().is_some() {
+                    probes.pop().unwrap_or_default()
+                } else {
+                    // Only a single passing axis can reuse its probes, so the others are
+                    // released before the joint children are materialized.
+                    probes.clear();
+                    let child_keys = geometry.child_keys(
+                        &region,
+                        &passing,
+                        wanted.as_deref(),
+                        (usize::MAX, "max_work_items"),
+                    )?;
+                    let mut children = Vec::with_capacity(child_keys.len());
+                    for child in child_keys {
                         let projector = geometry.output_projector(&child)?;
-                        let mut child_incurred = 0.0_f64;
+                        let mut incurred = 0.0_f64;
                         let child_items = restrict_and_merge(
                             &context,
                             &items,
                             &projector,
                             &mut counters,
-                            &mut child_incurred,
+                            &mut incurred,
                         )?;
-                        // The probe costs its measured components even when this
-                        // axis stops, but only a kept child is reported as a
-                        // component of the level.
-                        spent = finite(spent + child_incurred)?;
-                        child_parameters =
-                            checked_add(child_parameters, region_parameters(&child_items)?)?;
-                        children.push((child, child_items, child_incurred));
+                        spent = finite(spent + incurred)?;
+                        children.push((child, child_items, incurred));
                     }
-                    // Splitting one axis must pay for its extra region: one split keeps
-                    // one region per output child and a projected child still keeps
-                    // every output site axis, so that axis' children may store no more
-                    // parameters in total than the merged candidate they replace.
-                    if split_pays(unsplit_parameters, child_parameters) {
-                        passing.push(axis);
-                        probes.push(children);
-                    } else {
-                        counters.stopped_regions = checked_add(counters.stopped_regions, 1)?;
-                    }
-                }
-                if passing.is_empty() {
-                    // Every refining axis stopped here. The discarded child probes were
-                    // charged above and stay out of the reported bound; the merged
-                    // candidate this region keeps is not.
+                    children
+                };
+                counters.record_refinement(passing.len(), children.len())?;
+                for (child, child_items, incurred) in children {
                     if incurred > 0.0 {
-                        level_components.insert(region.clone(), incurred);
+                        level_components.insert(child.clone(), incurred);
                     }
-                    next.insert(region, merged);
-                    continue;
+                    next.insert(child, child_items);
                 }
-                // The merged candidate was a probe as well: it was charged above and
-                // stays out of the reported bound because the children are kept.
-            } else {
-                passing = axes;
-            }
-            counters.refined_regions = checked_add(counters.refined_regions, 1)?;
-            // One passing axis already has its children from the probe, so its split
-            // costs its two probes and nothing more. Two or more passing axes need
-            // the joint children over exactly those axes.
-            let children = if passing.len() == 1 && options.target_bond_dim.is_some() {
-                probes.pop().unwrap_or_default()
-            } else {
-                // Only a single passing axis can reuse its probes, so the others are
-                // released before the joint children are materialized.
-                probes.clear();
-                let child_keys = geometry.child_keys(&region, &passing, wanted.as_deref());
-                let mut children = Vec::with_capacity(child_keys.len());
-                for child in child_keys {
-                    let projector = geometry.output_projector(&child)?;
-                    let mut incurred = 0.0_f64;
-                    let child_items = restrict_and_merge(
-                        &context,
-                        &items,
-                        &projector,
-                        &mut counters,
-                        &mut incurred,
-                    )?;
-                    spent = finite(spent + incurred)?;
-                    children.push((child, child_items, incurred));
-                }
-                children
-            };
-            for (child, child_items, incurred) in children {
-                if incurred > 0.0 {
-                    level_components.insert(child.clone(), incurred);
-                }
-                next.insert(child, child_items);
             }
         }
         let live_items: usize = next.values().map(|items| items.len()).sum();
@@ -1778,11 +2064,29 @@ where
         work_items_per_level.push(live_items);
         level = next;
         check_term_budget(&level, options.max_terms)?;
+        let retained_bound = level_components
+            .values()
+            .try_fold(0.0_f64, |total, bound| finite(total.hypot(*bound)))?;
+        if tolerance_plan.is_some() {
+            spent = retained_bound;
+        }
         components.push(level_components);
-        // The per-level share bounds this spend by construction; the clamp only
-        // absorbs floating-point rounding at the boundary rather than failing a
-        // run for it.
         remaining = finite((remaining - spent).max(0.0))?;
+        // INVARIANT: checked work counters only increase during a level.
+        level_reports.push(MergeRefineLevelReport {
+            level: level_index,
+            merging_levels_left: tolerance_plan.map(|plan| plan.merging_levels_left),
+            allocated_error,
+            error_bound: retained_bound,
+            remaining_before,
+            remaining_after: remaining,
+            budget_spent: spent,
+            unused_allocation: finite((allocated_error - retained_bound).max(0.0))?,
+            additions: counters.additions - before.0,
+            compression_attempts: counters.compression_attempts - before.1,
+            compressions: counters.compressions - before.2,
+            dropped_terms: counters.dropped_terms - before.3,
+        });
     }
     // Regions that survived the last level keep the input prefixes they hold at
     // that depth, including the regions that stopped refining early and kept
@@ -1829,6 +2133,9 @@ where
         reference_scale,
         absolute_tolerance: allowance,
         error_bound,
+        merge_policy: options.merge_policy,
+        application_error_bound: application_error,
+        levels: level_reports,
         level_count: output_depth,
         applied_operator_count,
         additions: counters.additions,
@@ -1841,6 +2148,7 @@ where
         peak_work_items: counters.peak_work_items,
         refined_regions: counters.refined_regions,
         stopped_regions: counters.stopped_regions,
+        pruned_regions: counters.pruned_regions,
         region_count: regions.len(),
         term_count,
         max_bond_dim,
@@ -1852,6 +2160,7 @@ where
 
 /// Everything one level's region probes share: the geometry, the compression center,
 /// the options, and this level's share of the remaining allowance.
+#[derive(Clone, Copy)]
 struct ProbeContext<'a, V>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
@@ -1964,13 +2273,14 @@ fn level_charge_bound<V>(
     geometry: &ScheduleGeometry,
     level_index: usize,
     wanted: Option<&[InputKey]>,
+    max_children: usize,
 ) -> Result<usize>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     let mut charges = 0usize;
     for (region, items) in level {
-        let own = merge_charge_bound(items, geometry)?;
+        let own = merge_charge_bound(items)?;
         let axes = geometry.refining_axes(region, level_index);
         if axes.is_empty() {
             charges = checked_add(charges, own)?;
@@ -1978,12 +2288,22 @@ where
         }
         let mut per_own = 0usize;
         for &axis in &axes {
-            per_own = checked_add(per_own, geometry.child_keys(region, &[axis], wanted).len())?;
+            per_own = checked_add(
+                per_own,
+                geometry
+                    .child_keys(region, &[axis], wanted, (max_children, "max_work_items"))?
+                    .len(),
+            )?;
         }
         if axes.len() >= 2 {
             // The joint children are materialized only when more than one axis
             // passes, so only that case reserves their worst case here.
-            per_own = checked_add(per_own, geometry.child_keys(region, &axes, wanted).len())?;
+            per_own = checked_add(
+                per_own,
+                geometry
+                    .child_keys(region, &axes, wanted, (max_children, "max_work_items"))?
+                    .len(),
+            )?;
         }
         let probes = own
             .checked_mul(per_own)
@@ -2000,17 +2320,14 @@ where
 /// `compress_item` per paired term index, and one for every single-sided term,
 /// which is exactly the summed term count of its operands. A merged result never
 /// holds more terms than that sum.
-fn merge_charge_bound<V>(
-    items: &BTreeMap<InputKey, Item<V>>,
-    geometry: &ScheduleGeometry,
-) -> Result<usize>
+fn merge_charge_bound<V>(items: &BTreeMap<InputKey, Item<V>>) -> Result<usize>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     let mut groups: BTreeMap<InputKey, Vec<usize>> = BTreeMap::new();
     for (input_key, item) in items {
         groups
-            .entry(geometry.input_parent(input_key))
+            .entry(ScheduleGeometry::input_parent(input_key))
             .or_default()
             .push(item.terms.len());
     }
@@ -2060,7 +2377,7 @@ where
         // are summed pairwise as they arrive; a leaf whose sibling is absent keeps
         // its own region, which is already the union of its subtree, so ascending
         // is exact and free.
-        match children.entry(context.geometry.input_parent(input_key)) {
+        match children.entry(ScheduleGeometry::input_parent(input_key)) {
             Entry::Vacant(slot) => {
                 slot.insert(restricted);
             }
@@ -2108,7 +2425,8 @@ where
 
 /// Combine two sibling contributions to one region.
 ///
-/// Without a rank goal the exact sum is kept as a single term. With a goal, each
+/// Exact mode keeps the direct sum as one term. Tolerance mode accepts storage-
+/// reducing compression within its share and consolidates every pair. With a goal, each
 /// paired sum is compressed toward the goal first; the single combined term is
 /// kept when it already fits the goal or strictly lowers the bond dimension
 /// against the naive sum, otherwise the operands stay separate terms so the
@@ -2135,11 +2453,23 @@ where
                 if drop_negligible(&sum, context.share, counters, incurred)? {
                     continue;
                 }
-                match context.options.target_bond_dim {
-                    None => terms.push(sum),
-                    Some(goal) => {
+                match context.options.merge_policy {
+                    MergePolicy::Tolerance => {
                         let (candidate, residual) =
-                            compress_item(&sum, context.center, goal, context.share, counters)?;
+                            compress_item(&sum, context.center, None, context.share, counters)?;
+                        *incurred = finite(*incurred + residual)?;
+                        terms.push(candidate);
+                    }
+                    MergePolicy::Exact => terms.push(sum),
+                    MergePolicy::RankGoal(goal) => {
+                        let goal = goal.get();
+                        let (candidate, residual) = compress_item(
+                            &sum,
+                            context.center,
+                            Some(goal),
+                            context.share,
+                            counters,
+                        )?;
                         let naive_rank = checked_add(left.max_bond_dim(), right.max_bond_dim())?;
                         let candidate_rank = candidate.max_bond_dim();
                         // `compress_item` returns an already-within-goal sum
@@ -2231,31 +2561,49 @@ struct MergeCounters {
     max_transient_bond_dim: usize,
     refined_regions: usize,
     stopped_regions: usize,
+    pruned_regions: usize,
 }
 
-/// Compress a merged sum toward the soft rank goal within `share`.
+impl MergeCounters {
+    /// Count only the selected refinement, never its discarded probes.
+    fn record_refinement(&mut self, axes: usize, kept_children: usize) -> Result<()> {
+        // INVARIANT: validate_leaf_geometry accepts fewer than usize::BITS
+        // selected bits, and child_keys only filters that split's binary grid.
+        let pruned = (1usize << axes) - kept_children;
+        self.refined_regions = checked_add(self.refined_regions, 1)?;
+        self.pruned_regions = checked_add(self.pruned_regions, pruned)?;
+        Ok(())
+    }
+}
+
+/// Compress a merged sum within `share`, optionally gated by a soft rank goal.
 ///
 /// Returns the retained value and its measured residual against `sum`. A
-/// truncation candidate is accepted only when it strictly lowers the bond
-/// dimension and its measured residual fits `share`; an unaffordable or gainless
+/// truncation candidate is accepted only when it lowers storage (maximum bond
+/// in goal mode) and its measured residual fits `share`; an unaffordable or gainless
 /// candidate is rejected at zero cost, so a soft rank goal never forces an
 /// accuracy violation.
 fn compress_item<V>(
     sum: &SubDomainTreeTN<V>,
     center: &V,
-    goal: usize,
+    goal: Option<usize>,
     share: f64,
     counters: &mut MergeCounters,
 ) -> Result<(SubDomainTreeTN<V>, f64)>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    if sum.max_bond_dim() <= goal {
+    if goal.is_some_and(|goal| sum.max_bond_dim() <= goal) {
         return Ok((sum.clone(), 0.0));
     }
     counters.compression_attempts = checked_add(counters.compression_attempts, 1)?;
     let (candidate, residual) = truncate_toward_allowance(sum, center, share)?;
-    if candidate.max_bond_dim() < sum.max_bond_dim() {
+    let reduces_storage = if goal.is_some() {
+        candidate.max_bond_dim() < sum.max_bond_dim()
+    } else {
+        logical_parameter_count(&candidate)? < logical_parameter_count(sum)?
+    };
+    if reduces_storage {
         counters.compressions = checked_add(counters.compressions, 1)?;
         Ok((candidate, residual))
     } else {
@@ -2264,6 +2612,7 @@ where
 }
 
 mod spectators;
+mod tolerance;
 
 #[cfg(test)]
 mod tests;

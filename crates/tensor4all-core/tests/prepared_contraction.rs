@@ -2,7 +2,7 @@ use tensor4all_core::{
     contract, ContractionOptions, DynId, DynIndex, IdxTensor, IdxTensorError, Index,
     PreparedContraction, TagSet,
 };
-use tensor4all_tensorbackend::StorageKind;
+use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext, StorageKind};
 
 fn dense(indices: Vec<DynIndex>, values: Vec<f64>) -> IdxTensor {
     IdxTensor::from_dense(indices, values).unwrap()
@@ -39,6 +39,8 @@ fn prepared_dense_nary_matches_ordinary_for_new_values_and_mixed_dtype() {
 
     let prepared = plan.execute(&[&a, &b, &c]).unwrap();
     let ordinary = contract(&[&a, &b, &c]).unwrap();
+    assert!(prepared.is_f64());
+    assert!(ordinary.is_f64());
     assert!(prepared.isapprox(&ordinary, 1.0e-12, 0.0).unwrap());
 }
 
@@ -107,6 +109,7 @@ fn prepared_structured_contraction_supports_mixed_dtype() {
         result.storage().unwrap().storage_kind(),
         StorageKind::Diagonal
     );
+    assert!(result.is_f64());
     assert_eq!(result.to_vec::<f64>().unwrap(), vec![3.0, 0.0, 0.0, 8.0]);
 }
 
@@ -272,6 +275,7 @@ fn assert_structured_gradient_dispatch(retained: bool) {
             vec![i, output]
         };
         let expected = IdxTensor::from_diag(expected_indices, vec![15.0_f64, 48.0]).unwrap();
+        assert!(result.is_f64());
         assert!(result.isapprox(&expected, 1e-12, 0.0).unwrap());
         assert_eq!(
             result.storage().unwrap().storage_kind(),
@@ -307,8 +311,19 @@ fn retained_label_dimension_mismatch_is_rejected_during_planning() {
     let options = ContractionOptions::new().with_retain_indices(&retained);
     let ordinary = tensor4all_core::contract_with_options(&[&a, &b], options).unwrap_err();
     let prepared = PreparedContraction::new(&[&a, &b], options).unwrap_err();
+    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
+    let session = context
+        .with_concrete_session(|session| {
+            tensor4all_core::contract_with_options_on_session(session, &[&a, &b], options)
+        })
+        .unwrap()
+        .unwrap_err();
     assert!(ordinary
         .to_string()
         .contains("Internal label shape mismatch"));
     assert_eq!(ordinary.to_string(), prepared.to_string());
+    assert!(matches!(session, IdxTensorError::Operation { .. }));
+    assert!(session
+        .to_string()
+        .contains("Internal label shape mismatch"));
 }

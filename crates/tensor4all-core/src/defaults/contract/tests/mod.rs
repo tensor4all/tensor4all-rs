@@ -709,6 +709,39 @@ fn test_union_find_remap_and_tensor_id_helpers() {
 }
 
 #[test]
+fn prepared_dense_nary_records_profile_output_dimensions() {
+    crate::diagnostics::with_test_diagnostics(
+        |config| config.contract_profile = true,
+        || {
+            reset_contract_profile();
+            let i = Index::new(DynId(801), 2);
+            let j = Index::new(DynId(802), 3);
+            let k = Index::new(DynId(803), 2);
+            let l = Index::new(DynId(804), 4);
+            let a = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0; 6]).unwrap();
+            let b = IdxTensor::from_dense(vec![j, k.clone()], vec![2.0; 6]).unwrap();
+            let c = IdxTensor::from_dense(vec![k, l.clone()], vec![3.0; 8]).unwrap();
+            let operands = [&a, &b, &c];
+            let plan = PreparedContraction::new(&operands, ContractionOptions::new()).unwrap();
+            CONTRACT_PROFILE_STATE.with(|state| assert!(state.borrow().is_empty()));
+
+            let result = plan.execute(&operands).unwrap();
+            assert_eq!(result.indices(), &[i, l]);
+            assert_eq!(result.to_vec::<f64>().unwrap(), vec![36.0; 8]);
+            CONTRACT_PROFILE_STATE.with(|state| {
+                let state = state.borrow();
+                assert_eq!(state.len(), 1);
+                let (signature, entry) = state.iter().next().unwrap();
+                assert_eq!(entry.calls, 1);
+                assert_eq!(signature.output_dims, vec![2, 4]);
+                assert_eq!(signature.operands.len(), 3);
+            });
+            reset_contract_profile();
+        },
+    );
+}
+
+#[test]
 fn test_contract_profile_helpers() {
     crate::diagnostics::with_test_diagnostics(
         |config| config.contract_profile = true,

@@ -1079,21 +1079,7 @@ fn merge_refine_schedule_rejects_invalid_geometry() {
     .expect_err("work limit below the leaf count");
     assert!(error.to_string().contains("max_work_items"));
 
-    // A zero soft rank goal is invalid.
-    let error = schedule_merge_refine(
-        &preimage,
-        &0,
-        &operator,
-        &sites,
-        &SubsetOperatorOptions { unitary: true },
-        ReconstructionTolerance::default(),
-        &MergeRefineOptions {
-            target_bond_dim: Some(0),
-            ..Default::default()
-        },
-    )
-    .expect_err("zero rank goal");
-    assert!(error.to_string().contains("target_bond_dim"));
+    assert_eq!(MergePolicy::default(), MergePolicy::Exact);
 
     // A preimage that misses one dyadic leaf is not a coverage contract.
     let full = SubDomainTreeTN::from_treetn(tree.clone()).expect("subdomain");
@@ -1311,7 +1297,7 @@ fn schedule_rank_limited(
         &MergeRefineOptions {
             output_depth: None,
             max_work_items: 4 * leaves,
-            target_bond_dim: Some(target_bond_dim),
+            merge_policy: MergePolicy::RankGoal(target_bond_dim.try_into().unwrap()),
             ..Default::default()
         },
     )
@@ -1685,7 +1671,7 @@ fn merge_refine_schedule_rejects_a_term_budget_it_cannot_keep() {
         &MergeRefineOptions {
             output_depth: None,
             max_work_items: 16,
-            target_bond_dim: Some(1),
+            merge_policy: MergePolicy::RankGoal(1_usize.try_into().unwrap()),
             max_terms: 2,
             ..Default::default()
         },
@@ -2510,6 +2496,108 @@ fn two_axis_fourier_operator(sites: &[DynIndex]) -> LinearOperator<IdxTensor, us
     chain_axis_fourier_operator(&[2, 2], sites)
 }
 
+/// A compact identity MPO with unit links, preserving every logical site.
+fn chain_identity_operator(sites: &[DynIndex]) -> LinearOperator<IdxTensor, usize> {
+    let links: Vec<_> = (1..sites.len()).map(|_| DynIndex::new_dyn(1)).collect();
+    let mut inputs = HashMap::new();
+    let mut outputs = HashMap::new();
+    let tensors = sites
+        .iter()
+        .enumerate()
+        .map(|(node, site)| {
+            let input = DynIndex::new_dyn(2);
+            let output = DynIndex::new_dyn(2);
+            let mut tensor =
+                IdxTensor::from_diag(vec![input.clone(), output.clone()], vec![1.0; 2]).unwrap();
+            for link in node
+                .checked_sub(1)
+                .and_then(|previous| links.get(previous))
+                .into_iter()
+                .chain(links.get(node))
+            {
+                let one = IdxTensor::from_dense(vec![link.clone()], vec![1.0]).unwrap();
+                tensor = tensor4all_core::outer_product(&tensor, &one).unwrap();
+            }
+            inputs.insert(
+                node,
+                IndexMapping {
+                    true_index: site.clone(),
+                    internal_index: input,
+                },
+            );
+            outputs.insert(
+                node,
+                IndexMapping {
+                    true_index: site.clone(),
+                    internal_index: output,
+                },
+            );
+            tensor
+        })
+        .collect();
+    LinearOperator::new(
+        TreeTN::from_tensors(tensors, (0..sites.len()).collect()).unwrap(),
+        inputs,
+        outputs,
+    )
+}
+
+#[test]
+fn tolerance_schedule_selects_the_cheaper_axis_and_stops_the_other() {
+    let sites: Vec<_> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    // Given site 2 the first two sites form a rank-one product. Given site 1,
+    // sites 0 and 2 remain coupled: only the site-2 split reduces total storage.
+    let a = [1.0, 1.0, 1.0, 2.0];
+    let b = [1.0, 1.0, 1.0, 3.0];
+    let values: Vec<_> = (0..8)
+        .map(|m| {
+            let (x, y, z) = ((m >> 2) & 1, (m >> 1) & 1, m & 1);
+            Complex64::new(a[x + 2 * z] * b[y + 2 * z], 0.0)
+        })
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = partitioned_target(&tree, &sites[0]);
+    let groups = axis_groups(&[2, 1], &sites);
+    let result = schedule_merge_refine(
+        &preimage,
+        &0,
+        &chain_identity_operator(&sites),
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance {
+            rtol: 1e-10,
+            atol: 0.0,
+        },
+        &MergeRefineOptions {
+            merge_policy: MergePolicy::Tolerance,
+            coordinate_groups: Some(groups.clone()),
+            output_depth: Some(1),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(axis_depths(&result, &groups), vec![vec![0, 1]; 2]);
+    assert_eq!(result.report().refined_regions, 1);
+    assert_eq!(result.report().stopped_regions, 1);
+    let mut fixed = Vec::new();
+    for (projector, _) in result.regions() {
+        assert_eq!(projector.get(&sites[0]), None);
+        assert_eq!(projector.get(&sites[1]), None);
+        fixed.push(projector.get(&sites[2]).unwrap());
+    }
+    fixed.sort_unstable();
+    assert_eq!(fixed, vec![0, 1]);
+    let expected = tree.to_dense().unwrap();
+    let actual = result
+        .into_partition()
+        .unwrap()
+        .to_treetn()
+        .unwrap()
+        .to_dense()
+        .unwrap();
+    assert!(actual.sub(&expected).unwrap().maxabs().unwrap() < TOL);
+}
+
 #[test]
 fn merge_refine_schedule_transforms_two_coordinate_axes_in_one_level() {
     let sites: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
@@ -2661,7 +2749,7 @@ fn merge_refine_schedule_computes_only_the_selected_output_regions() {
         &SubsetOperatorOptions { unitary: true },
         tolerance,
         &MergeRefineOptions {
-            output_regions: Some(vec![wanted.clone()]),
+            output_regions: Some(vec![OutputRegion::new(r, 0)]),
             ..Default::default()
         },
     )
@@ -2673,6 +2761,10 @@ fn merge_refine_schedule_computes_only_the_selected_output_regions() {
     assert_eq!(report.region_count, 1);
     assert_eq!(report.term_count, 1);
     assert_eq!(report.error_bound, 0.0);
+    // Coverage is reported apart from accuracy: one child is kept per level and
+    // its sibling is never computed.
+    assert_eq!(report.pruned_regions, r);
+    assert_eq!(all.report().pruned_regions, 0);
 
     // The computed region is the same region, bit for bit, that the unselected
     // trajectory returns among its 16.
@@ -2715,27 +2807,18 @@ fn merge_refine_schedule_rejects_an_invalid_output_selection() {
     let error = run(Some(Vec::new())).expect_err("an empty selection is invalid");
     assert!(error.to_string().contains("at least one region"));
 
-    // A region must fix a contiguous prefix per axis: the outputs are the reversed
-    // sites, so fixing the second output index alone leaves a free index before it.
-    let group = CoordinateGroup::new(sites.clone());
-    let gap = Projector::from_pairs([(group.outputs[1].clone(), 0usize)]).expect("projector");
-    let error = run(Some(vec![gap])).expect_err("a non-prefix region is invalid");
-    assert!(error.to_string().contains("contiguous prefix"));
+    // A region deeper than its group has output indices names no prefix.
+    let error = run(Some(vec![OutputRegion::new(3, 0)])).expect_err("too deep");
+    assert!(error.to_string().contains("more bits"));
 
-    // An index outside the selection would silently request the whole output.
-    let stray = Projector::from_pairs([(DynIndex::new_dyn(2), 0usize)]).expect("projector");
-    let error = run(Some(vec![stray])).expect_err("a foreign index is invalid");
-    assert!(error
-        .to_string()
-        .contains("must fix only output indices of the selection"));
+    // The prefix value must fit its depth.
+    let error = run(Some(vec![OutputRegion::new(1, 2)])).expect_err("prefix too large");
+    assert!(error.to_string().contains("smaller than 2^depth"));
 
-    // Index identity ignores the dimension, so a look-alike index of dimension
-    // three stores coordinate two in an equal projector. The binary level
-    // structure must reject it instead of encoding a corrupt prefix key.
-    let ternary = Projector::from_pairs([(DynIndex::new(group.outputs[0].id, 3), 2usize)])
-        .expect("projector");
-    let error = run(Some(vec![ternary])).expect_err("a ternary coordinate is invalid");
-    assert!(error.to_string().contains("binary output coordinates"));
+    // One (depth, prefix) pair per coordinate group.
+    let error =
+        run(Some(vec![OutputRegion::per_axis([(1, 0), (1, 0)])])).expect_err("wrong axis count");
+    assert!(error.to_string().contains("one (depth, prefix) pair"));
 }
 
 #[test]
@@ -2780,12 +2863,16 @@ fn merge_refine_schedule_selects_an_output_region_across_two_axes_with_sparse_in
     let wanted = output_prefix_projector(&groups[0], 2, 0b10)
         .intersection(&output_prefix_projector(&groups[1], 2, 0b01))
         .expect("the two axis regions fix disjoint indices");
-    let selected = run(Some(vec![wanted.clone()])).expect("selected schedule");
+    let selected =
+        run(Some(vec![OutputRegion::per_axis([(2, 0b10), (2, 0b01)])])).expect("selected schedule");
     let all = run(None).expect("unselected schedule");
     assert_eq!(all.report().region_count, 16);
     assert_eq!(selected.report().region_count, 1);
     assert_eq!(selected.report().applied_operator_count, 15);
     assert_eq!(selected.report().error_bound, 0.0);
+    // Two axes advance together: 3 of 4 children are cut at each of the 2 levels.
+    assert_eq!(selected.report().pruned_regions, 6);
+    assert_eq!(all.report().pruned_regions, 0);
     assert!(
         selected.report().additions < all.report().additions,
         "a selection must skip work: {} is not below {}",
@@ -2959,7 +3046,9 @@ fn merge_refine_schedule_stops_both_axes_when_the_merged_candidate_fits_the_goal
                 coordinate_groups: Some(groups.clone()),
                 output_depth: Some(depth),
                 max_work_items: 4096,
-                target_bond_dim: goal,
+                merge_policy: goal
+                    .map(|goal| MergePolicy::RankGoal(goal.try_into().unwrap()))
+                    .unwrap_or_default(),
                 ..Default::default()
             },
         )
@@ -3038,7 +3127,7 @@ fn merge_refine_schedule_stops_three_axes_when_the_merged_candidate_fits_the_goa
             coordinate_groups: Some(groups.clone()),
             output_depth: Some(2),
             max_work_items: 4096,
-            target_bond_dim: Some(64),
+            merge_policy: MergePolicy::RankGoal(64_usize.try_into().unwrap()),
             ..Default::default()
         },
     )
@@ -3072,3 +3161,9 @@ fn merge_refine_schedule_stops_three_axes_when_the_merged_candidate_fits_the_goa
         "L2 residual {residual:e} exceeds the bound {bound:e}"
     );
 }
+
+#[path = "qft_reconstruction/tolerance_merges.rs"]
+mod tolerance_merges;
+
+#[path = "qft_reconstruction/output_selection.rs"]
+mod output_selection;

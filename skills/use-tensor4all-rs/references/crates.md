@@ -86,7 +86,7 @@ Direct cross interpolation on integer indices. TCI2 is the primary algorithm; TC
   - `tolerance` default 1e-8; 1e-6 explore, 1e-12 high accuracy.
   - `max_bond_dim` cap to prevent runaway on expensive functions.
   - `seed: Some(42)` for reproducibility.
-- `crossinterpolate2_matrix::<T, F>(source, MatrixShape, local_dims, initial_pivots, TCI2Options)` — chain TCI2 for a genuinely matrix-valued function with shared structure (`F(x) = sum_k a_k(x) U_k V_k^T`); `source` returns whole column-major matrices per point. For unrelated entries prefer separate `crossinterpolate2` fits.
+- `crossinterpolate2_matrix::<T, F>(source, MatrixShape, local_dims, initial_pivots, TCI2Options)` — chain TCI2 for a genuinely matrix-valued function with shared structure (`F(x) = sum_k a_k(x) U_k V_k^T`); `source` returns whole column-major matrices per point. `crossinterpolate2_matrix_with_rng` takes a caller-owned RNG; the result is `MatrixTCI2Result` (with `MatrixSamplingStats`). All of these, plus `MatrixShape`, are in `tensor4all_tensorci::prelude`. The cache limit is the 256 MiB default and not tunable yet. For unrelated entries prefer separate `crossinterpolate2` fits.
 - `opt_first_pivot::<T, F>(&f, &local_dims, &start, n_iters) -> MultiIndex` — local search for a large-`|f|` pivot.
 - `TensorCI2::to_tensor_train() -> Result<SimpleTensorTrain>`. Convergence: check `result.termination == TCI2Termination::Converged` (bond-error, global-pivot history, and rank stability all met). `MaxBondDimension` / `MaxIterations` are stops, **not** convergence — treat them as "not done".
 
@@ -379,8 +379,8 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   bit `r_t`, restricting to the child region before adding, so no sum over the
   whole output domain is assembled and each object is reused by its descendants.
   `MergeRefineOptions::output_depth` stops early; `None` refines every selected
-  bit. `target_bond_dim` is a soft rank goal: `None` keeps the trajectory uniform
-  and exact, and `Some(goal)` makes it adaptive — a region is merged without
+  bit. `merge_policy: MergePolicy::Exact` keeps the trajectory uniform and
+  exact; `MergePolicy::RankGoal(NonZeroUsize)` makes it adaptive — a region is merged without
   splitting first and stops as soon as that candidate fits the goal, and a candidate
   above the goal is refined only when the children store no more parameters in total
   than the candidate they replace. A region that stops refining keeps its output
@@ -397,7 +397,12 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   four input children and produce four output children), and the transform is never
   padded. `error_bound` records every measured
   component once, at the level and region where it was measured, so it does not grow
-  with the number of refined regions. `MergeRefineOptions::application` opts into a truncating operator
+  with the number of refined regions. `MergePolicy::Tolerance` compresses without
+  a rank goal, serially comparing unsplit, single-axis and joint candidates by
+  storage. `report().levels` exposes absolute allocations and retained errors;
+  unused allowance carries between potentially merging levels. The original
+  application charge is `application_error_bound`.
+  `MergeRefineOptions::application` opts into a truncating operator
   application: `OperatorApplication::Measured` applies both exactly and with the
   caller's options, measures each leaf's deviation, and charges the sum before any
   compression, rejecting an application error above the allowance;
@@ -405,7 +410,8 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   image and charges proved bounds within `share` of the allowance. All other entry points apply exactly. The `MergeRefineReport` reports `level_count`,
   `applied_operator_count`, `additions`, `projections`, `compression_attempts`,
   `compressions`, `work_items_per_level`, `peak_work_items`, `refined_regions`,
-  `stopped_regions`, region/term counts, `max_bond_dim`,
+  `stopped_regions`, `pruned_regions` (the coverage count under an `output_regions`
+  selection, separate from `error_bound`), region/term counts, `max_bond_dim`,
   `max_transient_bond_dim`, stored parameters, the pinned reference scale, the
   allowance, and the measured bound.
 

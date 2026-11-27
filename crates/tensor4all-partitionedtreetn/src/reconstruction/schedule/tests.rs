@@ -3,7 +3,8 @@ use std::time::{Duration, Instant};
 
 use super::{
     level_share, merge_group_charge_bound, prefixes_overlap, split_pays, validate_leaf_geometry,
-    CoordinateGroup, CoverageContract, InputKey, OutputKey, ReconstructionTarget, ScheduleGeometry,
+    CoordinateGroup, CoverageContract, InputKey, OutputKey, OutputRegion, ReconstructionTarget,
+    ScheduleGeometry,
 };
 use crate::projector::index::has_overlapping_pair;
 use crate::{DynIndex, IdxTensor, PartitionedTreeTN, Projector, SubDomainTreeTN, TreeTN};
@@ -28,6 +29,38 @@ fn axis_lengths_geometry(lengths: &[usize]) -> ScheduleGeometry {
         offset += length;
     }
     ScheduleGeometry::new(&bits, Some(&axes)).expect("geometry")
+}
+
+#[test]
+fn coordinate_groups_validate_packed_prefix_capacity_before_use() {
+    let capacity = usize::BITS as usize;
+    let sites: Vec<_> = (0..capacity + 1).map(|_| DynIndex::new_dyn(2)).collect();
+    for groups in [None, Some(vec![CoordinateGroup::new(sites.clone())])] {
+        let error = ScheduleGeometry::new(&sites, groups.as_deref())
+            .err()
+            .expect("oversized axis");
+        assert!(error.to_string().contains("usize coordinate capacity"));
+    }
+    let geometry = ScheduleGeometry::new(&sites[..capacity], None).expect("full-width axis");
+    let projector =
+        Projector::from_pairs(sites[..capacity].iter().cloned().map(|site| (site, 1))).unwrap();
+    let expected = vec![(capacity, usize::MAX)];
+    assert_eq!(geometry.input_prefix(&projector), Some(expected.clone()));
+    // Input metadata can fill a word. The OutputRegion contract separately
+    // requires a smaller depth so its prefix range is representable.
+    let output = OutputRegion::new(capacity - 1, usize::MAX >> 1);
+    assert_eq!(
+        geometry.output_prefix(&output).unwrap(),
+        vec![(capacity - 1, usize::MAX >> 1)]
+    );
+    assert!(geometry
+        .output_prefix(&OutputRegion::new(capacity, 0))
+        .is_err());
+    let groups = [
+        CoordinateGroup::new(sites[..capacity].to_vec()),
+        CoordinateGroup::new(sites[capacity..].to_vec()),
+    ];
+    assert!(ScheduleGeometry::new(&sites, Some(&groups)).is_ok());
 }
 
 /// A region stops an axis by keeping that axis' prefix shorter, so the axes that
@@ -79,22 +112,40 @@ fn child_keys_extend_only_the_listed_axes_by_one_bit() {
     };
     let root = prefix_key(vec![(0, 0), (0, 0)]);
     assert_eq!(
-        prefixes(geometry.child_keys(&root, &[1], None)),
+        prefixes(
+            geometry
+                .child_keys(&root, &[1], None, (usize::MAX, "max_work_items"))
+                .expect("children")
+        ),
         vec![vec![(0, 0), (1, 0)], vec![(0, 0), (1, 1)]]
     );
-    assert_eq!(geometry.child_keys(&root, &[0, 1], None).len(), 4);
+    assert_eq!(
+        geometry
+            .child_keys(&root, &[0, 1], None, (usize::MAX, "max_work_items"))
+            .expect("children")
+            .len(),
+        4
+    );
 
     // Axis 0 already stopped at depth 1: the children of axis 1 stay there.
     let lagging = prefix_key(vec![(1, 1), (1, 0)]);
     assert_eq!(
-        prefixes(geometry.child_keys(&lagging, &[1], None)),
+        prefixes(
+            geometry
+                .child_keys(&lagging, &[1], None, (usize::MAX, "max_work_items"))
+                .expect("children")
+        ),
         vec![vec![(1, 1), (2, 0)], vec![(1, 1), (2, 1)]]
     );
 
     // A requested region keeps one branch of a level.
     let wanted: Vec<InputKey> = vec![vec![(0, 0), (1, 1)]];
     assert_eq!(
-        prefixes(geometry.child_keys(&root, &[1], Some(&wanted))),
+        prefixes(
+            geometry
+                .child_keys(&root, &[1], Some(&wanted), (usize::MAX, "max_work_items"))
+                .expect("children")
+        ),
         vec![vec![(0, 0), (1, 1)]]
     );
 }

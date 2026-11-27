@@ -21,6 +21,7 @@ fn num_evals_counts_evaluations_a_full_memo_evicted() {
                 .collect())
         },
         Rc::clone(&cache),
+        Clone::clone,
     );
     for point in [0usize, 1, 2, 3] {
         let batch = GlobalIndexBatch::new(std::slice::from_ref(&point), 1, 1).unwrap();
@@ -55,6 +56,7 @@ fn num_evals_counts_evaluations_whose_insert_was_refused() {
             Ok(vec![0.0; batch.n_points()])
         },
         Rc::clone(&cache),
+        Clone::clone,
     );
     for _ in 0..2 {
         let batch = GlobalIndexBatch::new(&[0], 1, 1).unwrap();
@@ -84,6 +86,7 @@ fn site_evaluator_propagates_coordinate_conversion_failure() {
             Ok(vec![1.0_f64])
         },
         cache,
+        Clone::clone,
     );
     let batch = GlobalIndexBatch::new(&[3], 1, 1).unwrap();
     // The conversion error is propagated unchanged; the caller adds the
@@ -108,6 +111,7 @@ fn site_evaluator_passes_converted_coordinates_and_caches_points() {
             Ok(vec![batch.get(0, 0).unwrap() * 4.0])
         },
         Rc::clone(&cache),
+        Clone::clone,
     );
     let batch = GlobalIndexBatch::new(&[0], 1, 1).unwrap();
     assert_eq!(evaluate(batch).unwrap(), vec![1.0]);
@@ -132,6 +136,7 @@ fn site_evaluator_evaluates_repeated_points_in_one_batch_once() {
             Ok(vec![batch.get(0, 0).unwrap() * 10.0])
         },
         Rc::clone(&cache),
+        Clone::clone,
     );
     // One site, two points: the same quantics index twice.
     let batch = GlobalIndexBatch::new(&[2, 2], 1, 2).unwrap();
@@ -164,6 +169,7 @@ fn site_evaluator_serves_mixed_hits_and_misses_in_request_order() {
                 .collect())
         },
         Rc::clone(&cache),
+        Clone::clone,
     );
 
     // Flat column-major batch: two sites, five points.
@@ -215,6 +221,7 @@ fn site_evaluator_does_not_cache_a_failed_target_and_recovers_after_it() {
             }
         },
         Rc::clone(&cache),
+        Clone::clone,
     );
 
     let batch = GlobalIndexBatch::new(&[1], 1, 1).unwrap();
@@ -249,6 +256,7 @@ fn site_evaluator_handles_an_empty_batch_and_invalid_indices() {
             Ok(Vec::new())
         },
         Rc::clone(&cache),
+        Clone::clone,
     );
 
     // An empty batch is a no-op: nothing converts, evaluates or counts.
@@ -276,6 +284,7 @@ fn site_evaluator_rejects_inconsistent_converted_dimensions() {
             |point: &[usize]| Ok(vec![0.0_f64; first_dim + usize::from(point[0] != 0)]),
             |_batch: QuanticsBatch<'_, f64>| panic!("inconsistent dimensions reached target"),
             Rc::clone(&cache),
+            Clone::clone,
         );
         let batch = GlobalIndexBatch::new(&[0, 1], 1, 2).unwrap();
         let error = evaluate(batch).unwrap_err().to_string();
@@ -295,6 +304,7 @@ fn site_evaluator_rejects_a_wrong_number_of_returned_values() {
         |_point: &[usize]| Ok(vec![0.0_f64]),
         |_batch: QuanticsBatch<'_, f64>| Ok(vec![1.0_f64, 2.0]),
         Rc::clone(&cache),
+        Clone::clone,
     );
     let batch = GlobalIndexBatch::new(&[0], 1, 1).unwrap();
     let error = evaluate(batch).unwrap_err().to_string();

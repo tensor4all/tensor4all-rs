@@ -631,14 +631,15 @@ whole output domain is ever assembled and each computed object is reused by its
 descendants.
 
 `MergeRefineOptions::output_depth` stops after that many levels; `None` (the
-default) refines every selected bit. `MergeRefineOptions::coordinate_groups` supplies
+default) executes the full depth, with uniform refinement in exact mode. `MergeRefineOptions::coordinate_groups` supplies
 several coordinate axes explicitly: each `CoordinateGroup` gives that axis' selected
 indices in input order and, separately, in output order, and one level advances every
 refining, non-exhausted axis by one bit, so a two-axis level combines four input
-children and, without a rank goal, produces four output children. The default `None`
+children and, in exact mode, produces four output children. The default `None`
 treats `selection` as one axis with the documented reversed placement.
-`MergeRefineOptions::target_bond_dim` is a soft rank goal: `None` keeps the
-trajectory uniform and exact, while `Some(goal)` makes it adaptive and decides each
+`MergeRefineOptions::merge_policy` selects `MergePolicy::Exact` (default),
+`RankGoal(NonZeroUsize)`, or `Tolerance`. Exact merging is uniform;
+rank-goal merging is adaptive and decides each
 axis of a region on its own. An output region is then merged without splitting first
 and stops on every axis as soon as that candidate fits the goal; for a candidate above
 the goal, an axis is refined only when that axis' children store no more parameters in
@@ -655,6 +656,23 @@ item's share of the global allowance. An unaffordable or gainless candidate is r
 than violating the accuracy contract, and exceeding `MergeRefineOptions::max_terms`
 returns a resource-limit error.
 
+`MergePolicy::Tolerance` chooses ranks from absolute shares of the pinned
+allowance. At each level it probes every eligible axis and chooses minimum
+stored parameters over unsplit, passing single-axis and passing joint splits.
+Ties prefer joint, then single-axis order, then unsplit. Candidates are processed
+serially, retaining only the incumbent and one probe. Disjoint regions share the
+level's allocation in L2; only the kept candidate's measured components consume
+allowance. Unspent allocation carries to later potentially merging levels,
+without being re-spent inside the current level.
+
+`report().merge_policy`, `application_error_bound`, and `levels` expose the
+selected policy, original application charge, and per-level allocations, kept
+errors and before/after allowance. Rank-goal mode preserves its conservative
+charge for discarded probes: `levels[*].budget_spent` may exceed its retained
+`error_bound`. The forecast `merging_levels_left` is `Some` only in tolerance
+mode. At full input-merge depth tolerance mode has one term per nonempty region;
+an explicitly smaller output depth can still retain several terms.
+
 `MergeRefineOptions::application` opts into a truncating operator application,
 and the choice is explicit because the charged error means different things.
 With `OperatorApplication::Measured(options)` the schedule applies the operator
@@ -668,8 +686,10 @@ allowance, and the proved bounds are charged instead. Every other entry point
 applies exactly. `MergeRefineReport` records the schedule shape
 (`level_count`, `applied_operator_count`, `additions`, `projections`,
 `compression_attempts`, `compressions`, `work_items_per_level`, `peak_work_items`,
-`refined_regions`, `stopped_regions`) next to the pinned reference scale, the
-allowance, and the measured `error_bound`. Every measured component — an application
+`refined_regions`, `stopped_regions`, `pruned_regions`) next to the pinned reference
+scale, the allowance, and the measured `error_bound`. `pruned_regions` is a coverage
+count kept apart from `error_bound`: under an `output_regions` selection it counts the
+child regions the selection cut, so `0` means the selection skipped nothing. Every measured component — an application
 error, a truncation residual, or a dropped norm — is recorded once, at the level and
 region where it was measured: components of one level live in disjoint regions and
 combine by the Euclidean norm, while components of different levels can be nested and
