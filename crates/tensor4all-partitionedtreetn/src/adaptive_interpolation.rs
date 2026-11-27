@@ -261,33 +261,29 @@
 //! the processing order.
 //!
 //! For a fixed seed, a deterministic evaluator, and a deterministic engine,
-//! the report and every stored node tensor (values and positional axis order)
-//! are identical across runs on fresh threads within one process, provided
-//! every measured network value is reproducible. The schedule is not part of
-//! that contract either: the wave merge sorts by canonical path, the counters
-//! are per patch, and a lanes run at one or two lanes reproduces the serial
-//! report on such fixtures. This is tested for `f64` on
-//! trees where every node carries exactly one site, where the measurement
-//! takes the cached evaluator's raw kernels. Each measurement uses a fresh
-//! `TreeTNCachedEvaluator` centered at the smallest node name, the default
-//! hint, and fixed-size chunks. On other trees (a site-free node, a node with
-//! several sites, or `f32`/`c32` data) the evaluator's generic path can
-//! differ at rounding level between threads and processes, so an L2
-//! acceptance near `tau` may then differ between runs; this is an open
-//! evaluator limitation tracked upstream in
-//! [tenferro-rs #1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
-//! [Issue #795](https://github.com/tensor4all/tensor4all-rs/issues/795) closed
-//! the tracking and test gap through PR #816; it did not fix the planner.
-//! The intended scope is bitwise identical results on the same machine and
-//! build across threads, thread counts, and processes, with no cross-machine
-//! promise. It is not reached yet: generic-path measurements need deterministic
-//! contraction paths, and reproducibility across processes is not claimed
-//! until a two-process test passes, which does not exist yet. The bitwise claim
-//! never covers `approximation_rms` and the fields derived from it. Issue #791
-//! was fixed by PR #793: TreeTN construction, external-site order, and dense
-//! output order no longer inherit the old hash-iteration nondeterminism.
-//! `site_space` remains a set with unspecified iteration order; generic cached
-//! evaluation still has the separate planner limitation above.
+//! the report and stored node tensors agree on the tested fresh-thread
+//! fixtures within one process, subject to the norm-field exclusions below.
+//! The wave merge sorts by canonical path and counters are per patch. The
+//! measurement, DenseEngine and TreeTCI regressions cover raw-kernel and
+//! generic-path `f64` fixtures (including site-free and multi-site nodes).
+//! Each measurement uses a fresh `TreeTNCachedEvaluator`, the smallest node
+//! name as center, the default hint and fixed-size chunks.
+//!
+//! The original generic-path planner defect was closed by
+//! [tenferro-rs#2014](https://github.com/tensor4all/tenferro-rs/pull/2014),
+//! which resolved [#1963](https://github.com/tensor4all/tenferro-rs/issues/1963):
+//! the pinned default planner uses deterministic greedy ties. Fresh-thread
+//! regressions pass for their fixtures; they do not establish every generic
+//! layout, dtype or pooled-evaluator call history. The local raw-message and
+//! positional-contraction work remains the generic-path M7 prerequisite.
+//! Issue #795 closed the tracking/test gap through #816, not the planner fix.
+//! The intended scope is the same machine and build at a fixed thread count;
+//! cross-process identity awaits a two-process test. Identity across thread
+//! counts is not promised. `approximation_rms`, its rounding allowance and
+//! relative-bound derivatives, and `rounding_limited` at its threshold remain
+//! outside the bitwise claim. Issue #791 was fixed by #793: TreeTN site/edge
+//! construction and dense-axis order no longer inherit the old hash ordering.
+//! `site_space` is still a set with unspecified iteration order.
 //!
 //! # Examples
 //!

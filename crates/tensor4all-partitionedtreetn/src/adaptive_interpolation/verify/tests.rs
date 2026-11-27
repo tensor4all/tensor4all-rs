@@ -386,9 +386,9 @@ fn measurement_is_bitwise_reproducible_across_threads_on_raw_kernel_trees() {
 }
 
 #[test]
-#[ignore = "open question 8 of docs/design/tree-patching-error-contract.md: the generic IdxTensor \
-            path of TreeTNCachedEvaluator contracts N-ary operand lists through omeco's greedy \
-            planner, which breaks cost ties in HashMap order, so values differ across threads"]
+// The default planner tie-break was fixed by tenferro-rs#2014. Keep this
+// fresh-thread regression active; it covers this fixture, not every dtype
+// or cross-process execution.
 fn measurement_is_bitwise_reproducible_across_threads_on_generic_path_trees() {
     let tree = generic_path_tree();
     assert_eq!(max_degree(&tree), 3);

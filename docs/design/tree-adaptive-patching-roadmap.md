@@ -516,22 +516,27 @@ Scope:
   execution order;
 - a documented outer/inner parallelism policy.
 
-Prerequisite: deterministic cached-evaluator contraction paths, in the order
-decided under M3 open question 8: (c) raw kernels of `TreeTNCachedEvaluator`
-for site-free nodes, then (a) pairwise positional contraction on the generic
-path; (b), upstream tie-breaking in omeco or tenferro, was tracked by
-[tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963),
-which [tenferro-rs#2014](https://github.com/tensor4all/tenferro-rs/pull/2014)
-closed; the pinned tenferro `5df83672` plans the default N-ary path with a
-deterministic greedy. The planner tie is therefore no longer a prerequisite
-for the patched Fourier transform and merge-refine level zero, which contract
-through the zip-up's N-ary `T::contract`, not `TreeTNCachedEvaluator` (a
-code-reading argument until the cross-lane test of
-[#1497](https://github.com/tensor4all/tensor4all-rs/issues/1497) runs). (c)
-and (a) remain the prerequisite for the generic path.
-Issue #795 closed the tracking/test gap through #816, not this prerequisite. Until
-then, L2 measurements on trees with a site-free or multi-site node, or with
-`f32`/`c32` data, are not reproducible across threads.
+Remaining accepted generic-path prerequisite (M3 open question 8): (c) raw
+kernels of `TreeTNCachedEvaluator` for site-free nodes, then (a) pairwise
+positional generic contractions. These remove generic-message overhead and
+make the evaluator independent of planner choices; they remain the local M7
+work by the 2026-11-27 decision in
+[#1497](https://github.com/tensor4all/tensor4all-rs/issues/1497#issuecomment-7229306374).
+They are not evidence of a continuing default-planner defect.
+
+Completed upstream step (b): [tenferro-rs#2014](https://github.com/tensor4all/tenferro-rs/pull/2014)
+closed [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
+The pinned `5df83672` plans default non-annealing N-ary calls with a
+deterministic greedy. The restored generic-path fresh-thread regressions pass
+on their `f64` fixtures; other layouts/dtypes and two-process execution remain
+unverified. #795 closed the tracking/test gap through #816, not the planner fix.
+
+The planner tie is no longer a live prerequisite for the patched Fourier
+transform's level-zero stored-patch applications, which use zip-up's N-ary
+`T::contract`, not `TreeTNCachedEvaluator`. General merge-refine product terms
+use `partial_contract` instead. The Fourier argument remains labelled
+code-reading until #1497's Fourier cross-lane and operand-sequence test runs;
+#1528's interpolation tests do not discharge it.
 
 Exit: parallel and sequential runs produce identical partitions for fixed
 seeds and deterministic callbacks; scaling is measured on M9 workloads.
