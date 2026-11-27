@@ -101,8 +101,10 @@ changelog.d/<PR-number>-<kind>.md
 - **`<PR-number>`** is this pull request's number. Open the PR first, then add the file.
   A second entry for the same PR and kind is `<PR-number>-<kind>-2.md` (`-3`, ...; never `-1`).
 - **`<kind>`** picks the section: `behavior` (Behavior changes), `added` (Added),
-  `breaking` (Breaking Rust API changes), `diagnostics` (Diagnostics), or `performance`
-  (Performance). A new heading is a separate decision, not a new kind.
+  `breaking` (Breaking Rust API changes), `diagnostics` (Diagnostics), `performance`
+  (Performance), or `fixed` (Fixed). A new heading is a separate decision, not a new kind —
+  and a heading that already exists in `CHANGELOG.md` is not new, so add it to `KINDS` and to
+  this list rather than inventing a section.
 - **The body is one entry**, in the prose style of `CHANGELOG.md`: a single `- ` bullet,
   continuation lines indented two spaces, no headings. It describes the change for a *user*
   upgrading (what now behaves differently, what to do about it), not the diff.

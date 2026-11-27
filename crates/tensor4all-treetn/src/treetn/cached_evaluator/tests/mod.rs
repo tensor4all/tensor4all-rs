@@ -16,6 +16,7 @@ mod grouped_contraction;
 mod heavy_measurements;
 mod measurements;
 mod message_cache;
+mod mixed_scalar_kinds;
 mod parallelism;
 mod raw_center_kernel;
 mod raw_messages;

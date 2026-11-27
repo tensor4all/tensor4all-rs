@@ -28,6 +28,10 @@ KINDS = {
     "breaking": "Breaking Rust API changes",
     "diagnostics": "Diagnostics",
     "performance": "Performance",
+    # `### Fixed` is a heading `CHANGELOG.md` already uses (v0.3.0 has one), and the migration could not represent
+    # an entry under it — which is how this was found: main's newest entry landed under `### Fixed` and the checker
+    # rejected it as an unknown kind. A kind list that omits a heading the file already uses is not a vocabulary.
+    "fixed": "Fixed",
 }
 FRAGMENT_DIR = "changelog.d"
 LEGACY_ORDER = "legacy-order.txt"  # one-time ordering hint written by the migration
