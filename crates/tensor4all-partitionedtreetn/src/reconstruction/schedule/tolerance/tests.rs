@@ -345,6 +345,7 @@ fn over_limit_split_preserves_feasible_nonuniform_unsplit_candidate() {
             );
             assert_eq!(counters.refined_regions, 0);
             assert_eq!(counters.stopped_regions, 1);
+            assert_eq!(counters.pruned_regions, 0);
             // The rejected probe must not replace or alter either retained term.
             let expected = term.data().to_dense().unwrap();
             for item in chosen.regions[0].1.values() {
@@ -409,6 +410,7 @@ fn serial_joint_probes_keep_the_chosen_partition_and_its_ledger() {
     assert_eq!(counters.additions, 27);
     assert_eq!(counters.refined_regions, 1);
     assert_eq!(counters.stopped_regions, 0);
+    assert_eq!(counters.pruned_regions, 0);
     let mut counters = MergeCounters::default();
     let stopped = trial.choose(2, &mut counters).unwrap();
     assert_eq!(stopped.kind, Kind::Unsplit);
@@ -441,6 +443,23 @@ fn serial_joint_probes_keep_the_chosen_partition_and_its_ledger() {
     assert_eq!(counters.additions, 15);
     assert_eq!(counters.refined_regions, 1);
     assert_eq!(counters.stopped_regions, 1);
+    assert_eq!(counters.pruned_regions, 0);
+
+    // Single-axis probes each exclude a sibling, but only the selected joint
+    // split contributes its three cut children. Empty retained tensors do not
+    // turn a coverage count into an output-result count.
+    let wanted = vec![vec![(1, 0), (1, 0)]];
+    let mut counters = MergeCounters::default();
+    let selected = RegionTrial {
+        wanted: Some(&wanted),
+        ..trial
+    }
+    .choose(1, &mut counters)
+    .unwrap();
+    assert_eq!(selected.kind, Kind::Joint);
+    assert_eq!(selected.regions.len(), 1);
+    assert_eq!(counters.pruned_regions, 3);
+    assert_eq!(counters.refined_regions, 1);
 }
 
 #[test]

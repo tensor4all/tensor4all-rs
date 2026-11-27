@@ -37,7 +37,7 @@ fn random_input(n_fourier: usize) -> (Vec<DynIndex>, TreeTN<IdxTensor, usize>) {
     )
 }
 
-fn check_levels(report: &MergeRefineReport) {
+pub(super) fn check_levels(report: &MergeRefineReport) {
     assert_eq!(report.levels.len(), report.level_count);
     assert_eq!(report.merge_policy, MergePolicy::Tolerance);
     let mut remaining = report.absolute_tolerance - report.application_error_bound;
@@ -278,7 +278,6 @@ fn tolerance_merges_handle_selected_multiaxis_sparse_spectator_cells() {
             .unwrap();
     let groups = axis_groups(&[2, 2], selected);
     let operator = chain_axis_fourier_operator(&[2, 2], selected);
-    let wanted = Projector::from_pairs([(groups[0].outputs[0].clone(), 0)]).unwrap();
     let result = schedule_merge_refine(
         &target,
         &0,
@@ -293,7 +292,7 @@ fn tolerance_merges_handle_selected_multiaxis_sparse_spectator_cells() {
             merge_policy: MergePolicy::Tolerance,
             coverage: CoverageContract::ZeroForMissingLeaves,
             coordinate_groups: Some(groups),
-            output_regions: Some(vec![wanted]),
+            output_regions: Some(vec![OutputRegion::per_axis([(1, 0), (0, 0)])]),
             ..Default::default()
         },
     )

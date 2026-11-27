@@ -22,13 +22,19 @@ in complete tracked text at the four recorded tenferro, tenferro-sci, Julia
 and sphaira revisions. It is a bounded public-source survey, not a private or
 uninspected consumer census.
 
-Recommended landing order: review and land #1511's output-region API correction
-first, then adapt this PR to its `OutputRegion` and `pruned_regions` contract.
-They modify the same scheduler and report, so resolving the three textual
-conflicts must be followed by output-selection/coverage checks under Exact,
-RankGoal and Tolerance. This PR does not import the unmerged branch or claim
-those combined tests have run. #1497 must not freeze its lane seam before that
-integration. Historical timing/RSS measurements remain pinned to `d60f0751`.
+#1511 is now merged in `origin/main` `1ad44e07`, and this branch integrates
+its `OutputRegion` and `pruned_regions` contract. Exact/RankGoal and Tolerance
+share the selected-refinement accounting seam, so discarded probes never add
+coverage cuts. Fixed single-axis and joint-split fixtures exercise all three
+policies through both the scheduler and Fourier front end, with known two-mode
+DFT values, explicit cut counts and the tolerance ledger. Existing sparse and
+spectator coverage tests are retained. The two-bit exact delta fixture pins
+incoming region-job widths `[1, 2]` versus four final regions; it is a definition
+and correctness case, not evidence for parallel performance.
+
+The integrated affected-crate suite, schedule units, both Fourier suites,
+doctests, strict Clippy and executable mdBook pass. Historical timing/RSS
+measurements remain pinned to `d60f0751`; none is relabeled as new evidence.
 
 ## Current integration and output-layout limits (2026-11-26)
 

@@ -231,7 +231,8 @@ differ as long as the leaves form a prefix code; by default they must also cover
 zero. `MergeRefineOptions` selects the output depth, the
 work limit, a `merge_policy`, and the retained term budget;
 `MergeRefineReport` records the structural counters plus the pinned allowance and
-the measured bound. `MergePolicy::Exact` keeps uniform, exact merging
+the measured bound; `pruned_regions` separately counts children cut by output
+selection. `MergePolicy::Exact` keeps uniform, exact merging
 (`error_bound` zero with default leaf application). `MergePolicy::RankGoal`
 is adaptive: a region is merged without
 splitting first and stops as soon as that candidate fits the goal, and a candidate

@@ -30,12 +30,14 @@
 //! with the number of refined regions.
 //!
 //! [`MergeRefineOptions::output_regions`] names the output regions the caller
-//! needs. `None` (the default) computes every region at the requested output
+//! needs, as a static list of [`OutputRegion`] bit prefixes. `None` (the default)
+//! computes every region at the requested output
 //! depth, and `Some(regions)` prunes a child prefix that intersects none of them
 //! before it is restricted, merged or kept, mirroring how
 //! [`MergeRefineOptions::coverage`] decides which input leaves are present. The
 //! retained output is then limited to those regions, and the reported bound
-//! covers the computed regions only. The counters do not shrink the same way:
+//! covers the computed regions only; [`MergeRefineReport::pruned_regions`] counts
+//! the children the selection cut, separately from the bound. The counters do not shrink the same way:
 //! they count the work that is executed, and the operator is still applied over
 //! the whole output domain once per input leaf (and, with a rank goal, probes are
 //! accumulated before a child is discarded), so `applied_operator_count` and the
@@ -209,13 +211,25 @@ pub struct MergeRefineOptions<V> {
     ///
     /// `None` computes every region at [`Self::output_depth`]. `Some(regions)`
     /// computes only the regions that intersect one of `regions`, and a region
-    /// that intersects none of them is never restricted, merged, retained or
-    /// counted, so both the work and the result shrink with the selection. Each
-    /// `regions` entry fixes a contiguous prefix of the output indices of every
-    /// coordinate group and leaves the remaining output indices free, so a
-    /// region at the full output depth names one single output coordinate and a
-    /// shallower region names every coordinate below it. Listing no region is
-    /// invalid.
+    /// that intersects none of them is never restricted, merged, retained, or
+    /// counted as a result, so both the work and the result shrink with the selection. Each
+    /// [`OutputRegion`] is a static bit prefix per coordinate group: it fixes the
+    /// leading output bits of that group and leaves the rest free, so a region at
+    /// the full output depth names one single output coordinate and a shallower
+    /// region names every coordinate below it. The list is plain data (no
+    /// predicate, no caller-implemented trait), so a run is reproducible from the
+    /// options alone. Listing no region is invalid.
+    ///
+    /// # Coverage
+    ///
+    /// Under a selection the result is not the full transform.
+    /// [`MergeRefineReport::error_bound`] is a promise about *accuracy* of the
+    /// computed regions only; [`MergeRefineReport::pruned_regions`] is the separate
+    /// promise about *coverage*: it counts the child regions the selection cut
+    /// from the kept refinements. A region that was never computed is not a region
+    /// with zero error, so read both fields: `pruned_regions == 0` means the
+    /// selection skipped nothing (a region whose terms were all dropped as
+    /// negligible is omitted from the result separately, see `dropped_terms`).
     ///
     /// The trajectory refines prefixes, so this option filters whole work items
     /// instead of re-tiling the output: a region that only partially overlaps a
@@ -223,8 +237,9 @@ pub struct MergeRefineOptions<V> {
     /// [`Self::output_depth`] yields the schedule cell that contains it, or the
     /// several cells that intersect it when the requested per-axis depths differ.
     /// The input side is selected by [`Self::coverage`]; the two selections
-    /// compose.
-    pub output_regions: Option<Vec<Projector>>,
+    /// compose. The field is owned (`Vec`) rather than a borrowed slice so the
+    /// options stay a lifetime-free, `Clone` value.
+    pub output_regions: Option<Vec<OutputRegion>>,
     /// How the operator is applied to each input leaf, default
     /// [`OperatorApplication::Exact`]. See [`OperatorApplication`] for what each
     /// choice charges to the error budget.
@@ -421,6 +436,7 @@ pub struct MergeRefineLevelReport {
 ///     refined_regions: 1,
 ///     stopped_regions: 0,
 ///     region_count: 2,
+///     pruned_regions: 0,
 ///     term_count: 2,
 ///     max_bond_dim: 1,
 ///     max_transient_bond_dim: 1,
@@ -495,14 +511,26 @@ pub struct MergeRefineReport {
     pub refined_regions: usize,
     /// Region-axis refinement decisions that stopped: the region's merged candidate
     /// already fit the goal (which stops every axis still refining), or splitting
-    /// that axis would have stored more parameters than that candidate. Counted once
-    /// per region and axis, not once per remaining level, so a single-axis run counts
+    /// that axis would have stored more parameters than that candidate. Tolerance
+    /// also stops an axis whose split exceeds candidate resource limits. Counted
+    /// once per region and axis, not once per remaining level, so a single-axis run counts
     /// one per stopping region. A stopped axis keeps the region's output prefix on
     /// that axis for good, and a region whose axes have all stopped keeps its output
     /// key and continues merging its input siblings at every later level, so its
     /// terms are not frozen at the stop level; they report through
     /// [`MergeRefineResult::regions`].
     pub stopped_regions: usize,
+    /// Child regions of the refinements this run carried out that
+    /// [`MergeRefineOptions::output_regions`] excluded, so they were never
+    /// computed. Each pruned child is counted once, at the level where it was cut,
+    /// not once per descendant. Only refinements that were kept count: a rank-goal
+    /// probe that was discarded, or an axis that stopped, refined nothing and cuts
+    /// nothing, and a region that stopped refining keeps its unsplit prefix. This is a coverage count and is kept apart from
+    /// [`Self::error_bound`], which says nothing about regions that were never
+    /// computed: `0` means the selection skipped nothing (always the case without
+    /// a selection), and a positive value means the result covers only part of the
+    /// output domain.
+    pub pruned_regions: usize,
     /// Disjoint output regions in the result.
     pub region_count: usize,
     /// Terms across all regions; terms inside one region overlap and must not be
@@ -971,6 +999,62 @@ impl CoordinateGroup {
     }
 }
 
+/// One requested output region: a static bit prefix per coordinate axis.
+///
+/// This is the public selection key of [`MergeRefineOptions::output_regions`].
+/// It is plain data, so two callers can compare, hash, log and replay it, and it
+/// names no tensor index: the placement convention that carries output bit `r_j`
+/// on a selected position stays inside the scheduler. A region is
+/// `(depth, prefix)` per axis: the `depth` most significant output bits of that
+/// axis are fixed, and `prefix` holds their value with the most significant bit
+/// first, so `prefix < 2^depth`. `depth == 0` fixes nothing on that axis.
+///
+/// With the default single coordinate axis, use [`OutputRegion::new`]. With
+/// explicit [`MergeRefineOptions::coordinate_groups`], use
+/// [`OutputRegion::per_axis`] with one `(depth, prefix)` pair per group, in the
+/// order of the groups.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtreetn::reconstruction::{MergeRefineOptions, OutputRegion};
+/// // The two most significant output bits are `10`.
+/// let region = OutputRegion::new(2, 0b10);
+/// assert_eq!(region.axes(), &[(2, 0b10)]);
+/// let options = MergeRefineOptions::<usize> {
+///     output_regions: Some(vec![region.clone()]),
+///     ..Default::default()
+/// };
+/// assert_eq!(options.output_regions.as_deref(), Some(&[region][..]));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OutputRegion {
+    axes: Vec<(usize, usize)>,
+}
+
+impl OutputRegion {
+    /// A region on the single default coordinate axis: the `depth` most
+    /// significant output bits equal `prefix`.
+    pub fn new(depth: usize, prefix: usize) -> Self {
+        Self {
+            axes: vec![(depth, prefix)],
+        }
+    }
+
+    /// A region on explicit coordinate groups: one `(depth, prefix)` pair per
+    /// group, in the order of [`MergeRefineOptions::coordinate_groups`].
+    pub fn per_axis(axes: impl IntoIterator<Item = (usize, usize)>) -> Self {
+        Self {
+            axes: axes.into_iter().collect(),
+        }
+    }
+
+    /// The `(depth, prefix)` pair of every axis.
+    pub fn axes(&self) -> &[(usize, usize)] {
+        &self.axes
+    }
+}
+
 /// An input region: per axis, how many leading input bits it fixes and their value.
 type InputKey = Vec<(usize, usize)>;
 
@@ -1164,44 +1248,31 @@ impl ScheduleGeometry {
 
     /// Read the per-axis output prefix a requested output region fixes.
     ///
-    /// Fails when the projector fixes a non-contiguous set of output indices on
-    /// some axis, because a free output index followed by a fixed one describes a
-    /// region the level structure cannot restrict; when it fixes a coordinate
-    /// other than zero or one, which the binary level structure cannot express and
-    /// which a look-alike index of another dimension could smuggle in, since index
-    /// identity ignores the dimension; or when it names an index that is not one of
-    /// the selection's outputs, which would silently request everything.
-    fn output_prefix(&self, projector: &Projector) -> Result<InputKey> {
-        for index in projector.projected_indices() {
-            if !self.axes.iter().any(|axis| axis.outputs.contains(index)) {
-                return Err(invalid(
-                    "a requested output region must fix only output indices of the selection",
-                ));
-            }
+    /// Fails when the region lists a different number of axes than the geometry,
+    /// when an axis fixes more bits than it has output indices, or when a prefix
+    /// does not fit its depth, because such a region names no output prefix.
+    fn output_prefix(&self, region: &OutputRegion) -> Result<InputKey> {
+        if region.axes.len() != self.axes.len() {
+            return Err(invalid(
+                "a requested output region must give one (depth, prefix) pair per coordinate group",
+            ));
         }
         let mut key = Vec::with_capacity(self.axes.len());
-        for axis in &self.axes {
-            let mut depth = 0usize;
-            let mut value = 0usize;
-            let mut free_seen = false;
-            for index in &axis.outputs {
-                match projector.get(index) {
-                    Some(bit) => {
-                        if free_seen {
-                            return Err(invalid(
-                                "a requested output region must fix a contiguous prefix of each coordinate group and leave the trailing output indices free",
-                            ));
-                        }
-                        if bit > 1 {
-                            return Err(invalid(
-                                "a requested output region must fix binary output coordinates",
-                            ));
-                        }
-                        depth += 1;
-                        value = (value << 1) | bit;
-                    }
-                    None => free_seen = true,
-                }
+        for (axis, &(depth, value)) in self.axes.iter().zip(&region.axes) {
+            if depth > axis.outputs.len() {
+                return Err(invalid(
+                    "a requested output region must not fix more bits than its coordinate group has output indices",
+                ));
+            }
+            if depth >= usize::BITS as usize {
+                return Err(invalid(
+                    "a requested output region must fix fewer bits than a machine word",
+                ));
+            }
+            if value >> depth != 0 {
+                return Err(invalid(
+                    "a requested output region's prefix must be smaller than 2^depth",
+                ));
             }
             key.push((depth, value));
         }
@@ -1483,9 +1554,10 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// Returns [`PartitionedTreeTNError::InvalidOptions`] for a non-binary or empty
 /// selection, an `output_depth` above the selection depth, an empty
 /// coordinate group or one wider than `usize::BITS`, an empty
-/// [`MergeRefineOptions::output_regions`], an output region that does not fix a
-/// contiguous prefix of output indices on every coordinate group or that names an
-/// index outside the selection, a `max_work_items`
+/// [`MergeRefineOptions::output_regions`], an [`OutputRegion`] that lists a
+/// different number of axes than the coordinate groups, fixes more bits than
+/// its group has output indices or at least `usize::BITS` bits, or has a prefix
+/// that does not fit its depth, a `max_work_items`
 /// limit below the present input-leaf count, a preimage
 /// whose leaves do not form a valid dyadic prefix code or do not cover the
 /// requested contract, non-finite tolerances, and non-finite or non-positive
@@ -1617,7 +1689,7 @@ where
         Some(regions) => Some(
             regions
                 .iter()
-                .map(|projector| geometry.output_prefix(projector))
+                .map(|region| geometry.output_prefix(region))
                 .collect::<Result<Vec<_>>>()?,
         ),
     };
@@ -1662,6 +1734,7 @@ where
                 peak_work_items: 0,
                 refined_regions: 0,
                 stopped_regions: 0,
+                pruned_regions: 0,
                 region_count: 0,
                 term_count: 0,
                 max_bond_dim: 0,
@@ -1936,7 +2009,6 @@ where
                 } else {
                     passing = axes;
                 }
-                counters.refined_regions = checked_add(counters.refined_regions, 1)?;
                 // One passing axis already has its children from the probe, so its split
                 // costs its two probes and nothing more. Two or more passing axes need
                 // the joint children over exactly those axes.
@@ -1968,6 +2040,7 @@ where
                     }
                     children
                 };
+                counters.record_refinement(passing.len(), children.len())?;
                 for (child, child_items, incurred) in children {
                     if incurred > 0.0 {
                         level_components.insert(child.clone(), incurred);
@@ -2075,6 +2148,7 @@ where
         peak_work_items: counters.peak_work_items,
         refined_regions: counters.refined_regions,
         stopped_regions: counters.stopped_regions,
+        pruned_regions: counters.pruned_regions,
         region_count: regions.len(),
         term_count,
         max_bond_dim,
@@ -2487,6 +2561,19 @@ struct MergeCounters {
     max_transient_bond_dim: usize,
     refined_regions: usize,
     stopped_regions: usize,
+    pruned_regions: usize,
+}
+
+impl MergeCounters {
+    /// Count only the selected refinement, never its discarded probes.
+    fn record_refinement(&mut self, axes: usize, kept_children: usize) -> Result<()> {
+        // INVARIANT: validate_leaf_geometry accepts fewer than usize::BITS
+        // selected bits, and child_keys only filters that split's binary grid.
+        let pruned = (1usize << axes) - kept_children;
+        self.refined_regions = checked_add(self.refined_regions, 1)?;
+        self.pruned_regions = checked_add(self.pruned_regions, pruned)?;
+        Ok(())
+    }
 }
 
 /// Compress a merged sum within `share`, optionally gated by a soft rank goal.

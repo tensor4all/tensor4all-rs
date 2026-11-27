@@ -41,7 +41,11 @@ pub struct PatchedFourierOptions<V> {
     /// Excludes operator construction error and backend roundoff.
     pub tolerance: ReconstructionTolerance,
     /// Scheduler controls, including coverage, output regions/depth, rank goal
-    /// and work/term limits. Leave `coordinate_groups` unset: axes determine it.
+    /// and work/term limits. Leave `coordinate_groups` unset: axes determine it,
+    /// one coordinate group per element of `axes`. Because of that, an
+    /// `output_regions` selection on a multi-axis transform must use
+    /// `OutputRegion::per_axis` with one `(depth, prefix)` pair per axis;
+    /// `OutputRegion::new` describes a single axis and is rejected there.
     /// With `MergePolicy::Exact` and the default exact `application`, no
     /// approximation is made. `Tolerance` compresses without a rank goal. `merge_refine.application` also selects a
     /// measured or a certified truncating application of the operator.
@@ -72,7 +76,10 @@ impl<V> Default for PatchedFourierOptions<V> {
 /// [`quantics_fourier_operator_multiaxis`]), and delegates to the merge-refine scheduler. It never globally sums patches.
 /// A region can retain several terms, so `into_partition()` can fail. Requested
 /// `output_regions` select intersecting schedule cells, which can be coarser
-/// than the request. See [`MergeRefineOptions`] for limits and coverage contracts.
+/// than the request. The front end derives one coordinate group per element of
+/// `axes`, so a selection on a multi-axis transform needs
+/// `OutputRegion::per_axis` with one `(depth, prefix)` pair per axis. See
+/// [`MergeRefineOptions`] for limits and coverage contracts.
 ///
 /// With `MergePolicy::Tolerance`, executing the full input-merge depth
 /// (`output_depth: None`) leaves one term in every nonempty region, even when

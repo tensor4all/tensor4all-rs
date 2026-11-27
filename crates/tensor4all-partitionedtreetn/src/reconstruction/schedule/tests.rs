@@ -3,7 +3,8 @@ use std::time::{Duration, Instant};
 
 use super::{
     level_share, merge_group_charge_bound, prefixes_overlap, split_pays, validate_leaf_geometry,
-    CoordinateGroup, CoverageContract, InputKey, OutputKey, ReconstructionTarget, ScheduleGeometry,
+    CoordinateGroup, CoverageContract, InputKey, OutputKey, OutputRegion, ReconstructionTarget,
+    ScheduleGeometry,
 };
 use crate::projector::index::has_overlapping_pair;
 use crate::{DynIndex, IdxTensor, PartitionedTreeTN, Projector, SubDomainTreeTN, TreeTN};
@@ -45,7 +46,16 @@ fn coordinate_groups_validate_packed_prefix_capacity_before_use() {
         Projector::from_pairs(sites[..capacity].iter().cloned().map(|site| (site, 1))).unwrap();
     let expected = vec![(capacity, usize::MAX)];
     assert_eq!(geometry.input_prefix(&projector), Some(expected.clone()));
-    assert_eq!(geometry.output_prefix(&projector).unwrap(), expected);
+    // Input metadata can fill a word. The OutputRegion contract separately
+    // requires a smaller depth so its prefix range is representable.
+    let output = OutputRegion::new(capacity - 1, usize::MAX >> 1);
+    assert_eq!(
+        geometry.output_prefix(&output).unwrap(),
+        vec![(capacity - 1, usize::MAX >> 1)]
+    );
+    assert!(geometry
+        .output_prefix(&OutputRegion::new(capacity, 0))
+        .is_err());
     let groups = [
         CoordinateGroup::new(sites[..capacity].to_vec()),
         CoordinateGroup::new(sites[capacity..].to_vec()),

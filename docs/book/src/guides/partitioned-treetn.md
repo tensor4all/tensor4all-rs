@@ -686,8 +686,10 @@ allowance, and the proved bounds are charged instead. Every other entry point
 applies exactly. `MergeRefineReport` records the schedule shape
 (`level_count`, `applied_operator_count`, `additions`, `projections`,
 `compression_attempts`, `compressions`, `work_items_per_level`, `peak_work_items`,
-`refined_regions`, `stopped_regions`) next to the pinned reference scale, the
-allowance, and the measured `error_bound`. Every measured component — an application
+`refined_regions`, `stopped_regions`, `pruned_regions`) next to the pinned reference
+scale, the allowance, and the measured `error_bound`. `pruned_regions` is a coverage
+count kept apart from `error_bound`: under an `output_regions` selection it counts the
+child regions the selection cut, so `0` means the selection skipped nothing. Every measured component — an application
 error, a truncation residual, or a dropped norm — is recorded once, at the level and
 region where it was measured: components of one level live in disjoint regions and
 combine by the Euclidean norm, while components of different levels can be nested and

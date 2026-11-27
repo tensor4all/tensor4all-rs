@@ -32,7 +32,7 @@ pub use engine::reconstruct;
 pub(crate) use engine::truncate_toward_allowance;
 pub use schedule::{
     schedule_merge_refine, CoordinateGroup, CoverageContract, MergePolicy, MergeRefineLevelReport,
-    MergeRefineOptions, MergeRefineReport, MergeRefineResult, OperatorApplication,
+    MergeRefineOptions, MergeRefineReport, MergeRefineResult, OperatorApplication, OutputRegion,
 };
 pub use target::ReconstructionTarget;
 

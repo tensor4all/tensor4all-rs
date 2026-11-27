@@ -297,7 +297,7 @@ where
             Kind::Joint => passing.len(),
         };
         if refined_axes > 0 {
-            counters.refined_regions = checked_add(counters.refined_regions, 1)?;
+            counters.record_refinement(refined_axes, incumbent.regions.len())?;
         }
         counters.stopped_regions =
             checked_add(counters.stopped_regions, axes.len() - refined_axes)?;
