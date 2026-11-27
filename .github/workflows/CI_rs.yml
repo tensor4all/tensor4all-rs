@@ -100,10 +100,21 @@ jobs:
           cache-workspace-crates: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # Pull requests run the doctests. A push to main only warms the cache this
+      # job restores: the merged head already passed them as a pull request, and
+      # `cargo test --doc` cannot compile without running them (`--no-run` is
+      # refused for doctests), so the lib build that populates `target/` is
+      # done directly.
+      - name: Warm the Doctests cache (push to main)
+        if: ${{ github.event_name != 'pull_request' }}
+        run: cargo build --locked --profile ci --workspace --lib -j 8
+
       - name: Run rustdoc tests
+        if: ${{ github.event_name == 'pull_request' }}
         run: python3 scripts/ci-build-diagnostics.py rustdoc -- cargo test --locked --doc --profile ci --workspace -j 8 --timings -vv
 
       - name: Run mdBook tests
+        if: ${{ github.event_name == 'pull_request' }}
         env:
           TENSOR4ALL_CARGO_PROFILE: ci
           TENSOR4ALL_RUSTDOC_LOG: target/ci-build-diagnostics/rustdoc.log
@@ -134,7 +145,7 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: read
-      # Deletes this PR's superseded kache snapshots (see below).
+      # Deletes main's superseded kache snapshots (see below).
       actions: write
     steps:
       - uses: actions/checkout@v4
@@ -168,7 +179,12 @@ jobs:
         with:
           path: ${{ runner.temp }}/kache
           key: kache-t4a-ci-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
-          restore-keys: kache-t4a-ci-${{ hashFiles('**/Cargo.lock') }}-
+          # A pull request restores main's newest snapshot. The second prefix
+          # survives a lockfile change: kache entries are content-addressed, so
+          # a snapshot from another lockfile only misses units that changed.
+          restore-keys: |
+            kache-t4a-ci-${{ hashFiles('**/Cargo.lock') }}-
+            kache-t4a-ci-
 
       - uses: kunobi-ninja/kache-action@ad7317540dcdd71c904f7a60a87b620a0c0e67ed # v1
         with:
@@ -187,25 +203,21 @@ jobs:
         run: python3 scripts/ci-build-diagnostics.py --budget-seconds 300 nextest -- cargo nextest run --locked --cargo-profile ci --workspace --lib --bins --tests --timings -v
 
       - name: Save the kache store
-        # Compiled artifacts are valid whatever the tests did, so save on failure too. Pull
-        # requests save as well: a snapshot is scoped to the PR's merge ref, where the next
-        # push to the same PR restores it ahead of main's, so a re-push only recompiles
-        # what it changed. Main never reads PR snapshots.
+        # Main only (#1486). A pull request's snapshot was ~1.7 GB that nothing
+        # but its own next push restored, and it evicted main's snapshots from the
+        # 10 GB repository cache. Compiled artifacts are valid whatever the tests
+        # did, so save on failure too.
         id: kache-save
-        if: ${{ always() && steps.kache-restore.outputs.cache-hit != 'true' }}
+        if: ${{ always() && github.ref == 'refs/heads/main' && steps.kache-restore.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/kache
           key: kache-t4a-ci-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
 
-      - name: Prune this pull request's older kache snapshots
-        # Only a PR's newest snapshot is ever restored. Older ones (~1.7 GB each) would
-        # only push main's snapshots out of the 10 GB repository cache. Fork PRs get a
-        # read-only token and keep LRU eviction instead.
-        if: >-
-          ${{ always() && steps.kache-save.outcome == 'success'
-          && github.event_name == 'pull_request'
-          && github.event.pull_request.head.repo.full_name == github.repository }}
+      - name: Prune main's older kache snapshots
+        # Only the newest snapshot is ever restored. Older ones (~1.7 GB each)
+        # would push other caches out of the 10 GB repository cache.
+        if: ${{ always() && steps.kache-save.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
           KEEP: kache-t4a-ci-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
@@ -320,6 +332,20 @@ jobs:
 
       - name: Check crate boundaries and dev cycles
         run: python3 scripts/check-crate-boundaries.py
+
+      - name: Test changelog-fragment checker
+        run: python3 scripts/test-changelog-fragments.py
+
+      - name: Check changelog fragments (CONTRIBUTING.md, "Changelog entries")
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -n "$PR_NUMBER" ]; then
+            python3 scripts/changelog_fragments.py check --base "origin/$BASE_REF" --pr "$PR_NUMBER"
+          else
+            python3 scripts/changelog_fragments.py check
+          fi
 
       - name: Test test-target checker
         run: python3 scripts/test-check-test-targets.py

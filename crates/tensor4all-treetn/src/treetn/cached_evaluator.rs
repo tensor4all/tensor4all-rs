@@ -199,6 +199,9 @@ use super::TreeTN;
 use crate::interpolation::Parallelism;
 use rayon::prelude::*;
 
+mod candidates;
+pub use candidates::{CandidateEntries, CandidateInputError, CandidateSide};
+
 type KeyId = usize;
 type EnvironmentCache<V> = HashMap<V, StackedMessage>;
 type CacheBuildResult<V> = (Vec<ComponentBatch<V>>, EnvironmentCache<V>);
@@ -702,6 +705,18 @@ enum ScalarKind {
     F64,
     C32,
     C64,
+}
+
+impl ScalarKind {
+    /// The short dtype name [`requested_dtype_name`] gives the same type.
+    fn dtype_name(self) -> &'static str {
+        match self {
+            Self::F32 => "f32",
+            Self::F64 => "f64",
+            Self::C32 => "c32",
+            Self::C64 => "c64",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -7988,6 +8003,13 @@ where
     let Some(tensor) = message.tensor.as_ref() else {
         return Ok(None);
     };
+    // The kernel family is chosen from the node's own dtype; a child message
+    // may have been materialized in a wider kind (#1501). Decline so the
+    // caller falls through to `compute_generic_cached_message_values`, which
+    // promotes.
+    if tensor_scalar_kind(tensor)?.dtype_name() != requested_dtype_name::<T>() {
+        return Ok(None);
+    }
     with_host_values::<T, _>(tensor, |raw_values| {
         let mut columns = Vec::with_capacity(child_dim * points.len());
         for &point in points {

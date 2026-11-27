@@ -360,6 +360,7 @@ mod tests;
 /// - [`Self::IndexOutOfBounds`]: the index or coordinate is outside the
 ///   dimension it is read from.
 /// - [`Self::ScalarKindMismatch`]: request the element type the network stores.
+/// - [`Self::InvalidCandidates`]: the payload variant names the remedy.
 /// - [`Self::Operation`]: the wrapped source chain identifies the failing stage.
 #[derive(Debug, thiserror::Error)]
 pub enum TreeTNOperationError {
@@ -403,6 +404,21 @@ pub enum TreeTNOperationError {
         /// The dtype mismatch.
         #[source]
         payload: crate::EvaluatedScalarKindMismatch,
+        /// Rendered `anyhow` context layers, each followed by `": "`.
+        context: String,
+    },
+    /// A candidate-matrix request to
+    /// [`TreeTNCachedEvaluator::evaluate_candidates_typed`](crate::TreeTNCachedEvaluator::evaluate_candidates_typed)
+    /// was rejected before any contraction.
+    ///
+    /// The payload has one variant per failure, each documenting its remedy,
+    /// and is reachable through `Error::source`. `context` works as for
+    /// [`Self::ScalarKindMismatch`].
+    #[error("{context}{payload}")]
+    InvalidCandidates {
+        /// The rejected input.
+        #[source]
+        payload: crate::CandidateInputError,
         /// Rendered `anyhow` context layers, each followed by `": "`.
         context: String,
     },
@@ -463,6 +479,13 @@ impl TreeTNOperationError {
                 payload,
                 context: format!("{context}: {outer}"),
             },
+            Self::InvalidCandidates {
+                payload,
+                context: outer,
+            } => Self::InvalidCandidates {
+                payload,
+                context: format!("{context}: {outer}"),
+            },
         }
     }
 }
@@ -481,6 +504,10 @@ enum Class {
         payload: crate::EvaluatedScalarKindMismatch,
         context: String,
     },
+    InvalidCandidates {
+        payload: crate::CandidateInputError,
+        context: String,
+    },
 }
 
 impl Class {
@@ -496,13 +523,20 @@ impl Class {
                     context: context.clone(),
                 }
             }
+            TreeTNOperationError::InvalidCandidates { payload, context } => {
+                Self::InvalidCandidates {
+                    payload: payload.clone(),
+                    context: context.clone(),
+                }
+            }
         }
     }
 
-    /// The variant around `source`. `ScalarKindMismatch` has no chain to hold
-    /// it, so it keeps the failure's own payload and context unchanged: the
-    /// links above it may be wrappers that already render the failure, and
-    /// prefixing their text would repeat it on every crossing.
+    /// The variant around `source`. `ScalarKindMismatch` and `InvalidCandidates`
+    /// have no chain to hold it, so each keeps the failure's own payload and
+    /// context unchanged: the links above it may be wrappers that already
+    /// render the failure, and prefixing their text would repeat it on every
+    /// crossing.
     fn into_error(self, source: anyhow::Error) -> TreeTNOperationError {
         match self {
             Self::InvalidConfiguration => TreeTNOperationError::InvalidConfiguration { source },
@@ -511,6 +545,9 @@ impl Class {
             Self::Operation => TreeTNOperationError::Operation { source },
             Self::ScalarKindMismatch { payload, context } => {
                 TreeTNOperationError::ScalarKindMismatch { payload, context }
+            }
+            Self::InvalidCandidates { payload, context } => {
+                TreeTNOperationError::InvalidCandidates { payload, context }
             }
         }
     }
@@ -525,6 +562,15 @@ impl From<crate::EvaluatedScalarKindMismatch> for TreeTNOperationError {
     }
 }
 
+impl From<crate::CandidateInputError> for TreeTNOperationError {
+    fn from(payload: crate::CandidateInputError) -> Self {
+        Self::InvalidCandidates {
+            payload,
+            context: String::new(),
+        }
+    }
+}
+
 impl From<anyhow::Error> for TreeTNOperationError {
     /// Internal `?` conversions land in the catch-all variant with their chain
     /// intact. An error that carries a classified variant keeps that variant.
@@ -532,9 +578,10 @@ impl From<anyhow::Error> for TreeTNOperationError {
     /// recorded as the message they render (a typed context cannot be recovered
     /// from `anyhow`). When a typed context or a foreign wrapper sits between,
     /// the variant holds the received chain unchanged, except
-    /// `ScalarKindMismatch`, which has no chain: it keeps its own payload and
-    /// context, and the links above it are dropped rather than re-rendered,
-    /// because a wrapper may already render the mismatch.
+    /// `ScalarKindMismatch` and `InvalidCandidates`, which have no chain: each
+    /// keeps its own payload and context, and the links above it are dropped
+    /// rather than re-rendered, because a wrapper may already render the
+    /// failure.
     ///
     /// The classification is taken from the first `TreeTNOperationError` in the
     /// source chain (the failure), never from a typed context above it:

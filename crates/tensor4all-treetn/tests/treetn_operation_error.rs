@@ -547,3 +547,59 @@ fn a_dtype_mismatch_below_a_wrapper_is_not_rendered_twice() {
         "the mismatch is rendered more than once: {text}"
     );
 }
+
+#[test]
+fn an_invalid_candidate_request_keeps_its_payload_and_the_anyhow_context() {
+    // The candidate payload, like the dtype payload, has no `anyhow` chain:
+    // the context layers are rendered onto it, and a wrapper that already
+    // renders it does not prefix it again.
+    #[derive(Debug)]
+    struct Wrapper(TreeTNOperationError);
+
+    impl std::fmt::Display for Wrapper {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "wrapper: {}", self.0)
+        }
+    }
+
+    impl std::error::Error for Wrapper {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    let payload = tensor4all_treetn::CandidateInputError::MissingSite { site: 3 };
+    let wrapped =
+        anyhow::Error::new(TreeTNOperationError::from(payload.clone())).context("request 42");
+    let converted = TreeTNOperationError::from(wrapped);
+    let TreeTNOperationError::InvalidCandidates { payload: kept, .. } = &converted else {
+        panic!("the candidate variant must survive the conversion, got {converted:?}");
+    };
+    assert_eq!(kept, &payload);
+    let text = format!("{converted:#}");
+    assert!(
+        text.contains("request 42"),
+        "the outer context was dropped: {text}"
+    );
+    assert!(
+        text.contains("site 3 is on neither side"),
+        "the diagnostic was dropped: {text}"
+    );
+
+    let mut error = TreeTNOperationError::from(payload.clone());
+    for _ in 0..15 {
+        error = TreeTNOperationError::from(anyhow::Error::new(Wrapper(error)));
+    }
+    let TreeTNOperationError::InvalidCandidates { payload: kept, .. } = &error else {
+        panic!("the candidate variant must survive the wrapper, got {error:?}");
+    };
+    assert_eq!(kept, &payload);
+    assert_eq!(
+        error
+            .to_string()
+            .matches("site 3 is on neither side")
+            .count(),
+        1,
+        "the payload is rendered more than once: {error}"
+    );
+}
