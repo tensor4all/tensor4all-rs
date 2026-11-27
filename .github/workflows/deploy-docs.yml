@@ -3,6 +3,21 @@ name: Deploy Documentation
 on:
   push:
     branches: [main]
+    # Only what the published site is built from. A commit that touches none of
+    # these (tests, scripts, benchmarks, other workflows) cannot change the site.
+    # Run the workflow manually (workflow_dispatch) to redeploy regardless.
+    paths:
+      - "docs/**"
+      - "crates/*/src/**"
+      - "crates/*/Cargo.toml"
+      - "crates/*/README.md"
+      - "tools/*/src/**"
+      - "tools/*/Cargo.toml"
+      - "xtask/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "README.md"
+      - ".github/workflows/deploy-docs.yml"
   workflow_dispatch:
 
 permissions:
@@ -38,16 +53,9 @@ jobs:
         with:
           cache-workspace-crates: true
 
-      - name: Verify rustdoc examples
-        env:
-          CI_BUILD_DIAGNOSTICS: ${{ runner.temp }}/ci-build-diagnostics
-        run: python3 scripts/ci-build-diagnostics.py rustdoc -- cargo test --locked --doc --profile ci --workspace -j 8 --timings -vv
-
-      - name: Verify mdBook examples
-        env:
-          TENSOR4ALL_CARGO_PROFILE: ci
-          TENSOR4ALL_RUSTDOC_LOG: ${{ runner.temp }}/ci-build-diagnostics/rustdoc.log
-        run: ./scripts/test-mdbook.sh
+      # The rustdoc and mdBook examples are not re-run here: `CI_rs` Doctests ran
+      # them on the pull request head before it merged, and a docs deploy that
+      # re-ran them bought nothing but ~5 min per deploy.
 
       - name: Build mdBook
         run: mdbook build docs/book

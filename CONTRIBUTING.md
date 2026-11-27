@@ -44,6 +44,15 @@ heavy test:
   tests nightly (`-E 'test(/(^|::)heavy_/)' --run-ignored ignored-only`), builds every
   target for the compile check, and opens or updates a `ci-nightly` issue when it fails.
 
+What runs where (#1486): the full `CI_rs` pipeline runs on pull requests. A push to
+`main` runs only what depends on `main` itself: `Lint`, `Test` (the merge commit can
+differ from the tested PR head, because branches are not required to be up to date),
+`Maintenance scripts`, and a build-only `Doctests` step that populates the cache pull
+requests restore. Rustdoc and mdBook examples are verified on the pull request head,
+not again on `main`, and `Deploy Documentation` rebuilds the site without re-running
+them. Only `main` saves the kache and Cargo caches; pull requests restore from `main`'s
+newest snapshot.
+
 Non-default feature configurations (system BLAS, provider injection, MPI,
 diagnostics, HDF5 runtime loading, CUDA) cannot share the default build, so they
 run in [`.github/workflows/feature-matrix.yml`](.github/workflows/feature-matrix.yml)
