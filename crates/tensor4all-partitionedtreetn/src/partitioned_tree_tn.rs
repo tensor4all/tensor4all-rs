@@ -2,6 +2,7 @@
 
 mod coverage;
 mod evaluate;
+mod restrict;
 mod summaries;
 
 pub(crate) use coverage::{
