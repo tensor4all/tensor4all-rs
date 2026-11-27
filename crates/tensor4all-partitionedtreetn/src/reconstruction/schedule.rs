@@ -412,10 +412,12 @@ pub struct MergeRefineReport {
     /// terms are not frozen at the stop level; they report through
     /// [`MergeRefineResult::regions`].
     pub stopped_regions: usize,
-    /// Child regions a refinement would have produced but that
+    /// Child regions of the refinements this run carried out that
     /// [`MergeRefineOptions::output_regions`] excluded, so they were never
     /// computed. Each pruned child is counted once, at the level where it was cut,
-    /// not once per descendant. This is a coverage count and is kept apart from
+    /// not once per descendant. Only refinements that were kept count: a rank-goal
+    /// probe that was discarded, or an axis that stopped, refined nothing and cuts
+    /// nothing, and a region that stopped refining keeps its unsplit prefix. This is a coverage count and is kept apart from
     /// [`Self::error_bound`], which says nothing about regions that were never
     /// computed: `0` means the selection skipped nothing (always the case without
     /// a selection), and a positive value means the result covers only part of the
@@ -1143,9 +1145,14 @@ impl ScheduleGeometry {
         }
         let mut key = Vec::with_capacity(self.axes.len());
         for (axis, &(depth, value)) in self.axes.iter().zip(&region.axes) {
-            if depth > axis.outputs.len() || depth >= usize::BITS as usize {
+            if depth > axis.outputs.len() {
                 return Err(invalid(
                     "a requested output region must not fix more bits than its coordinate group has output indices",
+                ));
+            }
+            if depth >= usize::BITS as usize {
+                return Err(invalid(
+                    "a requested output region must fix fewer bits than a machine word",
                 ));
             }
             if value >> depth != 0 {
@@ -1400,8 +1407,9 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// Returns [`PartitionedTreeTNError::InvalidOptions`] for a non-binary or empty
 /// selection, an `output_depth` above the selection depth, an empty
 /// [`MergeRefineOptions::output_regions`], an output region that does not fix a
-/// contiguous prefix of output indices on every coordinate group or that names an
-/// index outside the selection, a `max_work_items`
+/// [`OutputRegion`] that lists a different number of axes than the coordinate
+/// groups, fixes more bits than its group has output indices (or 64 or more), or
+/// has a prefix that does not fit its depth, a `max_work_items`
 /// limit below the present input-leaf count, a zero `target_bond_dim`, a preimage
 /// whose leaves do not form a valid dyadic prefix code or do not cover the
 /// requested contract, non-finite tolerances, and non-finite or non-positive

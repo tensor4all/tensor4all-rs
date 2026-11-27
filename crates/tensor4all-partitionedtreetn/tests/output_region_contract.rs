@@ -36,8 +36,8 @@ fn output_regions_is_a_static_bit_prefix_list() {
     assert_eq!(regions[1], OutputRegion::new(2, 0b11));
     // The default computes every region.
     assert!(output_regions_type(&MergeRefineOptions::default()).is_none());
-    // Plain data: comparable and replayable.
-    assert_eq!(regions.to_vec(), regions.to_vec());
+    // Plain data: ordered, so a replayed list can be compared with a logged one.
+    assert!(regions[0] < regions[1]);
 }
 
 #[test]
