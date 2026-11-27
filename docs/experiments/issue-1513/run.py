@@ -13,7 +13,7 @@ Usage (repository root, commit HEAD first; the harness is read from this directo
 Writes readout.csv, micro.csv, host.txt, rustc.txt, revisions.txt here. Every
 revision must produce the same output hash for every case (bit identity).
 """
-import argparse, os, re, shutil, subprocess
+import argparse, os, platform, re, shutil, subprocess
 from pathlib import Path
 from statistics import median
 
@@ -26,6 +26,27 @@ CASES = [("corr", 2, 3, 2), ("corr", 8, 8, 2), ("unrel", 2, 3, 0), ("unrel", 8, 
 
 def out(*cmd):
     return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+
+
+def host_text():
+    """Record the host with no macOS-only command: the x86 run is Linux."""
+    def best(*cmd):
+        try:
+            return out(*cmd).strip()
+        except (OSError, subprocess.CalledProcessError):
+            return ""
+
+    brand = best("sysctl", "-n", "machdep.cpu.brand_string")
+    if not brand:
+        try:
+            with open("/proc/cpuinfo", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("model name"):
+                        brand = line.split(":", 1)[1].strip()
+                        break
+        except OSError:
+            pass
+    return "\n".join(x for x in (brand, platform.platform(), platform.machine()) if x) + "\n"
 
 
 def strip(source, region):
@@ -70,7 +91,7 @@ def main():
         shutil.rmtree(tgt)  # the build output is no longer needed
     (HERE / "revisions.txt").write_text("".join(f"{n} {r}\n" for n, r in revs.items()))
     (HERE / "rustc.txt").write_text(out("rustc", "-Vv"))
-    (HERE / "host.txt").write_text(out("sysctl", "-n", "machdep.cpu.brand_string") + out("sw_vers") + out("uname", "-m"))
+    (HERE / "host.txt").write_text(host_text())
     env = dict(os.environ, RAYON_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1", VECLIB_MAXIMUM_THREADS="1")
 
     def run(name, *a):
