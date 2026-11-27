@@ -147,7 +147,8 @@ def check(root, base, pr=None):
             now = legacy_order(root)
             if [n for n in old if n in now] != now:
                 errs.append(f"{LEGACY_ORDER}: may only lose entries (at release), not gain or reorder them")
-        changed = git(root, "diff", "--name-only", "--diff-filter=AM", f"{base}...HEAD", "--", FRAGMENT_DIR).split()
+        # The number belongs to the PR that created the file; a later PR may fix its wording.
+        changed = git(root, "diff", "--name-only", "--diff-filter=A", f"{base}...HEAD", "--", FRAGMENT_DIR).split()
         for f in changed:
             name = Path(f).name
             if name in (LEGACY_ORDER, "README.md") or name in legacy_order(root):

@@ -71,6 +71,10 @@ class Check(unittest.TestCase):
         edit(d); git("add", "-A"); git("commit", "-qm", "pr")
         return cf.check(d, "main", pr=7)
 
+    def test_editing_another_prs_fragment_is_allowed(self):
+        errs = self._pr({"3-added.md": "- a\n"}, lambda d: (d / "changelog.d" / "3-added.md").write_text("- a, reworded\n"))
+        self.assertEqual(errs, [])
+
     def test_direct_changelog_edit_fails_even_below_a_release_heading(self):
         errs = self._pr({}, lambda d: (d / "CHANGELOG.md").write_text("# Changelog\n\n## v0.3.0\n- stray (#9)\n"))
         self.assertTrue(any("edited directly" in e for e in errs), errs)
