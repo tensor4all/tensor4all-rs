@@ -835,6 +835,9 @@ where
                 for (error, point) in errors.into_iter().zip(&chunk) {
                     max_error = max_error.max(error);
                     if error > fallback_threshold {
+                        // This fallback runs only with `best` empty, and
+                        // `EnumerationPoints` yields distinct points, so
+                        // bounded retention cannot spend a slot on a duplicate.
                         retain_pivot(&mut best, error, point, max_nglobal_pivot);
                     }
                 }
