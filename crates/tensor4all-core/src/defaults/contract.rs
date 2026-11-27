@@ -19,20 +19,23 @@
 //! explicitly request dense values; contraction itself preserves compact
 //! representation whenever the result remains structured.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "tenferro-cuda")]
 use super::eager_session::{with_eager_session, EngineRoute};
 use anyhow::Result;
 use petgraph::algo::connected_components;
 use petgraph::prelude::*;
 use tenferro::TensorValue;
+#[cfg(feature = "tenferro-cuda")]
 use tenferro_einsum::{EagerEinsumOps, EinsumSubscripts};
 use tensor4all_tensorbackend::NativeTensorReadInput;
 
-use crate::implicit_route::{einsum_native_tensor_reads, einsum_native_tensors_owned};
+use crate::implicit_route::einsum_native_tensor_reads;
 
 #[cfg(test)]
 use crate::defaults::DynId;
@@ -207,7 +210,7 @@ pub struct PreparedContraction {
     expected_dims: Vec<Vec<usize>>,
     expected_axis_classes: Vec<Vec<usize>>,
     plan: ContractionPlan,
-    has_retained_indices: bool,
+    retain_indices: Vec<DynIndex>,
 }
 
 impl std::fmt::Debug for PreparedContraction {
@@ -216,7 +219,7 @@ impl std::fmt::Debug for PreparedContraction {
             .debug_struct("PreparedContraction")
             .field("operand_count", &self.expected_indices.len())
             .field("result_rank", &self.plan.result_indices.len())
-            .field("has_retained_indices", &self.has_retained_indices)
+            .field("has_retained_indices", &!self.retain_indices.is_empty())
             .finish_non_exhaustive()
     }
 }
@@ -238,7 +241,8 @@ impl PreparedContraction {
     ///
     /// Returns [`IdxTensorError`] when no operands are supplied, retained indices
     /// are absent, the index relationships do not form the requested connected
-    /// network, or the result would contain duplicate output indices.
+    /// network, a shared label has inconsistent dimensions, or the result would
+    /// contain duplicate output indices.
     ///
     /// # Examples
     ///
@@ -291,7 +295,7 @@ impl PreparedContraction {
                 .map(|tensor| tensor.axis_classes().to_vec())
                 .collect(),
             plan,
-            has_retained_indices: !options.retain_indices.is_empty(),
+            retain_indices: options.retain_indices.to_vec(),
         })
     }
 
@@ -382,31 +386,11 @@ impl PreparedContraction {
     }
 
     fn execute_impl(&self, tensors: &[&IdxTensor]) -> Result<IdxTensor> {
-        if tensors.len() == 1 {
-            return Ok((*tensors[0]).clone());
-        }
-        if tensors.len() == 2 && !self.has_retained_indices {
-            return tensors[0].try_contract_pairwise_default_with_options(
-                tensors[1],
-                PairwiseContractionOptions::new(),
-            );
-        }
-        let has_structured_storage = tensors
-            .iter()
-            .map(|tensor| has_dense_axis_classes(tensor).map(|dense| !dense))
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .any(|structured| structured);
-        let has_grad = tensors.iter().any(|tensor| tensor.tracks_grad());
-        if has_structured_storage || has_grad {
-            return IdxTensor::contract_structured_payloads_nary(
-                tensors,
-                self.plan.result_indices.clone(),
-                self.plan.input_ids.clone(),
-                self.plan.output_ids.clone(),
-            );
-        }
-        execute_contraction_plan(tensors, &self.plan, self.has_retained_indices)
+        dispatch_contraction(
+            tensors,
+            ContractionOptions::new().with_retain_indices(&self.retain_indices),
+            Some(&self.plan),
+        )
     }
 }
 
@@ -533,38 +517,6 @@ pub fn contract_with_options(
     contract_with_options_impl(tensors, options).map_err(IdxTensorError::from)
 }
 
-/// Contract owned tensors with the default connected-network semantics.
-/// # Errors
-///
-/// Returns [`IdxTensorError::Operation`] when the network is disconnected,
-/// when indices do not match, or when the backend contraction fails.
-///
-pub fn contract_owned(tensors: Vec<IdxTensor>) -> std::result::Result<IdxTensor, IdxTensorError> {
-    contract_owned_with_options(tensors, ContractionOptions::new())
-}
-
-/// Contract owned tensors with advanced connected-network options.
-/// # Errors
-///
-/// Returns [`IdxTensorError::Operation`] when the network is disconnected,
-/// when indices do not match, or when the backend contraction fails.
-///
-pub fn contract_owned_with_options(
-    tensors: Vec<IdxTensor>,
-    options: ContractionOptions<'_>,
-) -> std::result::Result<IdxTensor, IdxTensorError> {
-    let tensor_refs = tensors.iter().collect::<Vec<_>>();
-    let components =
-        find_tensor_connected_components_with_retained(&tensor_refs, options.retain_indices);
-    if components.len() > 1 {
-        return Err(IdxTensorError::from(anyhow::anyhow!(
-            "Tensors form disconnected components; use explicit outer_product operations for an intentional disconnected product"
-        )));
-    }
-    drop(tensor_refs);
-    contract_owned_with_options_impl(tensors, options).map_err(IdxTensorError::from)
-}
-
 /// Contract two tensors with the default pairwise semantics.
 ///
 /// This is the concrete `IdxTensor` entry point for binary contraction. It
@@ -678,139 +630,74 @@ pub fn outer_product(
         .map_err(IdxTensorError::from)
 }
 
-/// Contract multiple owned tensors into a single tensor.
-///
-/// This is the consuming implementation for [`contract_owned_with_options`]. It
-/// preserves the same contraction semantics while allowing eligible non-AD
-/// dense inputs to use tenferro's owned eager einsum executor. When any input
-/// tracks gradients, or when compact structured metadata needs the borrowed
-/// path, this function falls back to the shared borrowed execution so semantics
-/// and reverse-mode AD remain intact.
-fn contract_owned_with_options_impl(
-    tensors: Vec<IdxTensor>,
-    options: ContractionOptions<'_>,
-) -> Result<IdxTensor> {
-    match tensors.len() {
-        0 => Err(anyhow::anyhow!("No tensors to contract")),
-        _ => {
-            let tensor_refs = tensors.iter().collect::<Vec<_>>();
-            validate_retained_indices_exist(&tensor_refs, options.retain_indices)?;
-
-            if tensors.len() == 1 {
-                drop(tensor_refs);
-                let Some(tensor) = tensors.into_iter().next() else {
-                    return Err(anyhow::anyhow!("No tensors to contract"));
-                };
-                return Ok(tensor);
-            }
-
-            let has_structured_storage = tensor_refs
-                .iter()
-                .map(|tensor| has_dense_axis_classes(tensor).map(|dense| !dense))
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .any(|structured| structured);
-            let requires_borrowed_path =
-                tensor_refs.iter().any(|tensor| tensor.tracks_grad()) || has_structured_storage;
-            if requires_borrowed_path {
-                return contract_with_options(&tensor_refs, options).map_err(anyhow::Error::from);
-            }
-
-            let components = find_tensor_connected_components_with_retained(
-                &tensor_refs,
-                options.retain_indices,
-            );
-            if components.len() > 1 {
-                return Err(anyhow::anyhow!(
-                    "Tensors form disconnected components; use explicit outer_product operations for an intentional disconnected product"
-                ));
-            }
-
-            let plan = build_contraction_plan(&tensor_refs, options)?;
-            drop(tensor_refs);
-            let native_operands = tensors
-                .into_iter()
-                .enumerate()
-                .map(|(tensor_idx, tensor)| {
-                    Ok((
-                        {
-                            let inner = tensor.as_inner()?;
-                            with_eager_session(inner.runtime(), EngineRoute::Legacy, |session| {
-                                session.duplicate_value(inner)
-                            })?
-                        },
-                        plan.input_ids[tensor_idx].clone(),
-                    ))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let result_native = einsum_native_tensors_owned(native_operands, &plan.output_ids)?;
-            IdxTensor::from_untracked_native_with_axis_classes(
-                plan.result_indices,
-                result_native,
-                plan.result_axis_classes,
-            )
-        }
-    }
-}
-
-fn has_dense_axis_classes(tensor: &IdxTensor) -> Result<bool> {
-    Ok(tensor
-        .axis_classes()
-        .iter()
-        .copied()
-        .eq(0..tensor.indices().len()))
-}
-
 fn contract_with_options_impl(
     tensors: &[&IdxTensor],
     options: ContractionOptions<'_>,
 ) -> Result<IdxTensor> {
-    match tensors.len() {
-        0 => Err(anyhow::anyhow!("No tensors to contract")),
-        _ => {
-            validate_retained_indices_exist(tensors, options.retain_indices)?;
-            if tensors.len() == 1 {
-                return Ok((*tensors[0]).clone());
-            }
-
-            // Check connectivity first
-            let components =
-                find_tensor_connected_components_with_retained(tensors, options.retain_indices);
-            if components.len() > 1 {
-                return Err(anyhow::anyhow!(
-                    "Disconnected tensor network: {} components found",
-                    components.len()
-                ));
-            }
-
-            if tensors.len() == 2 && options.retain_indices.is_empty() {
-                return tensors[0].try_contract_pairwise_default_with_options(
-                    tensors[1],
-                    PairwiseContractionOptions::new(),
-                );
-            }
-
-            let has_structured_storage = tensors
-                .iter()
-                .map(|tensor| has_dense_axis_classes(tensor).map(|dense| !dense))
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .any(|structured| structured);
-            let has_grad = tensors.iter().any(|tensor| tensor.tracks_grad());
-            if has_structured_storage || has_grad {
-                let plan = build_contraction_plan(tensors, options)?;
-                return IdxTensor::contract_structured_payloads_nary(
-                    tensors,
-                    plan.result_indices,
-                    plan.input_ids,
-                    plan.output_ids,
-                );
-            }
-
-            // Connectivity verified - skip check in impl
-            contract_impl(tensors, options)
+    if tensors.is_empty() {
+        return Err(anyhow::anyhow!("No tensors to contract"));
+    }
+    validate_retained_indices_exist(tensors, options.retain_indices)?;
+    if tensors.len() > 1 {
+        let components =
+            find_tensor_connected_components_with_retained(tensors, options.retain_indices);
+        if components.len() > 1 {
+            return Err(anyhow::anyhow!(
+                "Disconnected tensor network: {} components found",
+                components.len()
+            ));
         }
     }
+    dispatch_contraction(tensors, options, None)
+}
+
+/// Select the same execution route for ordinary and caller-prepared operands.
+///
+/// Validation precedes this helper. Planning stays lazy so the ordinary binary
+/// fast path does not allocate N-ary labels it never consumes.
+fn dispatch_contraction(
+    tensors: &[&IdxTensor],
+    options: ContractionOptions<'_>,
+    prepared: Option<&ContractionPlan>,
+) -> Result<IdxTensor> {
+    if tensors.len() == 1 {
+        return Ok((*tensors[0]).clone());
+    }
+    if tensors.len() == 2 && options.retain_indices.is_empty() {
+        return tensors[0].try_contract_pairwise_default_with_options(
+            tensors[1],
+            PairwiseContractionOptions::new(),
+        );
+    }
+    let plan = match prepared {
+        Some(plan) => Cow::Borrowed(plan),
+        None => Cow::Owned(build_contraction_plan(tensors, options)?),
+    };
+    execute_planned_contraction(tensors, plan)
+}
+
+/// Select compact payload or dense execution for an already planned network.
+fn execute_planned_contraction(
+    tensors: &[&IdxTensor],
+    plan: Cow<'_, ContractionPlan>,
+) -> Result<IdxTensor> {
+    let has_structured_storage = tensors.iter().any(|tensor| {
+        !tensor
+            .axis_classes()
+            .iter()
+            .copied()
+            .eq(0..tensor.indices().len())
+    });
+    if has_structured_storage || tensors.iter().any(|tensor| tensor.tracks_grad()) {
+        let plan = plan.into_owned();
+        return IdxTensor::contract_structured_payloads_nary(
+            tensors,
+            plan.result_indices,
+            plan.input_ids,
+            plan.output_ids,
+        );
+    }
+    execute_dense_contraction_plan(tensors, &plan)
 }
 
 // ============================================================================
@@ -951,45 +838,11 @@ pub(crate) fn collect_sizes(
 // Contraction implementation
 // ============================================================================
 
-/// Internal implementation of multi-tensor contraction.
-///
-/// Structured operands use compact payload einsum labels, preserving equality
-/// metadata without materializing logical dense tensors. Dense operands continue
-/// to use the native backend path.
-///
-/// The result keeps the common eager dtype across `f32`, `f64`, `c32`, and
-/// `c64` operands, using the backend's normal mixed-dtype promotion rules.
-fn contract_impl(tensors: &[&IdxTensor], options: ContractionOptions<'_>) -> Result<IdxTensor> {
-    // 1. Build the contraction plan from internal labels.
-    let plan = build_contraction_plan(tensors, options)?;
-
-    // Note: Connectivity check is done by caller.
-    // via find_tensor_connected_components before calling this function
-
-    // 3. Build sizes from unique internal IDs.
-    let mut sizes: HashMap<usize, usize> = HashMap::new();
-    for (tensor_idx, tensor) in tensors.iter().enumerate() {
-        let dims = tensor.dims();
-        for (pos, &dim) in dims.iter().enumerate() {
-            let internal_id = plan.input_ids[tensor_idx][pos];
-            match sizes.entry(internal_id) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(dim);
-                }
-                std::collections::hash_map::Entry::Occupied(entry) => {
-                    if *entry.get() != dim {
-                        return Err(anyhow::anyhow!(
-                            "Internal label shape mismatch: label {} has dimensions {} and {}",
-                            internal_id,
-                            entry.get(),
-                            dim
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
+/// Run dense operands, collecting metadata only when profiling is enabled.
+fn execute_dense_contraction_plan(
+    tensors: &[&IdxTensor],
+    plan: &ContractionPlan,
+) -> Result<IdxTensor> {
     let profile_signature = contract_profile_enabled().then(|| ContractSignature {
         operands: tensors
             .iter()
@@ -1001,11 +854,11 @@ fn contract_impl(tensors: &[&IdxTensor], options: ContractionOptions<'_>) -> Res
             })
             .collect(),
         output_ids: plan.output_ids.clone(),
-        output_dims: plan.output_ids.iter().map(|id| sizes[id]).collect(),
+        output_dims: plan.result_indices.iter().map(IndexLike::dim).collect(),
     });
     let profile_started = contract_profile_enabled().then(Instant::now);
 
-    let result = execute_contraction_plan(tensors, &plan, !options.retain_indices.is_empty())?;
+    let result = execute_dense_contraction_payload(tensors, plan)?;
     if let (Some(signature), Some(started)) = (profile_signature, profile_started) {
         record_contract_profile(signature, started.elapsed());
     }
@@ -1044,13 +897,14 @@ pub(crate) fn contract_pair_via_plan(
     };
     let tensors = [lhs, rhs];
     let plan = build_contraction_plan(&tensors, ContractionOptions::new())?;
-    execute_contraction_plan(&tensors, &plan, false)
+    // This boundary is specifically for resident pairs: it bypasses host
+    // compact-payload adaptation and enters the owning-runtime path below.
+    execute_dense_contraction_payload(&tensors, &plan)
 }
 
-fn execute_contraction_plan(
+fn execute_dense_contraction_payload(
     tensors: &[&IdxTensor],
     plan: &ContractionPlan,
-    has_retained_indices: bool,
 ) -> Result<IdxTensor> {
     // Device-resident operands cannot enter the native host session below;
     // run them through the owning-runtime eager einsum path (the same
@@ -1077,57 +931,6 @@ fn execute_contraction_plan(
             plan.result_axis_classes.clone(),
         );
     }
-    let any_grad = tensors.iter().any(|tensor| tensor.tracks_grad());
-    if any_grad {
-        let first_dtype = tensors[0].as_inner()?.dtype();
-        let same_dtype = tensors
-            .iter()
-            .map(|tensor| Ok(tensor.as_inner()?.dtype() == first_dtype))
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .all(|same| same);
-        let has_non_dense_axis_classes = tensors.iter().any(|tensor| {
-            tensor
-                .axis_classes()
-                .iter()
-                .copied()
-                .enumerate()
-                .any(|(axis, class)| axis != class)
-        });
-
-        if same_dtype && has_non_dense_axis_classes && !has_retained_indices {
-            // Structured payload AD still relies on the existing pairwise structured
-            // path until structured N-ary planning is implemented.
-            let mut iter = tensors.iter();
-            let Some(first) = iter.next() else {
-                return Err(anyhow::anyhow!("No tensors to contract"));
-            };
-            let mut result = (*first).clone();
-            for tensor in iter {
-                result = contract_pair(&result, tensor)?;
-            }
-            return Ok(result);
-        }
-
-        let operands = tensors
-            .iter()
-            .map(|tensor| tensor.as_inner())
-            .collect::<Result<Vec<_>>>()?;
-        let subscripts = build_einsum_subscripts_from_usize_ids(&plan.input_ids, &plan.output_ids)?;
-        let runtime = operands
-            .first()
-            .map(|operand| operand.runtime())
-            .ok_or_else(|| anyhow::anyhow!("No tensors to contract"))?;
-        let result = with_eager_session(runtime, EngineRoute::Legacy, |session| {
-            session.einsum(&operands, &subscripts)
-        })?;
-        return IdxTensor::from_inner_with_axis_classes(
-            plan.result_indices.clone(),
-            result,
-            plan.result_axis_classes.clone(),
-        );
-    }
-
     let native_operands = tensors
         .iter()
         .enumerate()
@@ -1181,6 +984,7 @@ fn execute_contraction_plan(
     }
 }
 
+#[cfg(feature = "tenferro-cuda")]
 fn build_einsum_subscripts_from_usize_ids(
     input_ids: &[Vec<usize>],
     output_ids: &[usize],
@@ -1251,10 +1055,19 @@ pub(crate) fn build_contraction_plan(
     let retained_indices: HashSet<DynIndex> = options.retain_indices.iter().cloned().collect();
     let (input_ids, internal_id_to_original) = build_internal_ids(tensors, &retained_indices)?;
 
-    let mut counts: HashMap<usize, usize> = HashMap::new();
-    for ids in &input_ids {
-        for &internal_id in ids {
-            *counts.entry(internal_id).or_insert(0) += 1;
+    let mut counts: HashMap<usize, (usize, usize)> = HashMap::new();
+    for (tensor, ids) in tensors.iter().zip(&input_ids) {
+        for (index, &internal_id) in tensor.indices().iter().zip(ids) {
+            let (count, dim) = counts.entry(internal_id).or_insert((0, index.dim()));
+            if *dim != index.dim() {
+                return Err(anyhow::anyhow!(
+                    "Internal label shape mismatch: label {} has dimensions {} and {}",
+                    internal_id,
+                    dim,
+                    index.dim()
+                ));
+            }
+            *count += 1;
         }
     }
     let mut output_ids = Vec::new();
@@ -1264,7 +1077,7 @@ pub(crate) fn build_contraction_plan(
     for (tensor_idx, tensor) in tensors.iter().enumerate() {
         for (axis, idx) in tensor.indices.iter().enumerate() {
             let internal_id = input_ids[tensor_idx][axis];
-            let should_output = counts[&internal_id] == 1 || retained_indices.contains(idx);
+            let should_output = counts[&internal_id].0 == 1 || retained_indices.contains(idx);
             if should_output && seen_output.insert(internal_id) {
                 output_ids.push(internal_id);
             }

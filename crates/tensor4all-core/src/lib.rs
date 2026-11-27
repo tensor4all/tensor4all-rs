@@ -173,10 +173,9 @@ pub use tensor_like::{
 };
 
 pub use defaults::contract::{
-    contract, contract_owned, contract_owned_with_options, contract_pair,
-    contract_pair_with_operand_options, contract_pair_with_options, contract_with_options,
-    outer_product, print_and_reset_contract_profile, reset_contract_profile, tensordot,
-    ContractionOptions, PairwiseContractionOptions, PreparedContraction,
+    contract, contract_pair, contract_pair_with_operand_options, contract_pair_with_options,
+    contract_with_options, outer_product, print_and_reset_contract_profile, reset_contract_profile,
+    tensordot, ContractionOptions, PairwiseContractionOptions, PreparedContraction,
 };
 pub use defaults::idx_tensor::{
     print_and_reset_pairwise_contract_profile, reset_pairwise_contract_profile,

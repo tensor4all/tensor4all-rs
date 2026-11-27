@@ -1,0 +1,369 @@
+{
+  "scope": "Tracked text files at fixed commits, including source, manifests, tests, examples, binding sources and documentation; no crates.io or private usage census.",
+  "identifier_pattern": "\\b(contract_owned|contract_owned_with_options|einsum_native_tensors_owned)\\b",
+  "command": [
+    "git",
+    "grep",
+    "-I",
+    "-n",
+    "-E",
+    "<identifier_pattern>",
+    "<revision>",
+    "--"
+  ],
+  "workspace": {
+    "baseline": {
+      "revision": "379868e01f2df19cfc2bee11eae8e3fb8e05b0b9",
+      "matches": [
+        {
+          "path": "crates/tensor4all-core/src/defaults/contract.rs",
+          "line": 35,
+          "text": "use crate::implicit_route::{einsum_native_tensor_reads, einsum_native_tensors_owned};"
+        },
+        {
+          "path": "crates/tensor4all-core/src/defaults/contract.rs",
+          "line": 542,
+          "text": "pub fn contract_owned(tensors: Vec<IdxTensor>) -> std::result::Result<IdxTensor, IdxTensorError> {"
+        },
+        {
+          "path": "crates/tensor4all-core/src/defaults/contract.rs",
+          "line": 543,
+          "text": "    contract_owned_with_options(tensors, ContractionOptions::new())"
+        },
+        {
+          "path": "crates/tensor4all-core/src/defaults/contract.rs",
+          "line": 552,
+          "text": "pub fn contract_owned_with_options("
+        },
+        {
+          "path": "crates/tensor4all-core/src/defaults/contract.rs",
+          "line": 683,
+          "text": "/// This is the consuming implementation for [`contract_owned_with_options`]. It"
+        },
+        {
+          "path": "crates/tensor4all-core/src/defaults/contract.rs",
+          "line": 746,
+          "text": "            let result_native = einsum_native_tensors_owned(native_operands, &plan.output_ids)?;"
+        },
+        {
+          "path": "crates/tensor4all-core/src/defaults/contract/tests/mod.rs",
+          "line": 118,
+          "text": "    let err = contract_owned(vec![a, b]).unwrap_err();"
+        },
+        {
+          "path": "crates/tensor4all-core/src/defaults/contract/tests/mod.rs",
+          "line": 447,
+          "text": "    let owned = contract_owned_with_options(vec![a.clone(), b.clone()], options).unwrap();"
+        },
+        {
+          "path": "crates/tensor4all-core/src/defaults/contract/tests/mod.rs",
+          "line": 467,
+          "text": "    let owned = contract_owned_with_options(vec![a.clone()], options).unwrap();"
+        },
+        {
+          "path": "crates/tensor4all-core/src/defaults/contract/tests/mod.rs",
+          "line": 487,
+          "text": "    let owned = contract_owned_with_options(vec![a.clone(), b.clone()], options).unwrap();"
+        },
+        {
+          "path": "crates/tensor4all-core/src/defaults/contract/tests/mod.rs",
+          "line": 526,
+          "text": "        contract_owned_with_options(vec![a.clone(), b.clone(), c.clone()], options).unwrap();"
+        },
+        {
+          "path": "crates/tensor4all-core/src/defaults/contract/tests/mod.rs",
+          "line": 563,
+          "text": "    let owned = contract_owned_with_options(vec![x.clone(), y], options).unwrap();"
+        },
+        {
+          "path": "crates/tensor4all-core/src/defaults/contract/tests/mod.rs",
+          "line": 600,
+          "text": "        contract_owned(vec![a, b]).unwrap()"
+        },
+        {
+          "path": "crates/tensor4all-core/src/defaults/mod.rs",
+          "line": 40,
+          "text": "    contract, contract_owned, contract_owned_with_options, contract_pair,"
+        },
+        {
+          "path": "crates/tensor4all-core/src/implicit_route.rs",
+          "line": 121,
+          "text": "        einsum_native_tensors, einsum_native_tensors_owned, hermitian_eigendecomposition,"
+        },
+        {
+          "path": "crates/tensor4all-core/src/implicit_route.rs",
+          "line": 356,
+          "text": "    /// Refusing stand-in for the global `einsum_native_tensors_owned`."
+        },
+        {
+          "path": "crates/tensor4all-core/src/implicit_route.rs",
+          "line": 362,
+          "text": "    pub fn einsum_native_tensors_owned("
+        },
+        {
+          "path": "crates/tensor4all-core/src/lib.rs",
+          "line": 176,
+          "text": "    contract, contract_owned, contract_owned_with_options, contract_pair,"
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/lib.rs",
+          "line": 130,
+          "text": "    einsum_native_tensors_owned, native_tensor_primal_to_diag, outer_product_native_tensor,"
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/matrix.rs",
+          "line": 2097,
+          "text": "    let c = crate::tenferro_bridge::einsum_native_tensors_owned("
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/tenferro_bridge.rs",
+          "line": 1525,
+          "text": "/// use tensor4all_tensorbackend::einsum_native_tensors_owned;"
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/tenferro_bridge.rs",
+          "line": 1531,
+          "text": "/// let result = einsum_native_tensors_owned(vec![(lhs, vec![0, 1]), (rhs, vec![1, 2])], &[0, 2])?;"
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/tenferro_bridge.rs",
+          "line": 1539,
+          "text": "pub fn einsum_native_tensors_owned("
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/tenferro_bridge.rs",
+          "line": 1548,
+          "text": "/// Same kernel, validation and result as `einsum_native_tensors_owned`, entered"
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/tenferro_bridge.rs",
+          "line": 1553,
+          "text": "/// Returns the same errors as [`einsum_native_tensors_owned`] (an empty operand"
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/tenferro_bridge/tests/mod.rs",
+          "line": 741,
+          "text": "    let expected = einsum_native_tensors_owned("
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/tenferro_bridge/tests/mod.rs",
+          "line": 915,
+          "text": "        einsum_native_tensors_owned(vec![(lhs, vec![0, 1]), (rhs, vec![1, 2])], &[0, 2]).unwrap();"
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/tenferro_bridge/tests/mod.rs",
+          "line": 1263,
+          "text": "    let owned = einsum_native_tensors_owned(vec![(owned_tensor, vec![oversized])], &[0]);"
+        },
+        {
+          "path": "docs/design/core-contraction-api.md",
+          "line": 13,
+          "text": "  owned variant (`contract_owned(vec![a, b, c])`) exists as an explicit"
+        },
+        {
+          "path": "docs/design/core-contraction-api.md",
+          "line": 18,
+          "text": "  is to converge on N-ary `contract`/`contract_owned` plus explicit"
+        },
+        {
+          "path": "docs/design/core-contraction-api.md",
+          "line": 23,
+          "text": "- `contract` / `contract_owned` and their `contract_with_options` /"
+        },
+        {
+          "path": "docs/design/core-contraction-api.md",
+          "line": 24,
+          "text": "  `contract_owned_with_options` variants:"
+        },
+        {
+          "path": "docs/plans/2026-04-24-contraction-nary-einsum-unification.md",
+          "line": 569,
+          "text": "pub fn einsum_native_tensors_owned("
+        },
+        {
+          "path": "docs/plans/2026-04-24-contraction-nary-einsum-unification.md",
+          "line": 596,
+          "text": "- If no operand tracks grad and all operands are dense native-compatible, donate native tensors into `einsum_native_tensors_owned`."
+        },
+        {
+          "path": "scripts/implicit-engine-sites-baseline.json",
+          "line": 221,
+          "text": "  {\"path\": \"crates/tensor4all-tensorbackend/src/tenferro_bridge.rs\", \"pattern\": \"global-accessor\", \"scope\": \"einsum_native_tensors_owned\", \"site\": \"default_context()\", \"count\": 1},"
+        }
+      ]
+    },
+    "pre_followup": {
+      "revision": "153f4f4d1d5e032e9588be809ffc6c6060297b92",
+      "matches": [
+        {
+          "path": "CHANGELOG.md",
+          "line": 465,
+          "text": "- Removed `tensor4all_core::contract_owned` and"
+        },
+        {
+          "path": "CHANGELOG.md",
+          "line": 466,
+          "text": "  `contract_owned_with_options` (#1381). Use `contract(&[&a, &b, ...])` or"
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/lib.rs",
+          "line": 130,
+          "text": "    einsum_native_tensors_owned, native_tensor_primal_to_diag, outer_product_native_tensor,"
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/matrix.rs",
+          "line": 2097,
+          "text": "    let c = crate::tenferro_bridge::einsum_native_tensors_owned("
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/tenferro_bridge.rs",
+          "line": 1525,
+          "text": "/// use tensor4all_tensorbackend::einsum_native_tensors_owned;"
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/tenferro_bridge.rs",
+          "line": 1531,
+          "text": "/// let result = einsum_native_tensors_owned(vec![(lhs, vec![0, 1]), (rhs, vec![1, 2])], &[0, 2])?;"
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/tenferro_bridge.rs",
+          "line": 1539,
+          "text": "pub fn einsum_native_tensors_owned("
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/tenferro_bridge.rs",
+          "line": 1548,
+          "text": "/// Same kernel, validation and result as `einsum_native_tensors_owned`, entered"
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/tenferro_bridge.rs",
+          "line": 1553,
+          "text": "/// Returns the same errors as [`einsum_native_tensors_owned`] (an empty operand"
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/tenferro_bridge/tests/mod.rs",
+          "line": 741,
+          "text": "    let expected = einsum_native_tensors_owned("
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/tenferro_bridge/tests/mod.rs",
+          "line": 915,
+          "text": "        einsum_native_tensors_owned(vec![(lhs, vec![0, 1]), (rhs, vec![1, 2])], &[0, 2]).unwrap();"
+        },
+        {
+          "path": "crates/tensor4all-tensorbackend/src/tenferro_bridge/tests/mod.rs",
+          "line": 1263,
+          "text": "    let owned = einsum_native_tensors_owned(vec![(owned_tensor, vec![oversized])], &[0]);"
+        },
+        {
+          "path": "docs/plans/2026-04-24-contraction-nary-einsum-unification.md",
+          "line": 569,
+          "text": "pub fn einsum_native_tensors_owned("
+        },
+        {
+          "path": "docs/plans/2026-04-24-contraction-nary-einsum-unification.md",
+          "line": 596,
+          "text": "- If no operand tracks grad and all operands are dense native-compatible, donate native tensors into `einsum_native_tensors_owned`."
+        },
+        {
+          "path": "scripts/implicit-engine-sites-baseline.json",
+          "line": 220,
+          "text": "  {\"path\": \"crates/tensor4all-tensorbackend/src/tenferro_bridge.rs\", \"pattern\": \"global-accessor\", \"scope\": \"einsum_native_tensors_owned\", \"site\": \"default_context()\", \"count\": 1},"
+        }
+      ]
+    }
+  },
+  "external": [
+    {
+      "repository": "tensor4all/tenferro-rs",
+      "revision": "5358cbb2a24496289d74223766532f247cc350a4",
+      "identifier_matches": [],
+      "tensor4all_core_manifest_matches": [],
+      "mpi_capi_matches": [
+        "5358cbb2a24496289d74223766532f247cc350a4:docs/design/mpi-native-abi.md:387:- Every `extern \"C\"` entry of `tenferro-mpi-capi` runs its body inside"
+      ]
+    },
+    {
+      "repository": "tensor4all/tenferro-sci-rs",
+      "revision": "dc5026c2afdf3998d53f3af0b931055e06c3ee56",
+      "identifier_matches": [],
+      "tensor4all_core_manifest_matches": [],
+      "mpi_capi_matches": []
+    },
+    {
+      "repository": "tensor4all/Tensor4all.jl",
+      "revision": "22ea6c8b2388acbaf62836ac381696887129b8ab",
+      "identifier_matches": [],
+      "tensor4all_core_manifest_matches": [],
+      "mpi_capi_matches": []
+    }
+  ],
+  "tooling": {
+    "cargo_public_api_available": false,
+    "source_api_inventory": "xtask api-dump (16 public crates verified); source-based declaration inventory, not feature-aware rustdoc or semver analysis",
+    "inventory": {
+      "baseline": {
+        "tensor4all_core": {
+          "contract_owned": 1,
+          "contract_owned_with_options": 1,
+          "einsum_native_tensors_owned": 1,
+          "einsum_native_tensors_owned_in": 0
+        },
+        "tensor4all_tensorbackend": {
+          "contract_owned": 0,
+          "contract_owned_with_options": 0,
+          "einsum_native_tensors_owned": 1,
+          "einsum_native_tensors_owned_in": 1
+        }
+      },
+      "updated": {
+        "tensor4all_core": {
+          "contract_owned": 0,
+          "contract_owned_with_options": 0,
+          "einsum_native_tensors_owned": 0,
+          "einsum_native_tensors_owned_in": 0
+        },
+        "tensor4all_tensorbackend": {
+          "contract_owned": 0,
+          "contract_owned_with_options": 0,
+          "einsum_native_tensors_owned": 1,
+          "einsum_native_tensors_owned_in": 1
+        }
+      }
+    },
+    "compiled_export_audit": [
+      "core root and defaults re-exports",
+      "core::legacy wildcard of implicit_route",
+      "implicit_route global-defaults re-export and refusing stub",
+      "tensorbackend root exports and retained definitions"
+    ]
+  },
+  "mpi_capi": {
+    "repository_name_search_results": [],
+    "tenferro_tree_truncated": false,
+    "status": "Only docs/design/mpi-native-abi.md names tenferro-mpi-capi; no crate/source path at the surveyed tenferro commit. No standalone repository was returned by the name search."
+  },
+  "interpretation": {
+    "owned_contraction_non_test_consumers": "None outside the defining core wrapper/implementation",
+    "owned_contraction_unit_test_call_sites": 7,
+    "core_legacy_owned_einsum_caller": "Removed core owned contraction implementation only; remaining tensorbackend matrix call targets the separate backend-owned API",
+    "external_identifier_matches": 0,
+    "limitations": [
+      "Static identifier searches cannot detect every renamed or generated call.",
+      "Other revisions, private repositories, unavailable deployed MPI C API code and uninspected dependents are not covered."
+    ]
+  },
+  "validation_timing_probe": {
+    "baseline_revision": "379868e01f2df19cfc2bee11eae8e3fb8e05b0b9",
+    "method": "Append this test to crates/tensor4all-core/tests/prepared_contraction.rs in a disposable baseline checkout; compare with the already-committed retained_label_dimension_mismatch_is_rejected_during_planning test on the PR.",
+    "command": "cargo test --locked -p tensor4all-core --test integration review_probe_retained_dimension_validation_timing -- --nocapture",
+    "gate": "ai-run build --mem 6G",
+    "actual_output": [
+      "baseline ordinary rejected: IdxTensor IdxTensor failed: Internal label shape mismatch: label 0 has dimensions 2 and 3; prepared constructor accepted: true",
+      "test prepared_contraction::review_probe_retained_dimension_validation_timing ... ok",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 525 filtered out; finished in 0.02s"
+    ],
+    "test_source": "#[test]\nfn review_probe_retained_dimension_validation_timing() {\n    let small = tensor4all_core::Index::new(tensor4all_core::DynId(701), 2);\n    let large = tensor4all_core::Index::new(tensor4all_core::DynId(701), 3);\n    let a = tensor4all_core::IdxTensor::from_dense(vec![small.clone()], vec![1.0_f64, 2.0]).unwrap();\n    let b = tensor4all_core::IdxTensor::from_dense(vec![large], vec![3.0_f64, 4.0, 5.0]).unwrap();\n    let retained = [small];\n    let options = tensor4all_core::ContractionOptions::new().with_retain_indices(&retained);\n    let ordinary = tensor4all_core::contract_with_options(&[&a, &b], options).unwrap_err();\n    let prepared = tensor4all_core::PreparedContraction::new(&[&a, &b], options);\n    println!(\"baseline ordinary rejected: {ordinary}; prepared constructor accepted: {}\", prepared.is_ok());\n    assert!(ordinary.to_string().contains(\"Internal label shape mismatch\"));\n    assert!(prepared.is_ok());\n}\n",
+    "result": "The old ordinary dense call rejects the mismatch; the old prepared constructor accepts the invalid metadata. The PR rejects both at planning."
+  }
+}

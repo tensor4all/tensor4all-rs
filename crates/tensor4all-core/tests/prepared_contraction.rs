@@ -2,7 +2,7 @@ use tensor4all_core::{
     contract, ContractionOptions, DynId, DynIndex, IdxTensor, IdxTensorError, Index,
     PreparedContraction, TagSet,
 };
-use tensor4all_tensorbackend::StorageKind;
+use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext, StorageKind};
 
 fn dense(indices: Vec<DynIndex>, values: Vec<f64>) -> IdxTensor {
     IdxTensor::from_dense(indices, values).unwrap()
@@ -39,6 +39,8 @@ fn prepared_dense_nary_matches_ordinary_for_new_values_and_mixed_dtype() {
 
     let prepared = plan.execute(&[&a, &b, &c]).unwrap();
     let ordinary = contract(&[&a, &b, &c]).unwrap();
+    assert!(prepared.is_f64());
+    assert!(ordinary.is_f64());
     assert!(prepared.isapprox(&ordinary, 1.0e-12, 0.0).unwrap());
 }
 
@@ -107,6 +109,7 @@ fn prepared_structured_contraction_supports_mixed_dtype() {
         result.storage().unwrap().storage_kind(),
         StorageKind::Diagonal
     );
+    assert!(result.is_f64());
     assert_eq!(result.to_vec::<f64>().unwrap(), vec![3.0, 0.0, 0.0, 8.0]);
 }
 
@@ -238,4 +241,89 @@ fn prepared_contraction_rejects_empty_disconnected_and_missing_retained_inputs()
         ContractionOptions::new().with_retain_indices(&missing),
     )
     .is_err());
+}
+
+// Keep the ordinary and prepared dispatch in parity when storage, AD and dtype
+// promotion all apply. The first two operands are disconnected, so execution
+// must plan the connected network rather than multiply pairs in input order.
+fn assert_structured_gradient_dispatch(retained: bool) {
+    for prepared in [false, true] {
+        let i = DynIndex::new_dyn(2);
+        let k = DynIndex::new_dyn(2);
+        let j = DynIndex::new_dyn(2);
+        let output = DynIndex::new_dyn(2);
+        let a = IdxTensor::from_diag(vec![i.clone(), k.clone()], vec![1.0_f64, 2.0])
+            .unwrap()
+            .enable_grad()
+            .unwrap();
+        let b = IdxTensor::from_diag(vec![k.clone(), j.clone()], vec![3.0_f32, 4.0]).unwrap();
+        let c = IdxTensor::from_diag(vec![j, output.clone()], vec![5.0_f64, 6.0]).unwrap();
+        let retained_indices = if retained { vec![k.clone()] } else { vec![] };
+        let options = ContractionOptions::new().with_retain_indices(&retained_indices);
+        let operands = [&a, &c, &b];
+        let result = if prepared {
+            PreparedContraction::new(&operands, options)
+                .unwrap()
+                .execute(&operands)
+                .unwrap()
+        } else {
+            tensor4all_core::contract_with_options(&operands, options).unwrap()
+        };
+        let expected_indices = if retained {
+            vec![i, k, output]
+        } else {
+            vec![i, output]
+        };
+        let expected = IdxTensor::from_diag(expected_indices, vec![15.0_f64, 48.0]).unwrap();
+        assert!(result.is_f64());
+        assert!(result.isapprox(&expected, 1e-12, 0.0).unwrap());
+        assert_eq!(
+            result.storage().unwrap().storage_kind(),
+            StorageKind::Diagonal
+        );
+        result.sum().unwrap().backward().unwrap();
+        assert_eq!(
+            a.grad().unwrap().unwrap().to_vec::<f64>().unwrap(),
+            vec![15.0, 0.0, 0.0, 24.0]
+        );
+    }
+}
+
+#[test]
+fn structured_nary_dispatch_preserves_mixed_dtype_gradients() {
+    assert_structured_gradient_dispatch(false);
+}
+
+#[test]
+fn retained_structured_nary_dispatch_preserves_mixed_dtype_gradients() {
+    assert_structured_gradient_dispatch(true);
+}
+
+#[test]
+fn retained_label_dimension_mismatch_is_rejected_during_planning() {
+    // Index identity excludes dimension, so retained-label equality alone does
+    // not establish that the two payload axes can share an einsum label.
+    let small = Index::new(DynId(701), 2);
+    let large = Index::new(DynId(701), 3);
+    let a = dense(vec![small.clone()], vec![1.0, 2.0]);
+    let b = dense(vec![large], vec![3.0, 4.0, 5.0]);
+    let retained = [small];
+    let options = ContractionOptions::new().with_retain_indices(&retained);
+    let ordinary = tensor4all_core::contract_with_options(&[&a, &b], options).unwrap_err();
+    let prepared = PreparedContraction::new(&[&a, &b], options).unwrap_err();
+    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
+    let session = context
+        .with_concrete_session(|session| {
+            tensor4all_core::contract_with_options_on_session(session, &[&a, &b], options)
+        })
+        .unwrap()
+        .unwrap_err();
+    assert!(ordinary
+        .to_string()
+        .contains("Internal label shape mismatch"));
+    assert_eq!(ordinary.to_string(), prepared.to_string());
+    assert!(matches!(session, IdxTensorError::Operation { .. }));
+    assert!(session
+        .to_string()
+        .contains("Internal label shape mismatch"));
 }

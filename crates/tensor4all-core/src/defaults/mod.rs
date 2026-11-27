@@ -37,8 +37,7 @@ pub mod qr;
 pub mod svd;
 
 pub use contract::{
-    contract, contract_owned, contract_owned_with_options, contract_pair,
-    contract_pair_with_options, contract_with_options, outer_product,
+    contract, contract_pair, contract_pair_with_options, contract_with_options, outer_product,
     print_and_reset_contract_profile, reset_contract_profile, tensordot, ContractionOptions,
 };
 pub use contract_session::{
