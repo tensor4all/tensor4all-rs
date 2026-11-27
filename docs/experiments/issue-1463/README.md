@@ -2,7 +2,7 @@
 
 Pilot for the review discussion on #1463, **not** an acceptance threshold:
 synthetic targets, one Apple M3, no universal factor is claimed, x86 numbers
-are welcome. Folding (`L+2 -> L` cores) is not implemented and not measured.
+are welcome. Folding (`L+2 -> L` cores) is measured in the addendum at the end.
 
 ## Setup
 
@@ -117,3 +117,48 @@ Synthetic targets; one machine and compiler; the 50 us callback is a busy loop,
 not a real source; the stop error is sampled, not a bound (final errors land at
 `1e-9` to `1.3e-8` of `max|F|`); 3 timed repetitions, so differences of a few
 percent are noise; x86 pending.
+
+## Addendum: folded layout (`MatrixTCI2Result::to_folded`)
+
+Folding is about the **output shape** (matrix indices as open legs of the end
+cores, `L+2 -> L` cores), not about speed: it contracts the row core into the
+first and the column core into the last physical core, represents the same
+function (no new samples, no truncation, one contraction per end at conversion)
+and changes the readout by 0.98-1.05x, noise level. Measured on the four step-0
+cases at `f64`, Full pivoting, cheap callback, fit A, `L = 12`
+([folding.csv](folding.csv); `python3 docs/experiments/issue-1463/run.py fold`,
+same host and flags as above, release, one thread, `nice`). Bytes are core data
+only (`retained_bytes()` of each layout). Readout is the whole matrix at 1024
+points (every fourth of the 4096), median of 3 rounds after one warm-up round.
+
+Three readouts, so that slab extraction and folding are not conflated:
+
+- **old**: the library `MatrixTCI2Result::evaluate`, which extracts every slab
+  element by element through `Tensor3Ops::slice_site` (checked per-element
+  indexing);
+- **fast L+2**: harness-local; the harness copies the L+2 cores once into raw
+  column-major buffers and extracts slabs by contiguous copies (bit-identical
+  to the library readout, asserted on all 1024 points);
+- **folded**: `FoldedMatrixTT::evaluate`, which stores raw column-major cores
+  (agrees with the L+2 readout to `1e-10 max|F|`, asserted).
+
+| target | shape | max bond | bytes L+2 | bytes folded | folded / L+2 | ms old | ms fast L+2 | ms folded | old / fast | fast / folded |
+|---|---|---|---|---|---|---|---|---|---|---|
+| corr r=2 | 2x3 | 12 | 12320 | 12304 | 0.999 | 6.36 | 3.22 | 3.08 | 1.97 | 1.05 |
+| corr r=2 | 8x8 | 12 | 12688 | 13200 | 1.040 | 8.99 | 5.56 | 5.48 | 1.62 | 1.01 |
+| unrel | 2x3 | 25 | 40008 | 39904 | 0.997 | 18.37 | 8.56 | 8.36 | 2.15 | 1.02 |
+| unrel | 8x8 | 78 | 387712 | 386688 | 0.997 | 229.00 | 133.43 | 135.88 | 1.72 | 0.98 |
+
+- **Folding effect (fast L+2 to folded):** 0.98-1.05x, noise of three
+  repetitions. Folding removes only 2 of the `L+1 = 13` slab products.
+- **Apparent speedup:** folded versus the library L+2 readout is 1.6-2.2x, but it
+  is a side effect of slab extraction, not of folding: the folded type stores raw
+  column-major cores, the library L+2 readout reads element by element. Making the
+  library L+2 readout equally fast today would need a duplicate column-major copy
+  of every core, because `Tensor3` has no zero-copy column-major view; that is
+  proposed separately in #1513. The library L+2 readout is therefore unchanged.
+- **Storage:** barely moves (the end cores are a small part of 12 interior cores)
+  and grows only for corr 8x8, by 4.0%, where `rows * d_1 * r_1` exceeds
+  `rows * r_0 + r_0 * d_1 * r_1`. `L+2` stays the default.
+
+One machine, three repetitions, plain-loop readout: indicative, not a rule.

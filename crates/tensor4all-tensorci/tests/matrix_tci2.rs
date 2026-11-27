@@ -37,24 +37,7 @@ const PHYSICAL_DIMS: [usize; 3] = [3, 4, 2];
 /// Non-symmetric rank-two target: two separable terms with opposite slopes in
 /// `x` and different row and column factors.
 fn target<T: TestScalar>(shape: MatrixShape, x: &[usize]) -> Matrix<T> {
-    let (left, right) = x
-        .iter()
-        .zip(PHYSICAL_DIMS)
-        .fold((1.0, 1.0), |(l, r), (&c, d)| {
-            (
-                l * (1.0 + c as f64 / 4.0),
-                r * (1.0 + (d - 1 - c) as f64 / 8.0),
-            )
-        });
-    let mut data = Vec::with_capacity(shape.rows * shape.cols);
-    for j in 0..shape.cols {
-        for i in 0..shape.rows {
-            let first = (1.0 + i as f64) * (1.0 + 2.0 * j as f64) * left;
-            let second = (3.0 - i as f64) * (1.0 + (j * j) as f64) * right;
-            data.push(T::make(first + second, 0.5 * first - 0.25 * second));
-        }
-    }
-    Matrix::from_col_major_vec(shape.rows, shape.cols, data)
+    target_for::<T>(shape, &PHYSICAL_DIMS, x)
 }
 
 fn options(pivot_search: PivotSearchStrategy) -> TCI2Options {
@@ -262,6 +245,150 @@ fn reconstruction<T: TestScalar>(shape: MatrixShape, pivot_search: PivotSearchSt
     );
 }
 
+/// Folded readout against the `L + 2` readout and the target on every point:
+/// both at the scalar reconstruction tolerance, and the two layouts against
+/// each other at the same tolerance (folding adds only two contractions).
+fn folded_reconstruction<T: TestScalar>(
+    shape: MatrixShape,
+    physical: &[usize],
+    initial: Vec<MultiIndex>,
+    pivot_search: PivotSearchStrategy,
+) {
+    let block = |x: &[usize]| target_for::<T>(shape, physical, x);
+    let fit = crossinterpolate2_matrix::<T, _>(
+        |points: &[Vec<usize>], out: &mut [T]| fill_blocks(points, out, block),
+        shape,
+        physical.to_vec(),
+        initial,
+        options(pivot_search),
+    )
+    .unwrap();
+    let folded = fit.to_folded().unwrap();
+    assert_eq!(folded.shape(), shape);
+    assert_eq!(folded.len(), physical.len());
+    assert_eq!(folded.site_dims(), physical);
+
+    let points = all_points(physical);
+    let bound = RECONSTRUCTION_RTOL * scale(&points, block);
+    for x in &points {
+        let plain = fit.evaluate(x).unwrap();
+        let fold = folded.evaluate(x).unwrap();
+        let exact = block(x);
+        assert_eq!((fold.nrows(), fold.ncols()), (shape.rows, shape.cols));
+        for ((f, p), e) in fold
+            .as_col_major_slice()
+            .iter()
+            .zip(plain.as_col_major_slice())
+            .zip(exact.as_col_major_slice())
+        {
+            assert!(
+                Scalar::abs_sq(*f - *e).sqrt() < bound,
+                "folded vs target at {x:?}"
+            );
+            assert!(
+                Scalar::abs_sq(*p - *e).sqrt() < bound,
+                "L+2 vs target at {x:?}"
+            );
+            assert!(
+                Scalar::abs_sq(*f - *p).sqrt() < bound,
+                "folded vs L+2 at {x:?}"
+            );
+        }
+    }
+}
+
+/// The rank-two target for any physical dimensions `physical`.
+fn target_for<T: TestScalar>(shape: MatrixShape, physical: &[usize], x: &[usize]) -> Matrix<T> {
+    let (left, right) = x.iter().zip(physical).fold((1.0, 1.0), |(l, r), (&c, &d)| {
+        (
+            l * (1.0 + c as f64 / 4.0),
+            r * (1.0 + (d - 1 - c) as f64 / 8.0),
+        )
+    });
+    let mut data = Vec::with_capacity(shape.rows * shape.cols);
+    for j in 0..shape.cols {
+        for i in 0..shape.rows {
+            let first = (1.0 + i as f64) * (1.0 + 2.0 * j as f64) * left;
+            let second = (3.0 - i as f64) * (1.0 + (j * j) as f64) * right;
+            data.push(T::make(first + second, 0.5 * first - 0.25 * second));
+        }
+    }
+    Matrix::from_col_major_vec(shape.rows, shape.cols, data)
+}
+
+/// Core bytes of both layouts from the closed forms, using the bonds
+/// `r_0, .., r_L` of the `L + 2` train and the physical dimensions.
+fn expected_bytes<T>(shape: MatrixShape, physical: &[usize], bonds: &[usize]) -> (usize, usize) {
+    let l = physical.len();
+    assert_eq!(bonds.len(), l + 1);
+    let interior = |range: std::ops::Range<usize>| -> usize {
+        range.map(|k| bonds[k] * physical[k] * bonds[k + 1]).sum()
+    };
+    let unfolded = shape.rows * bonds[0] + interior(0..l) + bonds[l] * shape.cols;
+    let folded = if l == 1 {
+        shape.rows * physical[0] * shape.cols
+    } else {
+        shape.rows * physical[0] * bonds[1]
+            + interior(1..l - 1)
+            + bonds[l - 1] * physical[l - 1] * shape.cols
+    };
+    let size = std::mem::size_of::<T>();
+    (unfolded * size, folded * size)
+}
+
+fn folded_bytes<T: TestScalar>(shape: MatrixShape, physical: &[usize], initial: Vec<MultiIndex>) {
+    let fit = crossinterpolate2_matrix::<T, _>(
+        |points: &[Vec<usize>], out: &mut [T]| {
+            fill_blocks(points, out, |x| target_for::<T>(shape, physical, x));
+        },
+        shape,
+        physical.to_vec(),
+        initial,
+        options(PivotSearchStrategy::Full),
+    )
+    .unwrap();
+    let bonds = fit.to_tensor_train().unwrap().link_dims();
+    let (unfolded, folded) = expected_bytes::<T>(shape, physical, &bonds);
+    assert_eq!(fit.retained_bytes(), unfolded);
+    assert_eq!(fit.to_folded().unwrap().retained_bytes(), folded);
+    // Bond layout of the folded cores: rows and cols are the open end legs.
+    let dims = fit.to_folded().unwrap().core_dims();
+    assert_eq!(dims[0][0], shape.rows);
+    assert_eq!(dims[dims.len() - 1][2], shape.cols);
+}
+
+/// Folded readout of the asymmetric target, entry by entry (a swapped row/column
+/// layout in the folded readout would fail here).
+fn folded_swapped_axes_guard<T: TestScalar>(shape: MatrixShape, pivot_search: PivotSearchStrategy) {
+    let dims = [3, 4];
+    let block = |x: &[usize]| asymmetric::<T>(shape, x);
+    let fit = crossinterpolate2_matrix::<T, _>(
+        |points: &[Vec<usize>], out: &mut [T]| fill_blocks(points, out, block),
+        shape,
+        dims.to_vec(),
+        vec![],
+        options(pivot_search),
+    )
+    .unwrap();
+    let folded = fit.to_folded().unwrap();
+    let points = all_points(&dims);
+    let bound = RECONSTRUCTION_RTOL * scale(&points, block);
+    for x in &points {
+        let exact = block(x);
+        let approx = folded.evaluate(x).unwrap();
+        assert_eq!((approx.nrows(), approx.ncols()), (shape.rows, shape.cols));
+        for i in 0..shape.rows {
+            for j in 0..shape.cols {
+                let diff = Scalar::abs_sq(approx[[i, j]] - exact[[i, j]]).sqrt();
+                assert!(diff < bound, "entry ({i}, {j}) at {x:?}: {diff}");
+            }
+        }
+        let swapped = Scalar::abs_sq(exact[[0, 1]] - exact[[1, 0]]).sqrt();
+        assert!(swapped > 1.0, "target must be asymmetric, got {swapped}");
+        assert!(Scalar::abs_sq(approx[[0, 1]] - exact[[1, 0]]).sqrt() > 0.5 * swapped);
+    }
+}
+
 /// Generates the parity and reconstruction tests of one matrix shape; each
 /// pivot strategy and scalar type is a separate test.
 macro_rules! shape_tests {
@@ -305,6 +432,50 @@ macro_rules! shape_tests {
             #[test]
             fn reconstruction_rook_complex64() {
                 reconstruction::<Complex64>(SHAPE, PivotSearchStrategy::Rook);
+            }
+            #[test]
+            fn folded_full_f64() {
+                folded_reconstruction::<f64>(
+                    SHAPE,
+                    &PHYSICAL_DIMS,
+                    vec![initial_pivot(SHAPE)],
+                    PivotSearchStrategy::Full,
+                );
+            }
+            #[test]
+            fn folded_rook_f64() {
+                folded_reconstruction::<f64>(
+                    SHAPE,
+                    &PHYSICAL_DIMS,
+                    vec![initial_pivot(SHAPE)],
+                    PivotSearchStrategy::Rook,
+                );
+            }
+            #[test]
+            fn folded_full_complex64() {
+                folded_reconstruction::<Complex64>(
+                    SHAPE,
+                    &PHYSICAL_DIMS,
+                    vec![initial_pivot(SHAPE)],
+                    PivotSearchStrategy::Full,
+                );
+            }
+            #[test]
+            fn folded_rook_complex64() {
+                folded_reconstruction::<Complex64>(
+                    SHAPE,
+                    &PHYSICAL_DIMS,
+                    vec![initial_pivot(SHAPE)],
+                    PivotSearchStrategy::Rook,
+                );
+            }
+            #[test]
+            fn folded_bytes_match_closed_form_f64() {
+                folded_bytes::<f64>(SHAPE, &PHYSICAL_DIMS, vec![initial_pivot(SHAPE)]);
+            }
+            #[test]
+            fn folded_bytes_match_closed_form_complex64() {
+                folded_bytes::<Complex64>(SHAPE, &PHYSICAL_DIMS, vec![initial_pivot(SHAPE)]);
             }
         }
     };
@@ -547,6 +718,58 @@ fn one_by_one_layout_is_bit_identical_rook_f64() {
 #[test]
 fn one_by_one_layout_is_bit_identical_rook_complex64() {
     one_by_one_layout_is_bit_identical::<Complex64>(PivotSearchStrategy::Rook);
+}
+
+/// `L == 1`: both end cores fold into the single physical core.
+fn single_site_pivot(shape: MatrixShape) -> MultiIndex {
+    vec![1.min(shape.rows - 1), 2, 1.min(shape.cols - 1)]
+}
+
+macro_rules! single_site_tests {
+    ($($name:ident: $ty:ty, $rows:expr, $cols:expr, $strategy:expr;)*) => {
+        $(
+            #[test]
+            fn $name() {
+                let shape = MatrixShape { rows: $rows, cols: $cols };
+                folded_reconstruction::<$ty>(
+                    shape,
+                    &[4],
+                    vec![single_site_pivot(shape)],
+                    $strategy,
+                );
+                folded_bytes::<$ty>(shape, &[4], vec![single_site_pivot(shape)]);
+            }
+        )*
+    };
+}
+
+single_site_tests! {
+    folded_single_site_2x3_full_f64: f64, 2, 3, PivotSearchStrategy::Full;
+    folded_single_site_3x2_rook_f64: f64, 3, 2, PivotSearchStrategy::Rook;
+    folded_single_site_1x1_full_f64: f64, 1, 1, PivotSearchStrategy::Full;
+    folded_single_site_2x3_full_complex64: Complex64, 2, 3, PivotSearchStrategy::Full;
+    folded_single_site_3x1_rook_complex64: Complex64, 3, 1, PivotSearchStrategy::Rook;
+}
+
+macro_rules! folded_swapped_axes_tests {
+    ($($name:ident: $ty:ty, $rows:expr, $cols:expr, $strategy:expr;)*) => {
+        $(
+            #[test]
+            fn $name() {
+                folded_swapped_axes_guard::<$ty>(
+                    MatrixShape { rows: $rows, cols: $cols },
+                    $strategy,
+                );
+            }
+        )*
+    };
+}
+
+folded_swapped_axes_tests! {
+    folded_swapped_axes_2x3_full_f64: f64, 2, 3, PivotSearchStrategy::Full;
+    folded_swapped_axes_3x2_rook_f64: f64, 3, 2, PivotSearchStrategy::Rook;
+    folded_swapped_axes_2x3_full_complex64: Complex64, 2, 3, PivotSearchStrategy::Full;
+    folded_swapped_axes_3x2_rook_complex64: Complex64, 3, 2, PivotSearchStrategy::Rook;
 }
 
 /// `crossinterpolate2_matrix_with_rng` on a seeded stream equals
