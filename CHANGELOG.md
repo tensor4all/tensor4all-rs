@@ -419,6 +419,14 @@
 
 ### Added
 
+- `tensor4all-treetn`: `TreeTNCachedEvaluator::evaluate_candidates_typed` and
+  `evaluate_candidates_typed_with_parallelism` evaluate the candidate matrix of
+  one tree edge from two sides (`CandidateSide`: sites and `MultiIndex`
+  candidates), either all of it (`CandidateEntries::All`, column-major, left
+  fastest) or given `(left, right)` pairs (`CandidateEntries::Pairs`) (#1481).
+  The edge is inferred from the two site sets; values are the product of the two
+  directed messages across it, through the existing message caches and their
+  shared budget. Malformed requests report `CandidateInputError`.
 - `tensor4all-treeaci`: `TreeAciError::RollbackFailed { error, rollback }` (#1464).
   When a step fails and undoing its partial state fails too, the step's own error
   is returned in `error` with the rollback failure in `rollback`; before, the
@@ -470,6 +478,11 @@
 
 ### Breaking Rust API changes
 
+- `tensor4all-treetn`: `TreeTNOperationError` gains the variant
+  `InvalidCandidates { payload: CandidateInputError, context }` (#1481), so
+  exhaustive matches on it need a new arm. Under the 0.x policy this break
+  ships in the next minor release. The payload `CandidateInputError` is
+  `#[non_exhaustive]`, so later cases will not break callers again.
 - `tensor4all-treetci`: `TreeTciOptimizationResult` and `TreeTciRunResult`
   have a new public field, `local_threshold_factor: f64` (#1371). Neither
   struct is `#[non_exhaustive]`, so downstream struct literals and

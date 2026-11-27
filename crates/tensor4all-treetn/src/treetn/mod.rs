@@ -55,8 +55,9 @@ pub use decompose::{
 
 // Re-export cached evaluator types
 pub use cached_evaluator::{
-    CachedEvaluatorOptions, CachedEvaluatorPlan, CenterSearchResult, EvaluatedScalarKindMismatch,
-    EvaluationHint, GreedyCenterSearch, TreeTNCachedEvaluator,
+    CachedEvaluatorOptions, CachedEvaluatorPlan, CandidateEntries, CandidateInputError,
+    CandidateSide, CenterSearchResult, EvaluatedScalarKindMismatch, EvaluationHint,
+    GreedyCenterSearch, TreeTNCachedEvaluator,
 };
 
 // Re-export evaluator types

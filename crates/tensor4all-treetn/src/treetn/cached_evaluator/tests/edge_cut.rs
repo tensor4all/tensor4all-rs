@@ -558,7 +558,7 @@ fn warm_edge_cut_assembly_work_is_points_times_edge_bond_only() {
     );
 }
 
-fn typed_tree_from_edges<T: CachedEvaluatorTestScalar>(
+pub(super) fn typed_tree_from_edges<T: CachedEvaluatorTestScalar>(
     edges: &[(usize, usize)],
     bond_dims: &[usize],
 ) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
