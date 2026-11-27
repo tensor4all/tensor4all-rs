@@ -86,7 +86,7 @@ Direct cross interpolation on integer indices. TCI2 is the primary algorithm; TC
   - `tolerance` default 1e-8; 1e-6 explore, 1e-12 high accuracy.
   - `max_bond_dim` cap to prevent runaway on expensive functions.
   - `seed: Some(42)` for reproducibility.
-- `crossinterpolate2_matrix::<T, F>(source, MatrixShape, local_dims, initial_pivots, TCI2Options)` — chain TCI2 for a genuinely matrix-valued function with shared structure (`F(x) = sum_k a_k(x) U_k V_k^T`); `source` returns whole column-major matrices per point. For unrelated entries prefer separate `crossinterpolate2` fits.
+- `crossinterpolate2_matrix::<T, F>(source, MatrixShape, local_dims, initial_pivots, TCI2Options)` — chain TCI2 for a genuinely matrix-valued function with shared structure (`F(x) = sum_k a_k(x) U_k V_k^T`); `source` returns whole column-major matrices per point. `crossinterpolate2_matrix_with_rng` takes a caller-owned RNG; the result is `MatrixTCI2Result` (with `MatrixSamplingStats`). All of these, plus `MatrixShape`, are in `tensor4all_tensorci::prelude`. The cache limit is the 256 MiB default and not tunable yet. For unrelated entries prefer separate `crossinterpolate2` fits.
 - `opt_first_pivot::<T, F>(&f, &local_dims, &start, n_iters) -> MultiIndex` — local search for a large-`|f|` pivot.
 - `TensorCI2::to_tensor_train() -> Result<SimpleTensorTrain>`. Convergence: check `result.termination == TCI2Termination::Converged` (bond-error, global-pivot history, and rank stability all met). `MaxBondDimension` / `MaxIterations` are stops, **not** convergence — treat them as "not done".
 
@@ -405,7 +405,8 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   image and charges proved bounds within `share` of the allowance. All other entry points apply exactly. The `MergeRefineReport` reports `level_count`,
   `applied_operator_count`, `additions`, `projections`, `compression_attempts`,
   `compressions`, `work_items_per_level`, `peak_work_items`, `refined_regions`,
-  `stopped_regions`, region/term counts, `max_bond_dim`,
+  `stopped_regions`, `pruned_regions` (the coverage count under an `output_regions`
+  selection, separate from `error_bound`), region/term counts, `max_bond_dim`,
   `max_transient_bond_dim`, stored parameters, the pinned reference scale, the
   allowance, and the measured bound.
 

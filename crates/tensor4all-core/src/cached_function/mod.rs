@@ -212,7 +212,7 @@ impl<V: Clone + Send + Sync> InnerCache<V> {
         }
     }
 
-    /// Insert within `limit` bytes of table (see [`MemoTable::insert`]).
+    /// Insert within `limit` retained bytes (tables plus declared payload; see [`MemoTable::insert`]).
     fn insert_bounded<I: IndexInt>(
         &self,
         idx: &[I],

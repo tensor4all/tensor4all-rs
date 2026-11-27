@@ -231,7 +231,8 @@ differ as long as the leaves form a prefix code; by default they must also cover
 zero. `MergeRefineOptions` selects the output depth, the
 work limit, an optional soft rank goal, and the retained term budget;
 `MergeRefineReport` records the structural counters plus the pinned allowance and
-the measured bound. With `target_bond_dim` unset the trajectory is uniform and
+the measured bound; under an `output_regions` selection `pruned_regions` is the
+separate coverage count of the child regions the selection cut. With `target_bond_dim` unset the trajectory is uniform and
 exact (`error_bound` zero). With a goal it is adaptive: a region is merged without
 splitting first and stops as soon as that candidate fits the goal, and a candidate
 above the goal is refined only when its children store no more parameters in total

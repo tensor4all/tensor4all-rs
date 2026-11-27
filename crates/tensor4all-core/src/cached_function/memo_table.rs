@@ -33,11 +33,15 @@ pub(crate) struct Inserted {
 /// table, so up to 16 for the two generations, on NEON targets).
 /// During a growth the outgoing table is alive next to the new one: both tables
 /// fit the limit afterwards and the outgoing one is half the new one plus half a
-/// group, so the transient peak is at most 1.5 × limit + `GROUP_WIDTH` / 2.
+/// group, so the transient peak of the table bytes is at most
+/// 1.5 × limit + `GROUP_WIDTH` / 2 (with no declared payload, the limit is a
+/// table-byte limit; see `payload` below).
 ///
 /// A declared per-value `payload` (heap bytes every value carries, 0 by default)
 /// adds `len() × payload` to [`Self::bytes`] and is bounded by the same limit,
 /// so a payload-dominated table evicts by generation like a table-dominated one.
+/// The transient-peak bound above covers table bytes only; payload is counted
+/// once at its declared size, and undeclared heap payload not at all.
 #[derive(Debug, Clone)]
 pub(crate) struct MemoTable<K, V> {
     current: FxHashMap<K, V>,

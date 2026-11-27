@@ -352,13 +352,30 @@ fn scrambled_requests_keep_every_component_in_its_own_slot() {
 }
 
 #[test]
-fn point_payload_counts_entries_and_the_arc_header() {
+fn point_payload_is_the_arc_allocation_size() {
+    // f64 and Complex64 are at most word-aligned (on 64-bit), so the header
+    // is exactly the two counts and nothing is padded.
+    let header = 2 * std::mem::size_of::<usize>();
     assert_eq!(point_payload_bytes::<f64>(6), POINT_PAYLOAD);
+    assert_eq!(point_payload_bytes::<f64>(6), header + 6 * 8);
     assert_eq!(
         point_payload_bytes::<num_complex::Complex64>(1),
-        16 + 2 * std::mem::size_of::<usize>()
+        header + 16
+    );
+    assert_eq!(
+        point_payload_bytes::<num_complex::Complex64>(5),
+        header + 5 * 16
     );
     assert_eq!(point_payload_bytes::<f64>(usize::MAX), usize::MAX);
+}
+
+#[test]
+fn point_payload_pads_the_header_for_over_aligned_values() {
+    #[repr(align(32))]
+    #[derive(Clone, Copy)]
+    struct Wide(#[allow(dead_code)] [u8; 32]);
+    // Counts (16 bytes) are padded to the 32-byte alignment of the slice.
+    assert_eq!(point_payload_bytes::<Wide>(3), 32 + 3 * 32);
 }
 
 #[test]

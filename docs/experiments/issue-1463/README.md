@@ -78,7 +78,7 @@ Rook pivoting:
 - **Joint fit (D to A).** Ranks are higher (12 vs 8 for corr, 25 / 78 vs 9 for
   unrel). For correlated entries it still wins: 8x8 storage 22x smaller, fit
   time 4.8-20x (Full) and 5.9-22x (Rook) faster than D; 2x3 storage 1.9x smaller,
-  fit time 1.8-3.2x. For unrelated entries it loses on storage (about 1.3-1.4x more bytes), but
+  fit time 1.8-3.2x. For unrelated entries it loses on storage (the joint fit stores about 1.3-1.4x more bytes), but
   not on time except Rook 8x8 (D/A 0.45-0.53): it is 1.3-1.6x faster in the other
   six cases, where the separate fits need many more sweeps in total.
 - **Native entry point (A vs B).** A is not slower than the hand-written adapter
@@ -91,7 +91,7 @@ separate trains `rows*cols * r_sep^2`: the joint fit wins when
 `r_joint < sqrt(rows*cols) * r_sep`. Fit time scales like `r^3`, giving
 `r_joint < (rows*cols)^(1/3) * r_sep`. Storage rule against the data: corr 2x3
 12 < 2.45*8 (wins, 1.9x), corr 8x8 12 < 8*8 (22x), unrel 2x3 25 > 2.45*9 (loses,
-0.7x), unrel 8x8 78 > 8*9 (loses, 0.8x): right in all four. The fit-time rule
+the joint fit stores 1.4x more), unrel 8x8 78 > 8*9 (loses, 1.3x more): right in all four. The fit-time rule
 predicts losses for unrel and wins for corr; the data agree only for corr and
 Rook 8x8 unrel, since sweep counts and per-sweep costs differ between the fits. Which side an application is on depends on its
 target, which is why the choice should be documented rather than defaulted.
