@@ -331,15 +331,42 @@ fn partition_to_dense_avoids_summed_bond_blowup() {
         .unwrap();
         let patch = SubDomainTreeTN::new(tree, proj).unwrap();
 
-        // Expected 2x2 block for this patch from its own `to_dense`.
-        let block = patch.to_dense::<f64>().unwrap().to_vec::<f64>().unwrap();
-        assert_eq!(block.len(), 4);
-        for i_f1 in 0..2 {
+        // Compute the expected 2x2 block independently from the local node tensors
+        // (without calling `SubDomainTreeTN::to_dense`).
+        let mut t0_slice = vec![0.0_f64; chi];
+        for (b0_i, slot) in t0_slice.iter_mut().enumerate() {
+            let idx0 = v0 + 2 * (v1 + 2 * b0_i);
+            *slot = ((patch_idx + idx0 + 1) as f64) * 0.05;
+        }
+        let mut t1_slice = vec![0.0_f64; 2 * chi];
+        for b1_i in 0..chi {
             for i_f0 in 0..2 {
-                let linear = v0 + 2 * (v1 + 2 * (v2 + 2 * (v3 + 2 * (i_f0 + 2 * i_f1))));
-                expected[linear] = block[i_f0 + 2 * i_f1];
+                let mut sum = 0.0;
+                for (b0_i, &t0_val) in t0_slice.iter().enumerate() {
+                    let idx1 = b0_i + chi * (v2 + 2 * (v3 + 2 * (i_f0 + 2 * b1_i)));
+                    let val1 = (((patch_idx * 7 + idx1) % 13) as f64 - 6.0) * 0.1;
+                    sum += t0_val * val1;
+                }
+                t1_slice[i_f0 + 2 * b1_i] = sum;
             }
         }
+        let mut expected_block = Vec::with_capacity(4);
+        for i_f1 in 0..2 {
+            for i_f0 in 0..2 {
+                let mut val = 0.0;
+                for b1_i in 0..chi {
+                    let idx2 = b1_i + chi * i_f1;
+                    let val2 = 1.0 + 0.1 * ((patch_idx + idx2) as f64);
+                    val += t1_slice[i_f0 + 2 * b1_i] * val2;
+                }
+                expected_block.push(val);
+                let linear = v0 + 2 * (v1 + 2 * (v2 + 2 * (v3 + 2 * (i_f0 + 2 * i_f1))));
+                expected[linear] = val;
+            }
+        }
+        let block = patch.to_dense::<f64>().unwrap().to_vec::<f64>().unwrap();
+        assert_eq!(block.len(), 4);
+        assert_f64_slice_close(&block, &expected_block, 1e-11);
         patches.push(patch);
     }
 
@@ -351,4 +378,47 @@ fn partition_to_dense_avoids_summed_bond_blowup() {
     let dense = partition.to_dense::<f64>().unwrap();
     assert_eq!(dense.external_indices(), vec![p0, p1, p2, p3, f0, f1]);
     assert_f64_slice_close(&dense.to_vec::<f64>().unwrap(), &expected, 1e-11);
+}
+
+#[test]
+fn dense_partition_scatter_handles_differing_patch_leg_orders() {
+    // Two patches on the same site-index network whose node-1 tensor stores its
+    // two free site legs in opposite orders: `[s1a, s1b]` vs `[s1b, s1a]`.
+    let s0 = DynIndex::new_dyn(2);
+    let s1a = DynIndex::new_dyn(2);
+    let s1b = DynIndex::new_dyn(3);
+
+    let b_a = DynIndex::new_dyn(1);
+    let t0_a = IdxTensor::from_dense(vec![s0.clone(), b_a.clone()], vec![1.0_f64, 0.0]).unwrap();
+    let t1_a = IdxTensor::from_dense(
+        vec![b_a, s1a.clone(), s1b.clone()],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    )
+    .unwrap();
+    let tree_a = TreeTN::from_tensors(vec![t0_a, t1_a], vec![0usize, 1usize]).unwrap();
+    let patch_a =
+        SubDomainTreeTN::new(tree_a, Projector::from_pairs([(s0.clone(), 0)]).unwrap()).unwrap();
+
+    let b_b = DynIndex::new_dyn(1);
+    let t0_b = IdxTensor::from_dense(vec![s0.clone(), b_b.clone()], vec![0.0_f64, 1.0]).unwrap();
+    // Swapped leg order on node 1: `[s1b, s1a]` instead of `[s1a, s1b]`.
+    let t1_b = IdxTensor::from_dense(
+        vec![b_b, s1b.clone(), s1a.clone()],
+        vec![10.0_f64, 20.0, 30.0, 40.0, 50.0, 60.0],
+    )
+    .unwrap();
+    let tree_b = TreeTN::from_tensors(vec![t0_b, t1_b], vec![0usize, 1usize]).unwrap();
+    let patch_b =
+        SubDomainTreeTN::new(tree_b, Projector::from_pairs([(s0.clone(), 1)]).unwrap()).unwrap();
+
+    let partition = PartitionedTreeTN::from_subdomains(vec![patch_a, patch_b]).unwrap();
+    let dense = partition.to_dense::<f64>().unwrap();
+    let via_treetn = partition.to_treetn().unwrap().to_dense().unwrap();
+
+    assert_eq!(dense.external_indices(), via_treetn.external_indices());
+    assert_f64_slice_close(
+        &dense.to_vec::<f64>().unwrap(),
+        &via_treetn.to_vec::<f64>().unwrap(),
+        1e-12,
+    );
 }

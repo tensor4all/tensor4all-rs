@@ -1,9 +1,10 @@
 //! Dense materialization of [`SubDomainTreeTN`] and [`PartitionedTreeTN`].
 
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use tensor4all_core::{DynIndex, IdxTensor, TensorElement};
+use tensor4all_core::{DynIndex, IdxTensor, TensorElement, TensorIndex};
 use tensor4all_treetn::TreeTN;
 
 use super::PartitionedTreeTN;
@@ -27,6 +28,10 @@ where
     ///
     /// When every site index of the patch is projected, the returned tensor has
     /// rank 0 (a single scalar entry) rather than failing.
+    ///
+    /// This is a dense reference materialization path whose memory and time
+    /// scale as $O(\prod_i d_i)$ over the patch's free site dimensions; it is
+    /// intended for tests and small grids.
     ///
     /// # Errors
     ///
@@ -120,6 +125,12 @@ where
     /// tensor's leg order, matching [`TreeTN::to_dense`]. When the partition is
     /// empty, this returns a rank-0 zero tensor of scalar type `T`.
     ///
+    /// This is a dense reference materialization path whose memory and time
+    /// scale as $O(\prod_i d_i)$ over all site dimensions of the partition; it
+    /// is intended for tests and small grids. Patch payloads are read to the
+    /// host via [`IdxTensor::to_vec`] and scattered into the output buffer, so
+    /// this method is a non-AD boundary.
+    ///
     /// # Errors
     ///
     /// Returns [`PartitionedTreeTNError::DTypeMismatch`] when any patch's scalar
@@ -179,6 +190,12 @@ where
                 .ok_or(PartitionedTreeTNError::VolumeOverflow)?;
         }
 
+        let full_positions: HashMap<&DynIndex, usize> = full_indices
+            .iter()
+            .enumerate()
+            .map(|(axis, index)| (index, axis))
+            .collect();
+
         let mut buffer = vec![T::default(); total_len];
         #[cfg(debug_assertions)]
         let mut written = vec![false; total_len];
@@ -188,15 +205,24 @@ where
             let patch_values = patch_dense.to_vec::<T>()?;
 
             let mut base_offset = 0usize;
-            let mut free_dims = Vec::new();
-            let mut free_full_strides = Vec::new();
             for (index, &stride) in full_indices.iter().zip(full_strides.iter()) {
                 if let Some(coord) = projector.get(index) {
                     base_offset += coord * stride;
-                } else {
-                    free_dims.push(index.dim);
-                    free_full_strides.push(stride);
                 }
+            }
+
+            // Use each patch's own `external_indices()` order: two patches on
+            // the same site-index network can store a node's site legs in
+            // different orders.
+            let patch_free_indices = patch_dense.external_indices();
+            let mut free_dims = Vec::with_capacity(patch_free_indices.len());
+            let mut free_full_strides = Vec::with_capacity(patch_free_indices.len());
+            for index in &patch_free_indices {
+                let &axis = full_positions
+                    .get(index)
+                    .ok_or(PartitionedTreeTNError::SiteIndexMismatch)?;
+                free_dims.push(index.dim);
+                free_full_strides.push(full_strides[axis]);
             }
 
             if free_dims.is_empty() {
