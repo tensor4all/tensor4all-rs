@@ -1,0 +1,26 @@
+g0: {"max_bond":7,"params":16678,"patches":98} in 2.3s
+T4A_PARENT_PROBE {"label":"own","ns":47349166,"input_items":98,"additions":58,"parents":[{"ordinal":0,"ns":65503,"items":1,"additions":0},{"ordinal":1,"ns":757233,"items":2,"additions":1},{"ordinal":2,"ns":707078,"items":2,"additions":1},{"ordinal":3,"ns":5893001,"items":3,"additions":2},{"ordinal":4,"ns":680258,"items":2,"additions":1},{"ordinal":5,"ns":68879,"items":1,"additions":0},{"ordinal":6,"ns":673835,"items":2,"additions":1},{"ordinal":7,"ns":658106,"items":2,"additions":1},{"ordinal":8,"ns":60303,"items":1,"additions":0},{"ordinal":9,"ns":5942906,"items":4,"additions":3},{"ordinal":10,"ns":59392,"items":1,"additions":0},{"ordinal":11,"ns":69250,"items":1,"additions":0},{"ordinal":12,"ns":659178,"items":2,"additions":1},{"ordinal":13,"ns":650903,"items":2,"additions":1},{"ordinal":14,"ns":1940786,"items":4,"additions":3},{"ordinal":15,"ns":627920,"items":2,"additions":1},{"ordinal":16,"ns":1869902,"items":4,"additions":3},{"ordinal":17,"ns":719031,"items":2,"additions":1},{"ordinal":18,"ns":705045,"items":2,"additions":1},{"ordinal":19,"ns":2098072,"items":4,"additions":3},{"ordinal":20,"ns":710845,"items":2,"additions":1},{"ordinal":21,"ns":1988417,"items":4,"additions":3},{"ordinal":22,"ns":741833,"items":2,"additions":1},{"ordinal":23,"ns":2174576,"items":4,"additions":3},{"ordinal":24,"ns":665429,"items":2,"additions":1},{"ordinal":25,"ns":676621,"items":2,"additions":1},{"ordinal":26,"ns":686309,"items":2,"additions":1},{"ordinal":27,"ns":689535,"items":2,"additions":1},{"ordinal":28,"ns":700626,"items":2,"additions":1},{"ordinal":29,"ns":1951496,"items":4,"additions":3},{"ordinal":30,"ns":669758,"items":2,"additions":1},{"ordinal":31,"ns":1843124,"items":4,"additions":3},{"ordinal":32,"ns":1834366,"items":4,"additions":3},{"ordinal":33,"ns":669357,"items":2,"additions":1},{"ordinal":34,"ns":658657,"items":2,"additions":1},{"ordinal":35,"ns":1858662,"items":4,"additions":3},{"ordinal":36,"ns":637568,"items":2,"additions":1},{"ordinal":37,"ns":641956,"items":2,"additions":1},{"ordinal":38,"ns":1890481,"items":4,"additions":3},{"ordinal":39,"ns":647466,"items":2,"additions":1}]}
+T4A_EMIT {"ns":35567}
+T4A_CANDIDATE {"label":"own","ns":47390273,"complete":true}
+T4A_EMIT {"ns":6402}
+T4A_REGION {"level":1,"ordinal":0,"ns":47441951,"os_threads":1}
+T4A_EMIT {"ns":62227}
+T4A_PARENT_PROBE {"label":"own","ns":118000150,"input_items":40,"additions":26,"parents":[{"ordinal":0,"ns":510429,"items":1,"additions":0},{"ordinal":1,"ns":5359669,"items":2,"additions":1},{"ordinal":2,"ns":19756828,"items":4,"additions":3},{"ordinal":3,"ns":60654,"items":1,"additions":0},{"ordinal":4,"ns":11508510,"items":4,"additions":3},{"ordinal":5,"ns":6143201,"items":2,"additions":1},{"ordinal":6,"ns":5292152,"items":2,"additions":1},{"ordinal":7,"ns":5168180,"items":3,"additions":2},{"ordinal":8,"ns":16213621,"items":4,"additions":3},{"ordinal":9,"ns":11036254,"items":4,"additions":3},{"ordinal":10,"ns":10903175,"items":4,"additions":3},{"ordinal":11,"ns":5058914,"items":2,"additions":1},{"ordinal":12,"ns":5098439,"items":3,"additions":2},{"ordinal":13,"ns":15814349,"items":4,"additions":3}]}
+T4A_EMIT {"ns":28553}
+T4A_CANDIDATE {"label":"own","ns":118033923,"complete":true}
+T4A_EMIT {"ns":6242}
+T4A_REGION {"level":2,"ordinal":0,"ns":118045184,"os_threads":1}
+T4A_EMIT {"ns":56807}
+T4A_PARENT_PROBE {"label":"own","ns":89555691,"input_items":14,"additions":11,"parents":[{"ordinal":0,"ns":41651502,"items":6,"additions":5},{"ordinal":1,"ns":23990893,"items":4,"additions":3},{"ordinal":2,"ns":23874433,"items":4,"additions":3}]}
+T4A_EMIT {"ns":30017}
+T4A_CANDIDATE {"label":"own","ns":89590076,"complete":true}
+T4A_EMIT {"ns":6633}
+T4A_REGION {"level":3,"ordinal":0,"ns":89601498,"os_threads":1}
+T4A_EMIT {"ns":66936}
+T4A_PARENT_PROBE {"label":"own","ns":22090522,"input_items":3,"additions":2,"parents":[{"ordinal":0,"ns":22081224,"items":3,"additions":2}]}
+T4A_EMIT {"ns":26770}
+T4A_CANDIDATE {"label":"own","ns":22121541,"complete":true}
+T4A_EMIT {"ns":6412}
+T4A_REGION {"level":4,"ordinal":0,"ns":22135496,"os_threads":1}
+T4A_EMIT {"ns":70493}
+ai-run: measure done exit=0 wall=7.0s peak_mem=33M/8.0G (anon ~32M) verdict=CLEAN (foreign 0.2% on cpus 8-15, 0.0 busy CPUs elsewhere) report=/root/projects/tensor4all-rust/tensor4all-rs-1497-design/docs/experiments/1497-merge-granularity/raw/attempt-1/m6a-r4-cap8/0/ai-run.json

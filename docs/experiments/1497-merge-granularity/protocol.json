@@ -1,0 +1,101 @@
+{
+  "declared_at_utc": "2026-11-27T11:49:13.324356+00:00",
+  "baseline_commit": "5fbd73e56b3b593374d9e4263d7783efbdbdef12",
+  "upstream_main_included": "62c3b606",
+  "purpose": "Serial granularity diagnostic on integrated #1407/#1511; no parallel candidate, speedup or production-memory admission claim.",
+  "cases": [
+    {
+      "id": "m6a-r4-cap8",
+      "family": "m6a",
+      "repeats": 3,
+      "feasibility_only": false,
+      "args": [
+        "--r",
+        "4",
+        "--temperature",
+        "0.1",
+        "--g0-cap",
+        "8",
+        "--cap",
+        "16",
+        "--check-dense",
+        "true"
+      ]
+    },
+    {
+      "id": "m6a-r6-cap16",
+      "family": "m6a",
+      "repeats": 3,
+      "feasibility_only": false,
+      "args": [
+        "--r",
+        "6",
+        "--temperature",
+        "0.1",
+        "--g0-cap",
+        "16",
+        "--cap",
+        "64",
+        "--check-dense",
+        "false"
+      ]
+    }
+  ],
+  "common_args": [
+    "--topology",
+    "tt_nblock",
+    "--seed",
+    "42",
+    "--ref-seed",
+    "42",
+    "--g0-rtol",
+    "1e-6",
+    "--g0-patch-order",
+    "k",
+    "--arm",
+    "patched-merge-refine",
+    "--rtol",
+    "1e-6",
+    "--certified-share",
+    "0.5",
+    "--slices",
+    "4",
+    "--samples",
+    "4096"
+  ],
+  "validation": [
+    "profiling off/on on identical R4 dense-check case; compare every result field except frontend seconds and producer g0_seconds",
+    "minimal two-bit exact delta: incoming region-job widths [1,2], final regions 4, one original input leaf, full dense values all 0.5"
+  ],
+  "profile": "release debug=0; no target-cpu override",
+  "thread_environment": {
+    "RAYON_NUM_THREADS": "1",
+    "BLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1",
+    "BLIS_NUM_THREADS": "1"
+  },
+  "hardware": "AMD Ryzen 9 6900HX, 8 physical/16 logical CPUs, Linux/WSL",
+  "affinity": "observer 0-7; ai-run exclusive measurement CPUs 8-15; finished binary on CPU 8",
+  "memory_cap": "8G",
+  "wall_cap_seconds": 300,
+  "priming": "Two seconds identical CPU busy loop before each M6a process; outside internal frontend timer; none for counts-only tiny fixture.",
+  "repetitions": "three fresh processes per cell; one complete six-process matrix; any contaminated attempt reruns whole matrix once; all attempts/failures retained",
+  "metrics": [
+    "incoming region jobs per level; not output term/leaf/final-region counts",
+    "complete own/axis/joint candidate scopes; nested child-probe scopes",
+    "input-parent groups within one child probe: cumulative source-order item restriction and sibling-merge durations, item/addition counts; preserve original numerical ordering",
+    "parent work with additions, group width and cost distribution per probe; no aggregation of sequential probes as concurrent width",
+    "frontend duration and recorded diagnostic emission duration; collector/clock overhead remains instrumented overhead"
+  ],
+  "need_screen": "Existing 20% median frontend share screen for a job family, with at least two input-parent groups containing additions in an actual child probe. This is permission to refine a design, not performance acceptance or evidence of safe concurrent admission.",
+  "numerics": "Existing M6a full/sample DFT checks; no tolerance or algorithm changes. Validate per-probe parent items/additions and time accounting, retain all result counters/accuracy fields.",
+  "limits": "Only the declared downscaled M6a generator cases; IR and production R10 remain outside this follow-up. No implementation/scaling gate is set; no speedup extrapolation. Traced source includes the diagnostic lazy reader after timing.",
+  "pre_measurement_amendment": {
+    "at_utc": "2026-11-27T11:55:45.085973+00:00",
+    "previous_baseline": "c3b08cb08fd2d44459d4476ca8e806a090d3bfd1",
+    "reason": "Synchronize the subsequently merged SimpleTT slice-copy optimization before any diagnostic process runs. Cases, thresholds, repetitions and numerical settings are unchanged."
+  }
+}

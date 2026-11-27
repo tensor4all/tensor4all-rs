@@ -1,0 +1,6 @@
+
+running 1 test
+test output_selection::minimal_two_bit_exact_fanout_has_two_second_level_region_jobs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 52 filtered out; finished in 0.01s
+

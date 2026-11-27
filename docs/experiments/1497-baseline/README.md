@@ -10,11 +10,12 @@ application and times out at its declared wall cap. Failures remain failures.
 There is no parallel candidate, speedup claim or candidate acceptance result.
 
 The repeated M6a R=6 case spends about 11% of Fourier time in leaf application
-and about 88% in merge/refine, with only one output region per level. Whole
-region fan-out cannot parallelize that bottleneck. The IR R=8/cap-64 feasibility
-case has four leaves, but still one output region per level. Leaf-only execution
-is a smaller first candidate, with limited M6a opportunity and an IR opportunity
-requiring repeated confirmation. Finer probe/parent work remains a separate
+and about 88% in merge/refine, with one incoming region job per executed level.
+Whole-region fan-out cannot parallelize that bottleneck. The IR R=8/cap-64
+feasibility case has four leaves, but still one incoming region job per level.
+Leaf applications are independent, and leaf-only execution remains an option;
+its M6a opportunity is limited and its IR opportunity needs repeats. The next
+investigation is finer merge work. Probe/parent granularity remains a separate
 granularity question, not something these whole-region measurements establish.
 
 ## Method
@@ -24,7 +25,7 @@ The numerical baseline is `8ce72e4e`; its crates, benchmark source and lockfile
 match the original `379868e0` design inspection. The [manifest](./raw/manifest.json)
 records source/binary SHA-256, compiler, platform and build flag observations.
 The [attempt ledger](./raw/attempts.json) retains every process.
-The review branch was subsequently synchronized with `f3d0df4c`, including
+The review branch was subsequently synchronized with `62c3b606`, including
 interpolation/evaluator/cache changes. These observations remain pinned to `8ce72e4e`;
 they are not fresh performance evidence for the synchronized review head.
 
@@ -57,7 +58,20 @@ occurred. Only attempt 1 was needed; the entire matrix was CLEAN.
 
 ## Phase distribution
 
-| Case | Completed / processes | Fourier seconds | Leaf share | Merge/refine share | Leaves | Widest region layer |
+Here `W_t` is the number of `OutputKey` entries in the incoming level map
+before transition `t`: one spectator-cell/per-axis-prefix key, containing all
+its input items and terms, is one whole region job. The profiler emits one
+`schedule/region` event for each loop iteration. Count those events by their
+`level`; `largest_region_count` is the maximum count, `max_t W_t`.
+The count is not a final output-region, leaf, term or child-probe count, nor
+does "whole" mean the tensors cover the full output domain. Completed cases
+are processes that finish the transform; it is not a special region type.
+
+The [design's asserted two-bit example](../../design/merge-refine-parallel-execution.md#what-the-baseline-establishes)
+has incoming widths `[1, 2]` and four final regions. It validates the
+definition, without establishing useful parallel cost.
+
+| Case | Completed / processes | Fourier seconds | Leaf share | Merge/refine share | Leaves | Maximum incoming region jobs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | [m6a-r4-cap8](./raw/attempt-1/m6a-r4-cap8/0/summary.json) | 3 / 3 | 0.853 | 60.3% | 32.3% | 98 | 1 |
 | [m6a-r6-cap16](./raw/attempt-1/m6a-r6-cap16/0/summary.json) | 3 / 3 | 33.316 | 11.3% | 88.3% | 118 | 1 |

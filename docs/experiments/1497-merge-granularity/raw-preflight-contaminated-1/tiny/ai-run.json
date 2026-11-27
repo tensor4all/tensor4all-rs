@@ -1,0 +1,34 @@
+{
+  "mode": "measure",
+  "cmd": "timeout --kill-after=5 300 taskset -c 8 /root/projects/tensor4all-rust/tensor4all-rs-impl-1130/target/release/deps/qft_reconstruction-45038d5f8c81a864 --exact output_selection::minimal_two_bit_exact_fanout_has_two_second_level_region_jobs --nocapture --test-threads=1",
+  "cwd": "/root/projects/tensor4all-rust/tensor4all-rs-1497-design",
+  "label": null,
+  "unit": "ai-run-measure-1450881-1795780752.scope",
+  "cpus": "8-15",
+  "mem_limit": 8589934592,
+  "started": "2026-11-27T12:59:12+0100",
+  "pre_guard": {
+    "ok": true,
+    "mean_busy": 0.005,
+    "peak_busy": 0.05
+  },
+  "exit": 0,
+  "wall_sec": 0.07,
+  "mem_peak": 10178560,
+  "mem_peak_anon_sampled": null,
+  "oom_kills": 0,
+  "verdict": "CONTAMINATED",
+  "reasons": [
+    "other processes used 4.1% of the measurement CPUs"
+  ],
+  "job_cpu_sec": 0.04,
+  "foreign_cpu_sec_on_measure_cpus": 0.02,
+  "foreign_frac": 0.0406,
+  "others_busy_cpus": 0.45,
+  "mem_stall_frac": 0.0,
+  "thresholds": {
+    "foreign_frac": 0.03,
+    "others_busy_cpus": 1.0,
+    "mem_stall_frac": 0.01
+  }
+}

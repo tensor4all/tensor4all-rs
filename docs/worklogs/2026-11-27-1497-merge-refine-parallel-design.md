@@ -2,25 +2,35 @@
 
 ## Decisions
 
-- The [design](../design/merge-refine-parallel-execution.md) proposes leaf
-  applications as the smaller first lane candidate, with preparation and the
-  entire merge/refine/report tail serial on supplied engines.
-- The [baseline](../experiments/1497-baseline/README.md) rejects whole-region
-  fan-out as the initial merge strategy: every completed case has region width
-  one, including cases dominated by merge time. Finer candidate/probe/parent
-  units need a separate cost and ordering study before implementation.
-- Keeping the tail serial avoids introducing an accounting event recorder
-  prematurely. It also preserves #1407's evolving policy-specific ledger and
-  canonical retained-work admission, which is a separate dependency from
-  accuracy allocation.
+- The [design](../design/merge-refine-parallel-execution.md) defines incoming
+  region jobs as incoming `(spectator, per-axis prefix)` map entries, not final
+  outputs, leaves or terms. The smallest single-root/no-spectator two-bit Exact
+  fixture has widths `[1,2]`, four final regions and known DFT values `[0.5;4]`.
+  It validates the definition, not a performance need.
+- The [original baseline](../experiments/1497-baseline/README.md) has whole-region
+  width one in every completed case. Defer that executor until a relevant
+  repeated workload supplies both cost and independent width. Leaf-only
+  execution remains optional rather than the committed next implementation.
+- The [finer diagnostic](../experiments/1497-merge-granularity/README.md) at
+  integrated #1407/#1511 source `5fbd73e5` passes the parent-work need screen:
+  eligible addition-parent shares are median 30.0% in R4 and 74.8% in R6,
+  with maximum same-probe widths 35/38. R6 also has two axis candidates in
+  one region decision. These serial costs establish no speedup or safe
+  concurrent memory admission.
 - The [integration plan](../design/merge-refine-parallel-integration-plan.md)
-  makes a relevant repeated need gate, consumed engine paths, determinism,
-  placement and memory contracts explicit. Fixed engine teams cannot be
-  borrowed opportunistically between phases.
+  now prioritizes designing input-parent jobs inside a single child probe.
+  It spells out one-pass grouping, original sibling folds, ordered scalar and
+  counter replay, canonical errors, child/admission barriers, engine ownership
+  and aggregate memory. Review that contract before extracting a serial seam
+  or implementing lanes. Fixed engine teams cannot borrow idle peer engines.
+- #1511 is merged and #1407 integrates its typed output-region API. All three
+  merge policies are tested through both scheduler and Fourier frontend;
+  selected coverage counters share one private seam, and rejected probes do
+  not add selected cuts. Tolerance retains canonical `RetainedWork` admission.
 
 ## Verification conclusions and constraints
 
-- All fourteen declared processes are CLEAN; seven complete and seven fail or
+- All fourteen original-baseline processes are CLEAN; seven complete and seven fail or
   time out. The failures are retained with their actual stage and resource cap.
   The IR feasibility observation does not establish a repeated timing gate.
 - The temporary profiler preserves the numerical source calls and order.
@@ -38,6 +48,17 @@
   formatting, links and deterministic repository-rules checks are the local
   validation scope. No new lanes API, AD claim or parallel speedup is asserted;
   maintainer agreement is still required before implementation.
-- The review branch includes later main updates through `f3d0df4c`. Historical
+- The finer campaign retains twelve processes: six formal matrix processes,
+  three accepted controls and three initial controls. Eleven are CLEAN; the
+  first counts-only tiny fixture passed numerically but was CONTAMINATED
+  (4.1% foreign CPU against 3%). The entire preflight was rerun unchanged
+  before the formal matrix. All six formal processes are CLEAN and complete.
+- Finer off/on controls match all reported non-time fields. All parent
+  item/addition counts, public addition totals and nested durations reconcile.
+  `verify.py` checks controls, all frozen controller/protocol/helper/patch pins
+  and source/binary hashes. Both independent patch application and generation
+  reproduce all eight captured source hashes at `5fbd73e5`. Owned disposable
+  checkouts are removed after verification; the active build cache is retained.
+- The review branch includes later main updates through `62c3b606`. Historical
   baseline evidence remains tied to `8ce72e4e`; it is not re-timed evidence for
   those interpolation/evaluator/cache changes.

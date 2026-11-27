@@ -1,0 +1,4 @@
+# Empty source context lines have one leading space in unified patch data.
+profiling.patch whitespace=-blank-at-eol
+# Preserve the test harness output byte for byte.
+**/stdout.txt whitespace=-blank-at-eof

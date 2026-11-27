@@ -9,14 +9,26 @@ inspection at `379868e0`. Hataori is pinned to `092eecdd`, tenferro to
 precedes implementation, as the issue requires.
 
 The [serial evidence](../experiments/1497-baseline/README.md) changes the
-initial decomposition proposal: complete output regions are too coarse for
-the measured workloads. Each completed schedule has one region at every
-level, even when it has many input leaves. A large merge-time share does not
-make whole-region fan-out useful.
+initial decomposition proposal: jobs for whole incoming regions have width
+one in the measured completed schedules, even with many input leaves.
+That scheduling unit cannot distribute their dominant merge work. Leaf
+applications remain independent; the region result does not say otherwise.
+
+The [finer serial investigation](../experiments/1497-merge-granularity/README.md)
+is complete at integrated #1407/#1511 source `5fbd73e5`. Input-parent work in
+child probes with multiple addition-bearing parents occupies median 30.0%
+(R4) and 74.8% (R6) of Fourier time; observed same-probe widths reach 35 and 38.
+Both pass the declared need screen. Design that internal seam next, preserving
+canonical folds and per-child admission; this does not establish parallel speedup. Keep leaf-only execution
+as an option, rather than a committed implementation step: its opportunity
+is limited in the larger repeated M6a case, and the IR observation needs
+repeats. Defer whole-region lane execution until a relevant repeated workload
+has both costly region jobs and width above one. A tiny multi-region example
+establishes what the count means, not a reason to implement parallelism.
 
 | Issue question | Proposed answer | Reason and trade-off |
 | --- | --- | --- |
-| Unit of parallelism | Leaf applications are the first candidate. Keep the complete merge/refine tail serial initially. Investigate probe/candidate or input-parent work before proposing parallel merging. | Leaves are independent. Whole-region jobs have width one in these measurements; finer jobs need additional ordering and admission design. |
+| Unit of parallelism | Design input-parent work within one child probe next; retain candidate-level work as an alternative. Keep leaf-only execution as a possible later scope with a serial tail. | Leaves are independent, but their R=6 share is small. Whole-region jobs have width one here; finer parent costs now pass the need screen, while ordering and admission remain prerequisites. |
 | Accuracy allocation | Preserve the existing allocation and arithmetic order. | Application budgets and each level's share can be fixed before its numerical work. Workers need no peer's measurements. |
 | Sum/report order | Keep source, sibling, term and scalar-fold orders. | Sorting completed outputs alone cannot preserve intermediate truncation decisions or the next level's budget. |
 | M7 prerequisite | Design now; expose lanes only after the consumed numerical paths are deterministic and engine-explicit. | A cached-evaluator topology/dtype allowlist alone does not prove application, QR, SVD or residual determinism. |
@@ -29,6 +41,33 @@ policy, accounting and resource admission. Its final semantics must be
 integrated before freezing a parallel merge seam.
 
 ## What the baseline establishes
+
+An **incoming region job** is one iteration over the incoming level's
+`BTreeMap<OutputKey, BTreeMap<InputKey, Item>>`. Its `OutputKey` identifies a
+spectator cell and one `(depth, prefix)` per coordinate axis. The job contains
+all input items and retained terms for that key, its unsplit work, probes and
+selection. It is not one leaf, term, child candidate, final output region or
+a claim that its tensors cover the whole output grid.
+
+For executed level `t`, define `W_t` as the number of keys in that incoming
+map, before the transition. The diagnostic emits exactly one
+`schedule/region` event per iteration, tagged with `level` and ordinal.
+`largest_region_count` is `max_t W_t`, obtained by counting those events per
+level. "Whole" describes the job's scope; "completed" describes the process
+finishing the transform. `work_items_per_level` counts input items and is
+generally different from `W_t`; `report.region_count` counts final outputs.
+
+The smallest example in the single-axis, single-root, no-spectator family is
+the two-bit Exact transform at depth two: one input leaf with dense values
+`[1, 0, 0, 0]` has unitary DFT `[0.5, 0.5, 0.5, 0.5]`. Incoming widths are
+`[1, 2]`, while four output regions remain. One bit has only one transition
+from its sole root, so it cannot have two incoming jobs in this family.
+Multiple initial spectator cells can instead provide several first-level
+jobs; these are separate keys in the same definition.
+The asserted fixture is
+[`minimal_two_bit_exact_fanout_has_two_second_level_region_jobs`](https://github.com/tensor4all/tensor4all-rs/blob/c3b08cb08fd2d44459d4476ca8e806a090d3bfd1/crates/tensor4all-quanticstransform/tests/qft_reconstruction/output_selection.rs).
+It is in scope for correctness/definition, with one original leaf and no
+genuine input-sibling additions; it is not a representative performance case.
 
 The six-case diagnostic retained all fourteen processes, including failures;
 every process received `verdict=CLEAN`. The report distinguishes repeated
@@ -87,7 +126,7 @@ positive binary64 contributions `a=1`, `b=c=2^-53` satisfy
 `(a+b)+c != a+(b+c)`. Preserve the inherited scalar folds directly. Operator
 construction error and backend roundoff remain outside `report.error_bound`.
 
-## First implementation candidate: three stages on supplied engines
+## Possible leaf-only executor: three stages on supplied engines
 
 Use one common orchestration path with private stages at the existing owners.
 The sequential entry borrows the caller's engine. The lanes entry executes
@@ -244,7 +283,7 @@ would change results.
 
 Profile these finer units under a new declared protocol before choosing that
 architecture. Do not require a general event recorder, task graph, persistent
-lane service or aggregate allocator for the initial leaf-only candidate.
+lane service or aggregate allocator if the leaf-only option is selected.
 
 ## Acceptance and rollout
 
