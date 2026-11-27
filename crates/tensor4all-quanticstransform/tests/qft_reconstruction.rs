@@ -2661,7 +2661,7 @@ fn merge_refine_schedule_computes_only_the_selected_output_regions() {
         &SubsetOperatorOptions { unitary: true },
         tolerance,
         &MergeRefineOptions {
-            output_regions: Some(vec![wanted.clone()]),
+            output_regions: Some(vec![OutputRegion::new(r, 0)]),
             ..Default::default()
         },
     )
@@ -2673,6 +2673,10 @@ fn merge_refine_schedule_computes_only_the_selected_output_regions() {
     assert_eq!(report.region_count, 1);
     assert_eq!(report.term_count, 1);
     assert_eq!(report.error_bound, 0.0);
+    // Coverage is reported apart from accuracy: one child is kept per level and
+    // its sibling is never computed.
+    assert_eq!(report.pruned_regions, r);
+    assert_eq!(all.report().pruned_regions, 0);
 
     // The computed region is the same region, bit for bit, that the unselected
     // trajectory returns among its 16.
@@ -2715,27 +2719,18 @@ fn merge_refine_schedule_rejects_an_invalid_output_selection() {
     let error = run(Some(Vec::new())).expect_err("an empty selection is invalid");
     assert!(error.to_string().contains("at least one region"));
 
-    // A region must fix a contiguous prefix per axis: the outputs are the reversed
-    // sites, so fixing the second output index alone leaves a free index before it.
-    let group = CoordinateGroup::new(sites.clone());
-    let gap = Projector::from_pairs([(group.outputs[1].clone(), 0usize)]).expect("projector");
-    let error = run(Some(vec![gap])).expect_err("a non-prefix region is invalid");
-    assert!(error.to_string().contains("contiguous prefix"));
+    // A region deeper than its group has output indices names no prefix.
+    let error = run(Some(vec![OutputRegion::new(3, 0)])).expect_err("too deep");
+    assert!(error.to_string().contains("more bits"));
 
-    // An index outside the selection would silently request the whole output.
-    let stray = Projector::from_pairs([(DynIndex::new_dyn(2), 0usize)]).expect("projector");
-    let error = run(Some(vec![stray])).expect_err("a foreign index is invalid");
-    assert!(error
-        .to_string()
-        .contains("must fix only output indices of the selection"));
+    // The prefix value must fit its depth.
+    let error = run(Some(vec![OutputRegion::new(1, 2)])).expect_err("prefix too large");
+    assert!(error.to_string().contains("smaller than 2^depth"));
 
-    // Index identity ignores the dimension, so a look-alike index of dimension
-    // three stores coordinate two in an equal projector. The binary level
-    // structure must reject it instead of encoding a corrupt prefix key.
-    let ternary = Projector::from_pairs([(DynIndex::new(group.outputs[0].id, 3), 2usize)])
-        .expect("projector");
-    let error = run(Some(vec![ternary])).expect_err("a ternary coordinate is invalid");
-    assert!(error.to_string().contains("binary output coordinates"));
+    // One (depth, prefix) pair per coordinate group.
+    let error =
+        run(Some(vec![OutputRegion::per_axis([(1, 0), (1, 0)])])).expect_err("wrong axis count");
+    assert!(error.to_string().contains("one (depth, prefix) pair"));
 }
 
 #[test]
@@ -2780,7 +2775,8 @@ fn merge_refine_schedule_selects_an_output_region_across_two_axes_with_sparse_in
     let wanted = output_prefix_projector(&groups[0], 2, 0b10)
         .intersection(&output_prefix_projector(&groups[1], 2, 0b01))
         .expect("the two axis regions fix disjoint indices");
-    let selected = run(Some(vec![wanted.clone()])).expect("selected schedule");
+    let selected =
+        run(Some(vec![OutputRegion::per_axis([(2, 0b10), (2, 0b01)])])).expect("selected schedule");
     let all = run(None).expect("unselected schedule");
     assert_eq!(all.report().region_count, 16);
     assert_eq!(selected.report().region_count, 1);
