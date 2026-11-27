@@ -407,6 +407,13 @@ pub(crate) fn dense_l2_residual(
     dense.sub(reference).unwrap().norm().unwrap()
 }
 
+/// A peak on [`raw_kernel_tree`] (site order a0, a1, b0, b1, c, d0, d1) whose
+/// height depends on the junction site `c`.
+pub(crate) fn raw_kernel_peak(p: &[usize]) -> f64 {
+    let (x, y, u) = (quantics(&p[0..2]), quantics(&p[2..4]), quantics(&p[5..7]));
+    (1.0 + 0.5 * p[4] as f64) * gaussian(x, 0.3, 0.12) * gaussian(y, 0.6, 0.12) + 0.2 * (x * y + u)
+}
+
 /// A peak at (0.3, 0.6) whose height depends on the flag; site order
 /// x0, x1, x2, y0, y1, y2, z.
 pub(crate) fn tree_peak(p: &[usize]) -> f64 {

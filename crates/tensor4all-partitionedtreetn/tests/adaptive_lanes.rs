@@ -1,6 +1,7 @@
 //! The lane fan-out ([`patched_interpolate_on_lanes`]) of the adaptive patch
 //! driver: parity with the serial entry, session use inside a lane, the
-//! partial-wave `max_patches` contract, and typed error propagation.
+//! partial-wave `max_patches` contract, typed error propagation, and the
+//! lane-count identity of both lane entries.
 //!
 //! The fixtures use [`DenseEngine`], whose measurement path is the cached
 //! evaluator's raw kernels on trees with one site per node, so the serial and
@@ -18,11 +19,14 @@ use tensor4all_core::{
     PairwiseContractionOptions, TensorElement,
 };
 use tensor4all_partitionedtreetn::adaptive_interpolation::{
-    patched_interpolate_on_lanes, PatchedInterpolationError, PatchedInterpolationOptions,
-    PatchedInterpolationResult,
+    patched_elementwise_on_lanes, patched_interpolate_on_lanes, PatchedInterpolationError,
+    PatchedInterpolationOptions, PatchedInterpolationResult,
 };
 use tensor4all_partitionedtreetn::ErrorNorm;
-use tensor4all_treetn::interpolation::{EvalContext, Parallelism, TreeInterpolator};
+use tensor4all_treetci::TreeTciInterpolator;
+use tensor4all_treetn::interpolation::{
+    EvalContext, Parallelism, PointwiseElementwise, Product, TreeInterpolator,
+};
 
 /// Run the lanes entry on `threads` lanes, each with its own serial engine.
 fn run_on_lanes<T, E, F>(
@@ -492,4 +496,127 @@ fn allowed_cpus_split_into_pinned_backends_builds_lanes_and_runs() {
     .expect("the pinned lanes run the adaptive driver");
     assert_eq!(result.partition.len(), 4);
     assert_eq!(result.report.splits, 3);
+}
+
+// ---------------------------------------------------------------------------
+// Lane-count identity (#1497)
+// ---------------------------------------------------------------------------
+//
+// The promise of the "Lane-count identity" subsection of
+// docs/design/tree-patching-error-contract.md: at a fixed per-lane engine
+// profile (every lane `CpuEngine::serial()`), a lane entry gives the same
+// report and the same stored node tensors, bit for bit, at every lane count.
+// The fixtures run the TreeTCI engine on the raw-kernel tree (a degree-3
+// junction, one binary site per node). The generic cached-evaluator path
+// (site-free or multi-site nodes) stays excluded: open question 8 of that
+// document.
+
+/// The lane counts compared; one lane is the reference. Four lanes claim the
+/// patches of a wave dynamically, so the order in which patches finish varies
+/// from run to run while the result must not.
+const LANE_COUNTS: [usize; 2] = [1, 4];
+
+/// `count` lanes, each with its own serial engine.
+fn serial_lanes(count: usize) -> TenferroLanes {
+    let engines = (0..count).map(|_| CpuEngine::serial()).collect();
+    TenferroLanes::new(engines).expect("one engine per lane")
+}
+
+/// Run `on` at every lane count and compare each run with the one-lane run.
+/// The fixture must split, so that a wave holds several patches for the lanes.
+fn assert_lane_count_identity(
+    problem: &Problem,
+    on: impl Fn(usize) -> PatchedInterpolationResult<Name>,
+) {
+    let reference = on(LANE_COUNTS[0]);
+    assert!(
+        reference.report.splits >= 2 && reference.partition.len() >= 3,
+        "the fixture must give waves of several patches: {} splits, {} patches",
+        reference.report.splits,
+        reference.partition.len()
+    );
+    for &count in &LANE_COUNTS[1..] {
+        assert_same_run(problem, &reference, &on(count));
+    }
+}
+
+/// A smooth second input on [`raw_kernel_tree`]; at a cap of eight it is one
+/// patch.
+fn raw_kernel_ramp(p: &[usize]) -> f64 {
+    let (x, y) = (quantics(&p[0..3]), quantics(&p[3..7]));
+    1.0 + x + 0.5 * y * y
+}
+
+/// L2 options of the identity fixtures at a given cap. At a cap of three,
+/// [`raw_kernel_peak`] splits into six patches.
+fn lane_identity_options(
+    problem: &Problem,
+    f: &dyn Fn(&[usize]) -> f64,
+    max_bond_dim: usize,
+) -> PatchedInterpolationOptions {
+    let (_, norm) = dense_reference(problem, f);
+    PatchedInterpolationOptions::new(max_bond_dim)
+        .with_error_norm(ErrorNorm::l2(
+            tensor4all_partitionedtreetn::L2Reference::Given(norm),
+        ))
+        .with_tolerance(tol(1e-6))
+        .with_seed(11)
+}
+
+#[test]
+fn the_interpolation_lanes_are_bitwise_identical_across_lane_counts() {
+    let problem = raw_kernel_tree();
+    assert!(max_degree(&problem) >= 3);
+    let options = lane_identity_options(&problem, &raw_kernel_peak, 3);
+    let engine = TreeTciInterpolator::default();
+    let on = |count: usize| {
+        patched_interpolate_on_lanes(
+            &mut serial_lanes(count),
+            &engine,
+            problem.topology.clone(),
+            problem.node_sites.clone(),
+            problem.pivots(&[]),
+            evaluator(&raw_kernel_peak, problem.sites.len()),
+            &options,
+        )
+        .expect("lane run")
+    };
+    assert_lane_count_identity(&problem, on);
+}
+
+#[test]
+fn the_elementwise_lanes_are_bitwise_identical_across_lane_counts() {
+    let problem = raw_kernel_tree();
+    let engine = TreeTciInterpolator::default();
+    let input = |f: &(dyn Fn(&[usize]) -> f64 + Sync), max_bond_dim: usize| {
+        run(
+            &engine,
+            &problem,
+            f,
+            &[],
+            &lane_identity_options(&problem, f, max_bond_dim),
+        )
+        .expect("input run")
+        .partition
+    };
+    // Six patches times one: the product splits along the first input.
+    let (x, y) = (input(&raw_kernel_peak, 3), input(&raw_kernel_ramp, 8));
+    let options = lane_identity_options(
+        &problem,
+        &|p: &[usize]| raw_kernel_peak(p) * raw_kernel_ramp(p),
+        6,
+    );
+    let pointwise = PointwiseElementwise(TreeTciInterpolator::default());
+    let on = |count: usize| {
+        patched_elementwise_on_lanes::<f64, _, _, _, _>(
+            &mut serial_lanes(count),
+            &pointwise,
+            &engine,
+            &[&x, &y],
+            &Product,
+            &options,
+        )
+        .expect("lane run")
+    };
+    assert_lane_count_identity(&problem, on);
 }
