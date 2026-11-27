@@ -37,7 +37,7 @@ tgt = SCRATCH / "tgt"
 subprocess.run(["cargo", "build", "--locked", "--release", "--jobs", "2", "--target-dir", str(tgt),
                 "-p", "tensor4all-tensorci", "--example", "issue1463_matrix"], cwd=work, check=True)
 env = dict(os.environ, RAYON_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1", VECLIB_MAXIMUM_THREADS="1")
-rows = ["target,shape,rank,pivot,cost,L,max_bond,bytes_l2,bytes_folded,ms_l2,ms_folded"] if FOLD else ["target,shape,rank,pivot,cost,variant,source_calls,max_bond,err,tt_bytes,median_ms"]
+rows = ["target,shape,rank,pivot,cost,L,max_bond,bytes_l2,bytes_folded,ms_old,ms_fast,ms_folded"] if FOLD else ["target,shape,rank,pivot,cost,variant,source_calls,max_bond,err,tt_bytes,median_ms"]
 for case in CASES:
     r = subprocess.run([str(tgt / "release/examples/issue1463_matrix"), *map(str, case), str(REPS), *(["fold"] if FOLD else [])],
                        env=env, capture_output=True, text=True)

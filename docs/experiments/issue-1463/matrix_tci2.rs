@@ -10,7 +10,9 @@
 //! layout (`to_folded`) is measured against the `L + 2` layout: core bytes of
 //! both and the readout time of the whole matrix at 1024 points (every fourth
 //! point of the 4096), median of `reps` rounds after one warm-up round. One
-//! row: `FOLD,case,L,max_bond,bytes_L+2,bytes_folded,ms_L+2,ms_folded`.
+//! row: `FOLD,case,L,max_bond,bytes_L+2,bytes_folded,ms_old,ms_fast,ms_folded`, where `old` is the library L+2
+//! `MatrixTCI2Result::evaluate` (slabs element by element), `fast` a harness-local L+2 readout over raw
+//! column-major copies of the cores, and `folded` the folded readout.
 
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -204,6 +206,67 @@ fn run(variant: char, t: &Target, s: &Setup) -> Out {
     }
 }
 
+/// Harness-local "fast" L+2 readout: the harness copies every core of the L+2 train once into a
+/// raw column-major buffer and extracts slabs by contiguous copies, as the folded type does. The
+/// library `MatrixTCI2Result::evaluate` extracts slabs element by element (`Tensor3Ops::slice_site`).
+struct FastL2 {
+    rows: usize,
+    cols: usize,
+    /// (left, site, right, data with `left` fastest) per core of the L+2 train.
+    cores: Vec<(usize, usize, usize, Vec<f64>)>,
+}
+
+impl FastL2 {
+    fn new(tt: &SimpleTensorTrain<f64>, rows: usize, cols: usize) -> Self {
+        let cores = tt
+            .site_tensors()
+            .iter()
+            .map(|c| {
+                let (l, s, r) = (c.left_dim(), c.site_dim(), c.right_dim());
+                let mut d = Vec::with_capacity(l * s * r);
+                for b in 0..r {
+                    for y in 0..s {
+                        for a in 0..l {
+                            d.push(*c.get3(a, y, b));
+                        }
+                    }
+                }
+                (l, s, r, d)
+            })
+            .collect();
+        Self { rows, cols, cores }
+    }
+
+    fn gemm(a: &[f64], m: usize, k: usize, b: &[f64], n: usize) -> Vec<f64> {
+        let mut o = vec![0.0; m * n];
+        for j in 0..n {
+            for l in 0..k {
+                let blj = b[l + k * j];
+                for i in 0..m {
+                    o[i + m * j] += a[i + m * l] * blj;
+                }
+            }
+        }
+        o
+    }
+
+    fn evaluate(&self, x: &[usize]) -> Vec<f64> {
+        let mut width = self.cores[0].2;
+        let mut cur = self.cores[0].3.clone(); // 1 x rows x r_0 is the rows x r_0 matrix
+        for (k, &xk) in x.iter().enumerate() {
+            let (l, s, r, d) = &self.cores[k + 1];
+            let mut slab = Vec::with_capacity(l * r);
+            for b in 0..*r {
+                let start = l * (xk + s * b);
+                slab.extend_from_slice(&d[start..start + l]);
+            }
+            cur = Self::gemm(&cur, self.rows, width, &slab, *r);
+            width = *r;
+        }
+        Self::gemm(&cur, self.rows, width, &self.cores[x.len() + 1].3, self.cols)
+    }
+}
+
 fn bits(mut idx: usize) -> Vec<usize> {
     let mut x = vec![0; L];
     for k in (0..L).rev() {
@@ -282,11 +345,21 @@ fn main() {
                 assert!((p - q).abs() <= 1e-10 * max_f, "layouts differ");
             }
         }
-        let (mut tu, mut tf) = (vec![], vec![]);
+        let fast = FastL2::new(&fit.to_tensor_train().unwrap(), rows, cols);
+        for x in &points {
+            let (u, o) = (fit.evaluate(x).unwrap(), fast.evaluate(x));
+            assert!(u.as_col_major_slice() == &o[..], "fast L+2 readout differs from the library one");
+        }
+        let (mut to, mut tu, mut tf) = (vec![], vec![], vec![]);
         for round in 0..=reps {
             let t0 = Instant::now();
             for x in &points {
                 black_box(fit.evaluate(black_box(x)).unwrap());
+            }
+            let d_old = t0.elapsed().as_secs_f64() * 1e3;
+            let t0 = Instant::now();
+            for x in &points {
+                black_box(fast.evaluate(black_box(x)));
             }
             let du = t0.elapsed().as_secs_f64() * 1e3;
             let t0 = Instant::now();
@@ -295,16 +368,17 @@ fn main() {
             }
             let df = t0.elapsed().as_secs_f64() * 1e3;
             if round > 0 {
+                to.push(d_old);
                 tu.push(du);
                 tf.push(df);
             }
         }
-        for v in [&mut tu, &mut tf] {
+        for v in [&mut to, &mut tu, &mut tf] {
             v.sort_by(|x, y| x.partial_cmp(y).unwrap());
         }
         let bond = fit.to_tensor_train().unwrap().link_dims().into_iter().max().unwrap();
         let case = format!("{},{}x{},{},{},{}", a[1], rows, cols, if t.corr { rank } else { 0 }, a[5], a[6]);
-        println!("FOLD,{case},{L},{bond},{},{},{:.2},{:.2}", fit.retained_bytes(), folded.retained_bytes(), tu[reps / 2], tf[reps / 2]);
+        println!("FOLD,{case},{L},{bond},{},{},{:.2},{:.2},{:.2}", fit.retained_bytes(), folded.retained_bytes(), to[reps / 2], tu[reps / 2], tf[reps / 2]);
         return;
     }
 
