@@ -75,7 +75,9 @@ fn visit_each_projector_group_once() {
             // Merge the group into one patch with the group's projector.
             let mut sum = group[0].data().clone();
             for patch in &group[1..] {
-                sum = sum.add(patch.data()).map_err(PartitionedTreeTNError::from)?;
+                sum = sum
+                    .add(patch.data())
+                    .map_err(PartitionedTreeTNError::from)?;
             }
             Ok(vec![SubDomainTreeTN::new(sum, group_proj.clone())?])
         })
@@ -188,7 +190,10 @@ fn try_map_patch_groups_deterministic_order() {
             .try_map_patch_groups(&[site_g.clone()], |gp, group| {
                 seen.lock().unwrap().push((
                     gp.clone(),
-                    group.iter().map(|patch| patch.projector().clone()).collect(),
+                    group
+                        .iter()
+                        .map(|patch| patch.projector().clone())
+                        .collect(),
                 ));
                 Ok(group.iter().map(|&patch| patch.clone()).collect())
             })
@@ -212,8 +217,7 @@ fn try_map_patch_groups_rejects_disagreeing_duplicate_and_malformed_outputs() {
     let disagree_err = partition
         .try_map_patch_groups(&[site_g.clone()], |group_proj, group| {
             if group_proj.get(&site_g) == Some(0) {
-                let wrong_proj =
-                    Projector::from_pairs([(site_g.clone(), 1), (site_s.clone(), 0)])?;
+                let wrong_proj = Projector::from_pairs([(site_g.clone(), 1), (site_s.clone(), 0)])?;
                 Ok(vec![SubDomainTreeTN::new(
                     group[0].data().clone(),
                     wrong_proj,
