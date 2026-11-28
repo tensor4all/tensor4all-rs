@@ -20,6 +20,14 @@ and returns the first application error in that order. This boundary gives
 the future lane driver a place to supply its engines and collect leaf results
 without changing the schedule's error fold.
 
+Zip-up's borrowed-session leaf operations pass each ordered contraction block
+to the same N-ary planner as the serial route. Exact branching-tree tests
+run zip-up while the global backend is held. They check the center's bond
+order against the input traversal and compare the real and complex results
+with a dense reference. The chain's canonicalization and final truncation
+still need engine propagation, as do operator restructuring and certified
+application.
+
 The [serial evidence](../experiments/1497-baseline/README.md) changes the
 initial decomposition proposal: jobs for whole incoming regions have width
 one in the measured completed schedules, even with many input leaves.

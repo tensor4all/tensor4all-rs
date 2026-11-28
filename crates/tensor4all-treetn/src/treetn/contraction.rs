@@ -49,9 +49,11 @@ use anyhow::{Context, Result};
 use crate::algorithm::CanonicalForm;
 use tensor4all_core::legacy::default_cpu_execution_context;
 use tensor4all_core::{
-    contract_pair_on_session, factorize_in, factorize_on_session, validate_svd_truncation_options,
-    AnyScalar, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, PairwiseContractionOptions,
-    SvdTruncationPolicy, TensorContractionLike, TensorFactorizationLike, TensorIndex, TensorLike,
+    contract_pair_on_session, contract_with_options_on_session, factorize_in, factorize_on_session,
+    validate_svd_truncation_options, AnyScalar, Canonical,
+    ContractionOptions as TensorContractionOptions, FactorizeAlg, FactorizeOptions, IndexLike,
+    PairwiseContractionOptions, SvdTruncationPolicy, TensorContractionLike,
+    TensorFactorizationLike, TensorIndex, TensorLike,
 };
 use tensor4all_tensorbackend::ExecutionContext;
 
@@ -401,7 +403,7 @@ impl<'a, 'session> SessionViewLeaves<'a, 'session> {
         }
     }
 
-    fn with_session<R>(
+    fn with_borrowed_session<R>(
         &self,
         f: impl FnOnce(&mut tensor4all_tensorbackend::explicit::Session<'_>) -> Result<R>,
     ) -> Result<R> {
@@ -414,7 +416,7 @@ impl<'a, 'session> SessionViewLeaves<'a, 'session> {
         lhs: &tensor4all_core::IdxTensor,
         rhs: &tensor4all_core::IdxTensor,
     ) -> Result<tensor4all_core::IdxTensor> {
-        self.with_session(|session| {
+        self.with_borrowed_session(|session| {
             contract_pair_on_session(session, lhs, rhs, PairwiseContractionOptions::new())
                 .map_err(anyhow::Error::from)
         })
@@ -434,28 +436,20 @@ impl LeafOps<tensor4all_core::IdxTensor> for SessionViewLeaves<'_, '_> {
         &self,
         tensors: &[tensor4all_core::IdxTensor],
     ) -> Result<tensor4all_core::IdxTensor> {
-        if tensors.len() == 1 {
-            return Ok(tensors[0].clone());
-        }
-        let mut acc = self.contract(&tensors[0], &tensors[1])?;
-        for tensor in &tensors[2..] {
-            acc = self.contract(&acc, tensor)?;
-        }
-        Ok(acc)
+        let operands = tensors.iter().collect::<Vec<_>>();
+        self.contract_refs(&operands)
     }
 
     fn contract_refs(
         &self,
         tensors: &[&tensor4all_core::IdxTensor],
     ) -> Result<tensor4all_core::IdxTensor> {
-        if tensors.len() == 1 {
-            return Ok(tensors[0].clone());
-        }
-        let mut acc = self.contract(tensors[0], tensors[1])?;
-        for tensor in &tensors[2..] {
-            acc = self.contract(&acc, tensor)?;
-        }
-        Ok(acc)
+        // Zip-up supplies the child remainders in traversal order, followed by
+        // the local tensors. Pass that whole block to the N-ary planner.
+        self.with_borrowed_session(|session| {
+            contract_with_options_on_session(session, tensors, TensorContractionOptions::new())
+                .map_err(anyhow::Error::from)
+        })
     }
 
     fn outer_product(
@@ -472,7 +466,7 @@ impl LeafOps<tensor4all_core::IdxTensor> for SessionViewLeaves<'_, '_> {
         left_inds: &[tensor4all_core::DynIndex],
         options: &FactorizeOptions,
     ) -> Result<tensor4all_core::FactorizeResult<tensor4all_core::IdxTensor>> {
-        self.with_session(|session| {
+        self.with_borrowed_session(|session| {
             factorize_on_session(session, tensor, left_inds, options)
                 .map_err(|error| anyhow::anyhow!("session factorization failed: {error}"))
         })
@@ -487,7 +481,7 @@ impl LeafOps<tensor4all_core::IdxTensor> for SessionViewLeaves<'_, '_> {
         options: &FactorizeOptions,
         rng: &mut dyn rand::RngCore,
     ) -> Result<tensor4all_core::FactorizeResult<tensor4all_core::IdxTensor>> {
-        self.with_session(|session| {
+        self.with_borrowed_session(|session| {
             tensor4all_core::factorize_with_rng_on_session(session, tensor, left_inds, options, rng)
                 .map_err(anyhow::Error::from)
         })

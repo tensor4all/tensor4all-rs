@@ -17,10 +17,13 @@ use tensor4all_core::{
     DynIndex, FactorizeAlg, FactorizeOptions, FactorizeResult, IdxTensor, IndexLike,
     SvdTruncationPolicy, TensorElement,
 };
-use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext, ExecutionContext};
+use tensor4all_tensorbackend::explicit::Session;
+use tensor4all_tensorbackend::{
+    with_default_backend, CpuBackend, CpuExecutionContext, ExecutionContext,
+};
 
 use crate::treetn::contraction::{
-    ContractionTopology, GlobalLeaves, IdentityNodes, LeafOps, SessionLeaves,
+    ContractionTopology, GlobalLeaves, IdentityNodes, LeafOps, SessionLeaves, SessionViewLeaves,
 };
 use crate::{CanonicalForm, TreeTN};
 
@@ -255,4 +258,98 @@ fn exact_tree_zipup_factorizes_by_qr_and_matches_untruncated_svd_real() {
 #[test]
 fn exact_tree_zipup_factorizes_by_qr_and_matches_untruncated_svd_complex() {
     check(&BRANCHED, &[1, 3, 5], complex);
+}
+
+#[test]
+fn caller_session_contracts_a_shared_index_in_one_nary_block() {
+    let shared = DynIndex::new_dyn(2);
+    let make = |values: Vec<f32>| IdxTensor::from_dense(vec![shared.clone()], values).unwrap();
+    let operands = [
+        make(vec![1.0, 2.0]),
+        make(vec![3.0, 4.0]),
+        make(vec![5.0, 6.0]),
+    ];
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut session = Session::new(backend.engine_mut());
+    let leaves = SessionViewLeaves::new(&mut session);
+
+    // Summing the shared index in the first pair would leave it exposed on
+    // the third operand. All three must contribute before it is eliminated.
+    let result = leaves.contract_list(&operands).unwrap();
+    assert!(result.indices().is_empty());
+    assert_eq!(result.dense_host_values::<f32>().unwrap(), vec![63.0]);
+
+    let error = leaves.contract_refs(&[]).unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<tensor4all_core::IdxTensorError>(),
+        Some(tensor4all_core::IdxTensorError::Operation {
+            operation: "contract_with_options_on_session",
+            ..
+        })
+    ));
+}
+
+fn check_caller_session_zipup<T: TensorElement>(entry: fn(&mut ChaCha8Rng) -> T) {
+    let (operator, state) = operator_and_state(&BRANCHED, entry);
+    let center = 1;
+    let expected = host(&operator.contract_naive(&state).unwrap());
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let (result, actual) = with_default_backend(|_global| {
+        let mut session = Session::new(backend.engine_mut());
+        let leaves = SessionViewLeaves::new(&mut session);
+        let result = operator
+            .contract_zipup_impl(
+                &state,
+                &center,
+                CanonicalForm::Unitary,
+                Some(SvdTruncationPolicy::new(0.0)),
+                None,
+                ContractionTopology::PruneScalarSubtrees,
+                &IdentityNodes::new(),
+                &leaves,
+            )
+            .expect("zip-up must run on the caller session while the global backend is held");
+        let actual = dense(&result, &leaves);
+        (result, actual)
+    });
+
+    // Every child remainder contributes its result bond first, in the
+    // input tree's traversal order. The operator contributes its site last.
+    let center_node = result.node_index(&center).unwrap();
+    let mut expected_indices: Vec<_> = operator
+        .edges_to_canonicalize_by_names(&center)
+        .unwrap()
+        .into_iter()
+        .filter(|&(_, parent)| parent == center)
+        .map(|(child, parent)| {
+            let edge = result.edge_between(&child, &parent).unwrap();
+            result.bond_index(edge).unwrap().clone()
+        })
+        .collect();
+    assert_eq!(expected_indices.len(), 3);
+    let operator_center = operator
+        .tensor(operator.node_index(&center).unwrap())
+        .unwrap();
+    expected_indices.push(operator_center.indices()[1].clone());
+    assert_eq!(
+        result.tensor(center_node).unwrap().indices(),
+        expected_indices
+    );
+
+    let error = actual.sub(&expected).unwrap().maxabs().unwrap();
+    assert!(
+        error <= 1e-12 * expected.maxabs().unwrap(),
+        "error {error:e}"
+    );
+    result.validate_ortho_consistency().unwrap();
+}
+
+#[test]
+fn caller_session_exact_zipup_keeps_tree_operand_order_real() {
+    check_caller_session_zipup(real);
+}
+
+#[test]
+fn caller_session_exact_zipup_keeps_tree_operand_order_complex() {
+    check_caller_session_zipup(complex);
 }
