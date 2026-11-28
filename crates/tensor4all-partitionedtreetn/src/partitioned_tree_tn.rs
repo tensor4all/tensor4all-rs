@@ -1459,6 +1459,24 @@ where
         truncation: Option<(&V, TruncationOptions)>,
     ) -> Result<Self> {
         ensure_union_disjoint(&self.data, &other.data)?;
+
+        let result_coverage = intersect_coverages(self.coverage(), other.coverage());
+        if let Some(ref cov) = result_coverage {
+            let needs_clip = self
+                .data
+                .keys()
+                .chain(other.data.keys())
+                .any(|projector| !projector_covered_by(projector, cov));
+            if needs_clip {
+                let cells = disjoint_cover(cov);
+                let left = self.refine_to(&cells)?;
+                let right = other.refine_to(&cells)?;
+                let mut combined = left.axpby_patchwise(a, &right, b, truncation)?;
+                combined.coverage = result_coverage;
+                return Ok(combined);
+            }
+        }
+
         let mut data = HashMap::with_capacity(self.data.len() + other.data.len());
         for (projector, left) in &self.data {
             let mut combined = if let Some(right) = other.data.get(projector) {
@@ -1492,7 +1510,7 @@ where
         }
         Ok(Self {
             data,
-            coverage: intersect_coverages(self.coverage(), other.coverage()),
+            coverage: result_coverage,
         })
     }
 

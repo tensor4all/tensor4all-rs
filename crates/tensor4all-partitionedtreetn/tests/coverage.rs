@@ -406,3 +406,60 @@ fn coverage_replaceind_renames_coverage_projectors() -> Result<(), Box<dyn std::
     assert_eq!(renamed.coverage(), Some(&[q0, q1][..]));
     Ok(())
 }
+
+#[test]
+fn coverage_axpby_clips_to_narrower_operand_coverage() -> Result<(), Box<dyn std::error::Error>> {
+    let x = DynIndex::new_dyn(2);
+    let y = DynIndex::new_dyn(2);
+    // f(x, y), column-major over [x, y]: (0,0)=1, (1,0)=2, (0,1)=3, (1,1)=4.
+    let f_tree = TreeTN::from_tensors(
+        vec![IdxTensor::from_dense(
+            vec![x.clone(), y.clone()],
+            vec![1.0_f64, 2.0, 3.0, 4.0],
+        )?],
+        vec![0usize],
+    )?;
+    let g_tree = TreeTN::from_tensors(
+        vec![IdxTensor::from_dense(
+            vec![x.clone(), y.clone()],
+            vec![10.0_f64; 4],
+        )?],
+        vec![0usize],
+    )?;
+    let x0 = Projector::from_pairs([(x.clone(), 0)])?;
+    let x0_y0 = Projector::from_pairs([(x.clone(), 0), (y.clone(), 0)])?;
+    let x1_y0 = Projector::from_pairs([(x.clone(), 1), (y.clone(), 0)])?;
+
+    // `left` has no coverage restriction; `right` only covers y = 0.
+    // The patch keys are disjoint, so the patch-wise path is taken.
+    let left = PartitionedTreeTN::from_subdomain(SubDomainTreeTN::new(f_tree, x0)?)?;
+    let right = PartitionedTreeTN::from_subdomain(SubDomainTreeTN::new(g_tree, x1_y0.clone())?)?
+        .with_coverage(vec![x1_y0.clone(), x0_y0.clone()])?;
+
+    let combined = left.axpby_truncated(
+        AnyScalar::new_real(2.0),
+        &right,
+        AnyScalar::new_real(3.0),
+        &0usize,
+        TruncationOptions::default(),
+    )?;
+    assert_eq!(combined.coverage(), Some(&[x0_y0, x1_y0][..]));
+
+    // 2 f(0,0) = 2 and 3 g(1,0) = 30 survive; the uncovered y = 1 row is clipped.
+    let pts = [0usize, 0, 1, 0];
+    let vals = combined.evaluate_batched(
+        &[x.clone(), y.clone()],
+        ColMajorArrayRef::new(&pts, &[2, 2])?,
+    )?;
+    assert_eq!(vals[0].real(), 2.0);
+    assert_eq!(vals[1].real(), 30.0);
+    let bad_pt = [0usize, 1];
+    let err = combined
+        .evaluate_batched(&[x, y], ColMajorArrayRef::new(&bad_pt, &[2, 1])?)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        PartitionedTreeTNError::OutsideCoverage { .. }
+    ));
+    Ok(())
+}
