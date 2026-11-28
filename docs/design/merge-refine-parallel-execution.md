@@ -5,8 +5,20 @@
 Proposal for [#1497](https://github.com/tensor4all/tensor4all-rs/issues/1497).
 The serial baseline is `8ce72e4e`; its numerical sources match the initial
 inspection at `379868e0`. Hataori is pinned to `092eecdd`, tenferro to
-`5df83672`. No `_on_lanes` implementation is included. Maintainer agreement
-precedes implementation, as the issue requires.
+`5df83672`.
+
+The [maintainer decision in #1497](https://github.com/tensor4all/tensor4all-rs/issues/1497#issuecomment-7229306374)
+selects level-zero leaf applications as the first parallel stage. It supersedes
+the earlier ordering suggested by the serial investigations below. A completed
+serial run at #1364's size remains evidence for choosing the next stage.
+
+The serial subset-image path separates preparation from application.
+`plan_subset_images` fixes the operator bindings, reference scale, per-leaf
+budget and centers, and checks every exact block before the first leaf
+application. The serial loop consumes those jobs in canonical source order
+and returns the first application error in that order. This boundary gives
+the future lane driver a place to supply its engines and collect leaf results
+without changing the schedule's error fold.
 
 The [serial evidence](../experiments/1497-baseline/README.md) changes the
 initial decomposition proposal: jobs for whole incoming regions have width

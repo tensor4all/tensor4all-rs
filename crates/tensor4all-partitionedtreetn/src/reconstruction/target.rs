@@ -72,6 +72,87 @@ where
     pub(super) scale: f64,
 }
 
+/// Operator bindings, scale and per-leaf policy shared by all prepared jobs.
+struct SubsetImagePlan<'a, V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    operator: LinearOperator<IdxTensor, V>,
+    selection: &'a [DynIndex],
+    input_pairs: Vec<(DynIndex, DynIndex)>,
+    output_pairs: Vec<(DynIndex, DynIndex)>,
+    application: LeafApplication<'a, V>,
+    certified_budget: Option<f64>,
+    scale: f64,
+}
+
+/// One materialized preimage term with its validated application center.
+struct SubsetImageJob<V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    term: SubDomainTreeTN<V>,
+    center: Option<V>,
+}
+
+impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> SubsetImagePlan<'_, V> {
+    fn apply(&self, job: SubsetImageJob<V>) -> Result<PreparedImage<V>> {
+        let SubsetImageJob { term, center } = job;
+        let exact_options = ApplyOptions {
+            svd_policy: Some(SvdTruncationPolicy::new(0.0)),
+            max_bond_dim: None,
+            center,
+            ..ApplyOptions::zipup()
+        };
+        let apply_with = |options: ApplyOptions<V>| -> Result<TreeTN<IdxTensor, V>> {
+            apply_linear_operator_to_indices(
+                &self.operator,
+                term.data(),
+                &self.input_pairs,
+                &self.output_pairs,
+                options,
+            )
+            .map_err(|error| {
+                PartitionedTreeTNError::tree(format!("subset operator apply: {error}"))
+            })
+        };
+        let (data, error) = match (self.application, self.certified_budget) {
+            (LeafApplication::Certified { memory_limit, .. }, Some(budget)) => {
+                let certified = apply_linear_operator_certified_to_indices(
+                    &self.operator,
+                    term.data(),
+                    &self.input_pairs,
+                    &self.output_pairs,
+                    CertifiedApplyOptions::new(budget).with_memory_limit(memory_limit),
+                )
+                .map_err(certified_failure)?;
+                let bound = certified.bound();
+                (certified.into_network(), bound)
+            }
+            (LeafApplication::Measured(requested), _) => {
+                let exact = apply_with(exact_options)?;
+                let approximate = apply_with(requested.clone())?;
+                let mut difference = exact.axpby(1.0, &approximate, -1.0)?;
+                (approximate, finite(difference.norm()?)?)
+            }
+            _ => (apply_with(exact_options)?, 0.0),
+        };
+        // Images of disjoint patches generally overlap and the selected
+        // constraints no longer hold, so keep only the spectator ones. The
+        // original support stays as input provenance.
+        let source = term.projector().clone();
+        let mut projector = source.clone();
+        for index in self.selection {
+            projector.remove(index);
+        }
+        Ok(PreparedImage {
+            source,
+            image: SubDomainTreeTN::new(data, projector)?,
+            error,
+        })
+    }
+}
+
 /// Immutable orthogonal target and its pinned reference scale.
 ///
 /// The scale is the exact L2 norm for [`Self::from_partition`] and
@@ -449,6 +530,31 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     where
         OperatorV: Clone + Hash + Eq + Ord + Send + Sync + Debug,
     {
+        let (plan, jobs) =
+            Self::plan_subset_images(preimage, center, operator, selection, options, application)?;
+        let mut images = Vec::with_capacity(jobs.len());
+        for job in jobs {
+            images.push(plan.apply(job)?);
+        }
+        Ok(PreparedImages {
+            images,
+            scale: plan.scale,
+        })
+    }
+
+    /// Validate all jobs and fix the scale, bindings, centers and budget
+    /// before applying the operator to the first leaf.
+    fn plan_subset_images<'a, OperatorV>(
+        preimage: &Self,
+        center: &V,
+        operator: &LinearOperator<IdxTensor, OperatorV>,
+        selection: &'a [DynIndex],
+        options: &SubsetOperatorOptions,
+        application: LeafApplication<'a, V>,
+    ) -> Result<(SubsetImagePlan<'a, V>, Vec<SubsetImageJob<V>>)>
+    where
+        OperatorV: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+    {
         let mut operator_nodes = operator.mpo().node_names();
         operator_nodes.sort();
         if operator_nodes.len() != selection.len() {
@@ -591,8 +697,8 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
         let terms = preimage.materialize_terms(center)?;
         let operator_nodes: HashSet<V> = operator.mpo().node_names().into_iter().collect();
         let operator_bond = operator.mpo().link_dims().into_iter().max().unwrap_or(1);
-        let mut centers = Vec::with_capacity(terms.len());
-        for term in &terms {
+        let mut jobs = Vec::with_capacity(terms.len());
+        for term in terms {
             let state = term.data();
             let term_center = balanced_center(state.site_index_network());
             if let Some(term_center) = &term_center {
@@ -614,7 +720,10 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
                     refuse_large_tree_block(peak, EXACT_TREE_BLOCK_LIMIT)?;
                 }
             }
-            centers.push(term_center);
+            jobs.push(SubsetImageJob {
+                term,
+                center: term_center,
+            });
         }
         // A certified application shares its part of the allowance equally
         // over the patches; their bounds add, because the images overlap.
@@ -623,67 +732,22 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
                 share, tolerance, ..
             } => {
                 let allowance = absolute_allowance(tolerance, scale)?;
-                Some(finite(share * allowance / terms.len().max(1) as f64)?)
+                Some(finite(share * allowance / jobs.len().max(1) as f64)?)
             }
             _ => None,
         };
-        let mut images = Vec::with_capacity(preimage.patches.len());
-        for (term, term_center) in terms.into_iter().zip(centers) {
-            let exact_options = ApplyOptions {
-                svd_policy: Some(SvdTruncationPolicy::new(0.0)),
-                max_bond_dim: None,
-                center: term_center,
-                ..ApplyOptions::zipup()
-            };
-            let apply_with = |options: ApplyOptions<V>| -> Result<TreeTN<IdxTensor, V>> {
-                apply_linear_operator_to_indices(
-                    &operator,
-                    term.data(),
-                    &input_pairs,
-                    &output_pairs,
-                    options,
-                )
-                .map_err(|error| {
-                    PartitionedTreeTNError::tree(format!("subset operator apply: {error}"))
-                })
-            };
-            let (data, error) = match (application, certified_budget) {
-                (LeafApplication::Certified { memory_limit, .. }, Some(budget)) => {
-                    let certified = apply_linear_operator_certified_to_indices(
-                        &operator,
-                        term.data(),
-                        &input_pairs,
-                        &output_pairs,
-                        CertifiedApplyOptions::new(budget).with_memory_limit(memory_limit),
-                    )
-                    .map_err(certified_failure)?;
-                    let bound = certified.bound();
-                    (certified.into_network(), bound)
-                }
-                (LeafApplication::Measured(requested), _) => {
-                    let exact = apply_with(exact_options)?;
-                    let approximate = apply_with(requested.clone())?;
-                    let mut difference = exact.axpby(1.0, &approximate, -1.0)?;
-                    (approximate, finite(difference.norm()?)?)
-                }
-                _ => (apply_with(exact_options)?, 0.0),
-            };
-            // Images of disjoint patches generally overlap and the selected
-            // constraints no longer hold, so keep only the spectator ones. The
-            // original support stays as input provenance.
-            let source = term.projector().clone();
-            let mut projector = source.clone();
-            for index in selection {
-                projector.remove(index);
-            }
-            images.push(PreparedImage {
-                source,
-                image: SubDomainTreeTN::new(data, projector)?,
-                error,
-            });
-        }
-
-        Ok(PreparedImages { images, scale })
+        Ok((
+            SubsetImagePlan {
+                operator,
+                selection,
+                input_pairs,
+                output_pairs,
+                application,
+                certified_budget,
+                scale,
+            },
+            jobs,
+        ))
     }
 
     /// Return the target's reference scale, fixed at construction.
