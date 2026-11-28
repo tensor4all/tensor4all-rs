@@ -161,8 +161,12 @@ where
                 } else {
                     None
                 };
-                if super::validate_coverage(cov, site_indices.as_deref(), std::iter::empty())
-                    .is_ok()
+                if super::validate_coverage(
+                    cov,
+                    site_indices.as_deref(),
+                    std::iter::empty::<&Projector>(),
+                )
+                .is_ok()
                 {
                     return Ok(result.with_canonical_coverage(Some(cov.to_vec())));
                 }
