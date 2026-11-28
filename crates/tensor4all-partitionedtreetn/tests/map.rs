@@ -254,3 +254,60 @@ fn try_map_patches_empty_and_callback_error() {
         .unwrap_err();
     assert!(matches!(err, PartitionedTreeTNError::InvalidCenter));
 }
+
+fn partition_with_coverage() -> (DynIndex, PartitionedTreeTN<usize>, Vec<Projector>) {
+    let site = DynIndex::new_dyn(2);
+    let tree = TreeTN::from_tensors(
+        vec![IdxTensor::from_dense(
+            vec![site.clone()],
+            vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)],
+        )
+        .unwrap()],
+        vec![0usize],
+    )
+    .unwrap();
+    let p0 = Projector::from_pairs([(site.clone(), 0)]).unwrap();
+    let p1 = Projector::from_pairs([(site.clone(), 1)]).unwrap();
+    let cover = vec![p0.clone(), p1.clone()];
+    let partition = PartitionedTreeTN::from_subdomains(vec![
+        SubDomainTreeTN::new(tree.clone(), p0).unwrap(),
+        SubDomainTreeTN::new(tree, p1).unwrap(),
+    ])
+    .unwrap()
+    .with_coverage(cover.clone())
+    .unwrap();
+    (site, partition, cover)
+}
+
+#[test]
+fn conj_preserves_coverage() {
+    let (_site, partition, cover) = partition_with_coverage();
+    let conj = partition.conj().unwrap();
+    assert!(conj.coverage().is_some());
+    assert_eq!(conj.coverage(), partition.coverage());
+    assert_eq!(conj.coverage().unwrap().len(), cover.len());
+}
+
+#[test]
+fn try_map_patches_keeps_coverage_when_projectors_unchanged() {
+    let (_site, partition, _cover) = partition_with_coverage();
+    let mapped = partition.try_map_patches(|p| Ok(p.clone())).unwrap();
+    assert_eq!(mapped.coverage(), partition.coverage());
+}
+
+#[test]
+fn try_map_patches_drops_coverage_when_projectors_change() {
+    let (site, partition, _cover) = partition_with_coverage();
+    let new_site = DynIndex::new_dyn(2);
+    let mapped = partition
+        .try_map_patches(|patch| {
+            let data = patch.data().replaceind(&site, &new_site).unwrap();
+            let val = patch.projector().get(&site).unwrap();
+            SubDomainTreeTN::new(
+                data,
+                Projector::from_pairs([(new_site.clone(), val)]).unwrap(),
+            )
+        })
+        .unwrap();
+    assert_eq!(mapped.coverage(), None);
+}

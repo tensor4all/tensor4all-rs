@@ -23,6 +23,11 @@ where
     /// the projector that the returned network actually obeys.
     ///
     /// The collected patches are validated through [`Self::from_subdomains`].
+    ///
+    /// The coverage contract of [`Self::coverage`] is preserved when `f` returns
+    /// every patch with its original projector. If `f` changes any projector the
+    /// old coverage cannot be transported in general, so the result carries no
+    /// coverage (`None`); re-attach one with [`Self::with_coverage`].
     /// `f` is `Sync` so a lane-parallel variant can reuse the same closure
     /// bound without changing callers. On any error, `self` is left untouched.
     ///
@@ -78,10 +83,20 @@ where
         F: Fn(&SubDomainTreeTN<V>) -> Result<SubDomainTreeTN<V>> + Sync,
     {
         let mut mapped = Vec::with_capacity(self.len());
-        for (_, patch) in self.iter() {
-            mapped.push(f(patch)?);
+        let mut projectors_preserved = true;
+        for (projector, patch) in self.iter() {
+            let new_patch = f(patch)?;
+            projectors_preserved &= new_patch.projector() == projector;
+            mapped.push(new_patch);
         }
-        Self::from_subdomains(mapped)
+        let result = Self::from_subdomains(mapped)?;
+        // A coverage is stated in terms of projectors, so it can only be carried
+        // over when `f` left every projector as it was.
+        if projectors_preserved {
+            Ok(result.with_canonical_coverage(self.coverage().map(<[_]>::to_vec)))
+        } else {
+            Ok(result)
+        }
     }
 
     /// Return the elementwise complex conjugate of every patch in the
