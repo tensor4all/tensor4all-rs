@@ -64,7 +64,7 @@ fn visit_each_projector_group_once() {
     let visited_members: Mutex<Vec<Vec<Projector>>> = Mutex::new(Vec::new());
 
     let merged = partition
-        .try_map_patch_groups(&[site_g.clone()], |group_proj, group| {
+        .try_map_patch_groups(std::slice::from_ref(&site_g), |group_proj, group| {
             visited_groups.lock().unwrap().push(group_proj.clone());
             visited_sizes.lock().unwrap().push(group.len());
             visited_members
@@ -131,7 +131,7 @@ fn try_map_patch_groups_empty_group_output_drops_group() {
 
     // Drop group 0, keep group 1's patches as-is.
     let filtered = partition
-        .try_map_patch_groups(&[site_g.clone()], |group_proj, group| {
+        .try_map_patch_groups(std::slice::from_ref(&site_g), |group_proj, group| {
             if group_proj.get(&site_g) == Some(0) {
                 Ok(Vec::new())
             } else {
@@ -146,7 +146,7 @@ fn try_map_patch_groups_empty_group_output_drops_group() {
 
     // Dropping all groups produces an empty partition.
     let all_dropped = partition
-        .try_map_patch_groups(&[site_g.clone()], |_, _| Ok(Vec::new()))
+        .try_map_patch_groups(std::slice::from_ref(&site_g), |_, _| Ok(Vec::new()))
         .unwrap();
     assert!(all_dropped.is_empty());
 }
@@ -187,7 +187,7 @@ fn try_map_patch_groups_deterministic_order() {
     let record = |p: &PartitionedTreeTN<usize>| -> Vec<(Projector, Vec<Projector>)> {
         let seen = Mutex::new(Vec::new());
         let _ = p
-            .try_map_patch_groups(&[site_g.clone()], |gp, group| {
+            .try_map_patch_groups(std::slice::from_ref(&site_g), |gp, group| {
                 seen.lock().unwrap().push((
                     gp.clone(),
                     group
@@ -215,7 +215,7 @@ fn try_map_patch_groups_rejects_disagreeing_duplicate_and_malformed_outputs() {
 
     // 1. Returned patch projector disagrees with group_proj on group_by -> ProjectorMismatch.
     let disagree_err = partition
-        .try_map_patch_groups(&[site_g.clone()], |group_proj, group| {
+        .try_map_patch_groups(std::slice::from_ref(&site_g), |group_proj, group| {
             if group_proj.get(&site_g) == Some(0) {
                 let wrong_proj = Projector::from_pairs([(site_g.clone(), 1), (site_s.clone(), 0)])?;
                 Ok(vec![SubDomainTreeTN::new(
@@ -234,7 +234,7 @@ fn try_map_patch_groups_rejects_disagreeing_duplicate_and_malformed_outputs() {
 
     // 2. Duplicate projector returned -> OverlappingProjectors (never a silent overwrite).
     let dup_err = partition
-        .try_map_patch_groups(&[site_g.clone()], |_group_proj, group| {
+        .try_map_patch_groups(std::slice::from_ref(&site_g), |_group_proj, group| {
             Ok(vec![group[0].clone(), group[0].clone()])
         })
         .unwrap_err();
@@ -245,7 +245,7 @@ fn try_map_patch_groups_rejects_disagreeing_duplicate_and_malformed_outputs() {
 
     // 3. Mismatched topology across groups -> TopologyMismatch.
     let topo_err = partition
-        .try_map_patch_groups(&[site_g.clone()], |group_proj, group| {
+        .try_map_patch_groups(std::slice::from_ref(&site_g), |group_proj, group| {
             if group_proj.get(&site_g) == Some(1) {
                 let single = IdxTensor::from_dense(
                     vec![site_g.clone()],
@@ -267,7 +267,7 @@ fn try_map_patch_groups_rejects_disagreeing_duplicate_and_malformed_outputs() {
     // 4. Mismatched site index across groups -> SiteIndexMismatch.
     let other_s = DynIndex::new_dyn(3);
     let site_err = partition
-        .try_map_patch_groups(&[site_g.clone()], |group_proj, group| {
+        .try_map_patch_groups(std::slice::from_ref(&site_g), |group_proj, group| {
             if group_proj.get(&site_g) == Some(1) {
                 let new_tree = group[0]
                     .data()
@@ -286,7 +286,7 @@ fn try_map_patch_groups_rejects_disagreeing_duplicate_and_malformed_outputs() {
 
     // 5. Callback error propagates directly.
     let cb_err = partition
-        .try_map_patch_groups(&[site_g.clone()], |_, _| {
+        .try_map_patch_groups(std::slice::from_ref(&site_g), |_, _| {
             Err(PartitionedTreeTNError::InvalidCenter)
         })
         .unwrap_err();
