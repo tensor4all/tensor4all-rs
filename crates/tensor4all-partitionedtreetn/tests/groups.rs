@@ -309,3 +309,66 @@ fn try_map_patch_groups_empty_partition() {
         .unwrap();
     assert!(out.is_empty());
 }
+
+#[test]
+fn try_map_patch_groups_preserves_coverage_only_when_projectors_unchanged() {
+    let site_g = DynIndex::new_dyn(2);
+    let site_s = DynIndex::new_dyn(3);
+    let pairs = [(0, 0), (0, 1), (1, 0), (1, 1), (1, 2)];
+    let mut coverage = Vec::new();
+    for g in 0..2 {
+        for s in 0..3 {
+            coverage
+                .push(Projector::from_pairs([(site_g.clone(), g), (site_s.clone(), s)]).unwrap());
+        }
+    }
+    let partition = make_grouped_complex_partition(&site_g, &site_s, &pairs)
+        .with_coverage(coverage.clone())
+        .unwrap();
+    let expected_cov = partition.coverage().unwrap().to_vec();
+
+    // 1. Preserving every projector carries coverage over unchanged.
+    let preserved = partition
+        .try_map_patch_groups(std::slice::from_ref(&site_g), |_, group| {
+            Ok(group.iter().map(|&p| p.clone()).collect())
+        })
+        .unwrap();
+    assert_eq!(preserved.coverage(), Some(expected_cov.as_slice()));
+
+    // 2. Merging groups changes projectors -> coverage is cleared to None.
+    let merged = partition
+        .try_map_patch_groups(std::slice::from_ref(&site_g), |group_proj, group| {
+            let mut sum = group[0].data().clone();
+            for patch in &group[1..] {
+                sum = sum
+                    .add(patch.data())
+                    .map_err(PartitionedTreeTNError::from)?;
+            }
+            Ok(vec![SubDomainTreeTN::new(sum, group_proj.clone())?])
+        })
+        .unwrap();
+    assert_eq!(merged.coverage(), None);
+
+    // 3. Dropping a group changes the projector set -> coverage is cleared to None.
+    let dropped = partition
+        .try_map_patch_groups(std::slice::from_ref(&site_g), |group_proj, group| {
+            if group_proj.get(&site_g) == Some(0) {
+                Ok(Vec::new())
+            } else {
+                Ok(group.iter().map(|&p| p.clone()).collect())
+            }
+        })
+        .unwrap();
+    assert_eq!(dropped.coverage(), None);
+
+    // 4. Empty partition with coverage preserves its coverage.
+    let empty_with_cov: PartitionedTreeTN<usize> = PartitionedTreeTN::new()
+        .with_coverage(coverage)
+        .unwrap();
+    let empty_mapped = empty_with_cov
+        .try_map_patch_groups(std::slice::from_ref(&site_g), |_, _| {
+            Err(PartitionedTreeTNError::InvalidCenter)
+        })
+        .unwrap();
+    assert_eq!(empty_mapped.coverage(), empty_with_cov.coverage());
+}
