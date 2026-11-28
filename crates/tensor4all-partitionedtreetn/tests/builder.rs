@@ -94,7 +94,11 @@ fn builder_preserves_absent_and_present_projectors() {
         if p == &p0 {
             Ok(Some(make_complex_two_site_tree(&site_a, &site_b, 0.0)))
         } else {
-            Ok(Some(make_complex_two_site_tree(&site_a, &other_site_b, 1.0)))
+            Ok(Some(make_complex_two_site_tree(
+                &site_a,
+                &other_site_b,
+                1.0,
+            )))
         }
     })
     .unwrap_err();
@@ -127,25 +131,27 @@ fn builder_preserves_absent_and_present_projectors() {
         })
         .unwrap_err();
     assert!(
-        matches!(invalid_dtype_err, PartitionedTreeTNError::DTypeMismatch { .. }),
+        matches!(
+            invalid_dtype_err,
+            PartitionedTreeTNError::DTypeMismatch { .. }
+        ),
         "expected DTypeMismatch, got {invalid_dtype_err:?}"
     );
 
     // Invalid output: mismatched topology -> TopologyMismatch.
-    let invalid_topo_err =
-        PartitionedTreeTN::try_from_projectors(&[p0.clone(), p2.clone()], |p| {
-            if p == &p0 {
-                Ok(Some(make_complex_two_site_tree(&site_a, &site_b, 0.0)))
-            } else {
-                let t = IdxTensor::from_dense(
-                    vec![site_a.clone(), site_b.clone()],
-                    vec![Complex64::new(1.0, 0.0); 6],
-                )
-                .unwrap();
-                Ok(Some(TreeTN::from_tensors(vec![t], vec![0usize]).unwrap()))
-            }
-        })
-        .unwrap_err();
+    let invalid_topo_err = PartitionedTreeTN::try_from_projectors(&[p0.clone(), p2.clone()], |p| {
+        if p == &p0 {
+            Ok(Some(make_complex_two_site_tree(&site_a, &site_b, 0.0)))
+        } else {
+            let t = IdxTensor::from_dense(
+                vec![site_a.clone(), site_b.clone()],
+                vec![Complex64::new(1.0, 0.0); 6],
+            )
+            .unwrap();
+            Ok(Some(TreeTN::from_tensors(vec![t], vec![0usize]).unwrap()))
+        }
+    })
+    .unwrap_err();
     assert!(
         matches!(invalid_topo_err, PartitionedTreeTNError::TopologyMismatch),
         "expected TopologyMismatch, got {invalid_topo_err:?}"

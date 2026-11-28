@@ -1,5 +1,6 @@
 //! Collections of eagerly projected [`SubDomainTreeTN`] patches.
 
+mod builder;
 mod coverage;
 mod evaluate;
 mod map;
