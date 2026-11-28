@@ -27,6 +27,7 @@ mod patch_order_determinism;
 mod patching;
 mod project_first_add;
 mod reconstruction;
+mod solver;
 mod subdomain_tree_tn;
 mod subset_operator_certified;
 mod subset_operator_exact;

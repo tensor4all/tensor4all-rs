@@ -22,7 +22,9 @@ use crate::subdomain_tree_tn::{
     ensure_same_tree_structure, sort_by_patch_order, validate_contraction_options,
     validate_contraction_site_assignment, validate_truncation_options, SubDomainTreeTN,
 };
-use tensor4all_core::DynIndex;
+use tensor4all_core::{
+    AnyScalar, DynIndex, TensorIndex, TensorVectorSpace, TensorVectorSpaceError,
+};
 use tensor4all_treetn::{
     contraction::ContractionOptions, ExactSum, SumEngine, TreeTN, TruncationOptions,
 };
@@ -1231,6 +1233,263 @@ where
         self.add_with(other, Some((center, options)), AUTOMATIC_REFINEMENT_LIMIT)
     }
 
+    /// Scale every patch in the partition by `scalar`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the validation errors of [`Self::norm_squared`] when the
+    /// partition is inconsistent, or [`PartitionedTreeTNError::TreeTN`] when
+    /// scaling a patch fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{AnyScalar, DynIndex, IdxTensor};
+    /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector, SubDomainTreeTN};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let site = DynIndex::new_dyn(2);
+    /// let tree = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense(vec![site.clone()], vec![3.0_f64, 4.0])?],
+    ///     vec![0usize],
+    /// )?;
+    /// let p = PartitionedTreeTN::from_subdomain(SubDomainTreeTN::new(
+    ///     tree,
+    ///     Projector::from_pairs([(site, 0)])?,
+    /// )?)?;
+    /// let scaled = p.scale(AnyScalar::new_real(2.0))?;
+    /// assert!((scaled.norm()? - 6.0).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn scale(&self, scalar: AnyScalar) -> Result<Self> {
+        self.validate_contents()?;
+        let mut data = HashMap::with_capacity(self.data.len());
+        for (projector, patch) in &self.data {
+            let scaled = patch
+                .data()
+                .scale(scalar.clone())
+                .map_err(PartitionedTreeTNError::from)?;
+            data.insert(
+                projector.clone(),
+                SubDomainTreeTN::new(scaled, projector.clone())?,
+            );
+        }
+        Ok(Self { data })
+    }
+
+    /// Compute the exact inner product `⟨self, other⟩ = Σ conj(self)_i * other_i`.
+    ///
+    /// Patches with equal projectors pair; a patch absent on one side is zero.
+    /// When the two operands have different patch layouts, both are refined onto
+    /// their common refinement (bounded by [`AUTOMATIC_REFINEMENT_LIMIT`]) before
+    /// pairing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PartitionedTreeTNError::Empty`] if either operand is empty,
+    /// [`PartitionedTreeTNError::TopologyMismatch`],
+    /// [`PartitionedTreeTNError::SiteIndexMismatch`],
+    /// [`PartitionedTreeTNError::DTypeMismatch`],
+    /// [`PartitionedTreeTNError::RefinementTooLarge`], or
+    /// [`PartitionedTreeTNError::TreeTN`] when a patch inner product fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector, SubDomainTreeTN};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let site = DynIndex::new_dyn(2);
+    /// let tree = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense(vec![site.clone()], vec![3.0_f64, 4.0])?],
+    ///     vec![0usize],
+    /// )?;
+    /// let p = PartitionedTreeTN::from_subdomain(SubDomainTreeTN::new(
+    ///     tree,
+    ///     Projector::from_pairs([(site, 0)])?,
+    /// )?)?;
+    /// assert!((p.inner(&p)?.real() - 9.0).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn inner(&self, other: &Self) -> Result<AnyScalar> {
+        self.validate_contents()?;
+        other.validate_contents()?;
+        let (left_template, right_template) = nonempty_templates(self, other)?;
+        ensure_same_tree_structure(left_template.data(), right_template.data())?;
+        ensure_same_dtype(left_template.scalar_kind()?, right_template.scalar_kind()?)?;
+
+        if ensure_union_disjoint(&self.data, &other.data).is_ok() {
+            return self.inner_patchwise(other);
+        }
+        let atoms = Self::common_refinement(&[self, other])?;
+        ensure_refinement_within(atoms.len(), AUTOMATIC_REFINEMENT_LIMIT)?;
+        let left = self.refine_to(&atoms)?;
+        let right = other.refine_to(&atoms)?;
+        left.inner_patchwise(&right)
+    }
+
+    fn inner_patchwise(&self, other: &Self) -> Result<AnyScalar> {
+        let mut total: Option<AnyScalar> = None;
+        for left in self.ordered_patches() {
+            if let Some(right) = other.data.get(left.projector()) {
+                let term = left.inner(right)?;
+                total = Some(match total {
+                    Some(acc) => acc + term,
+                    None => term,
+                });
+            }
+        }
+        Ok(total.unwrap_or_else(|| {
+            if TensorVectorSpace::is_complex(self) {
+                AnyScalar::new_complex(0.0, 0.0)
+            } else {
+                AnyScalar::new_real(0.0)
+            }
+        }))
+    }
+
+    /// Compute the truncated linear combination `a * self + b * other` on the
+    /// common refinement of both partitions, truncating each output patch once
+    /// at `center`.
+    ///
+    /// Patches with equal projectors are combined via [`TreeTN::axpby`]; a patch
+    /// absent on one side is treated as zero and scaled by the other side's
+    /// coefficient. When the operands have differing layouts, both are refined
+    /// onto their common refinement up to [`AUTOMATIC_REFINEMENT_LIMIT`] atoms.
+    ///
+    /// # Default truncation policy
+    ///
+    /// Pass [`TruncationOptions::default()`] for the default policy: no maximum
+    /// bond dimension cap and the default SVD truncation policy of
+    /// `tensor4all-treetn`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PartitionedTreeTNError::Empty`] for an empty operand,
+    /// [`PartitionedTreeTNError::TopologyMismatch`],
+    /// [`PartitionedTreeTNError::SiteIndexMismatch`],
+    /// [`PartitionedTreeTNError::DTypeMismatch`],
+    /// [`PartitionedTreeTNError::InvalidCenter`],
+    /// [`PartitionedTreeTNError::InvalidOptions`],
+    /// [`PartitionedTreeTNError::RefinementTooLarge`], or
+    /// [`PartitionedTreeTNError::TreeTN`] when patch combination or truncation
+    /// fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{AnyScalar, DynIndex, IdxTensor};
+    /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector, SubDomainTreeTN};
+    /// use tensor4all_treetn::{TreeTN, TruncationOptions};
+    ///
+    /// let site = DynIndex::new_dyn(2);
+    /// let tree = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense(vec![site.clone()], vec![3.0_f64, 4.0])?],
+    ///     vec![0usize],
+    /// )?;
+    /// let p = PartitionedTreeTN::from_subdomain(SubDomainTreeTN::new(
+    ///     tree,
+    ///     Projector::from_pairs([(site, 0)])?,
+    /// )?)?;
+    /// let comb = p.axpby_truncated(
+    ///     AnyScalar::new_real(2.0),
+    ///     &p,
+    ///     AnyScalar::new_real(-1.0),
+    ///     &0usize,
+    ///     TruncationOptions::default(),
+    /// )?;
+    /// assert!((comb.norm()? - 3.0).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn axpby_truncated(
+        &self,
+        a: AnyScalar,
+        other: &Self,
+        b: AnyScalar,
+        center: &V,
+        options: TruncationOptions,
+    ) -> Result<Self> {
+        validate_truncation_options(&options)?;
+        self.axpby_with(
+            a,
+            other,
+            b,
+            Some((center, options)),
+            AUTOMATIC_REFINEMENT_LIMIT,
+        )
+    }
+
+    fn axpby_with(
+        &self,
+        a: AnyScalar,
+        other: &Self,
+        b: AnyScalar,
+        truncation: Option<(&V, TruncationOptions)>,
+        limit: usize,
+    ) -> Result<Self> {
+        self.validate_contents()?;
+        other.validate_contents()?;
+        let (left_template, right_template) = nonempty_templates(self, other)?;
+        ensure_same_tree_structure(left_template.data(), right_template.data())?;
+        ensure_same_dtype(left_template.scalar_kind()?, right_template.scalar_kind()?)?;
+        if let Some((center, _)) = truncation {
+            ensure_center(left_template.data(), center)?;
+            ensure_center(right_template.data(), center)?;
+        }
+
+        if ensure_union_disjoint(&self.data, &other.data).is_ok() {
+            return self.axpby_patchwise(a, other, b, truncation);
+        }
+        let atoms = Self::common_refinement(&[self, other])?;
+        ensure_refinement_within(atoms.len(), limit)?;
+        let left = self.refine_to(&atoms)?;
+        let right = other.refine_to(&atoms)?;
+        left.axpby_patchwise(a, &right, b, truncation)
+    }
+
+    fn axpby_patchwise(
+        &self,
+        a: AnyScalar,
+        other: &Self,
+        b: AnyScalar,
+        truncation: Option<(&V, TruncationOptions)>,
+    ) -> Result<Self> {
+        ensure_union_disjoint(&self.data, &other.data)?;
+        let mut data = HashMap::with_capacity(self.data.len() + other.data.len());
+        for (projector, left) in &self.data {
+            let mut combined = if let Some(right) = other.data.get(projector) {
+                let tree = TreeTN::axpby(left.data(), a.clone(), right.data(), b.clone())
+                    .map_err(PartitionedTreeTNError::from)?;
+                SubDomainTreeTN::new(tree, projector.clone())?
+            } else {
+                let tree = left
+                    .data()
+                    .scale(a.clone())
+                    .map_err(PartitionedTreeTNError::from)?;
+                SubDomainTreeTN::new(tree, projector.clone())?
+            };
+            if let Some((center, options)) = truncation {
+                combined.truncate(center, options)?;
+            }
+            data.insert(projector.clone(), combined);
+        }
+        for (projector, right) in &other.data {
+            if !self.data.contains_key(projector) {
+                let tree = right
+                    .data()
+                    .scale(b.clone())
+                    .map_err(PartitionedTreeTNError::from)?;
+                let mut scaled = SubDomainTreeTN::new(tree, projector.clone())?;
+                if let Some((center, options)) = truncation {
+                    scaled.truncate(center, options)?;
+                }
+                data.insert(projector.clone(), scaled);
+            }
+        }
+        Ok(Self { data })
+    }
+
     /// Shared body of [`Self::add`] and [`Self::add_truncated`]: validate the
     /// operands, refine differing layouts onto at most `limit` atoms, and sum
     /// patch-wise, truncating the keys present in both operands when
@@ -2018,6 +2277,169 @@ where
 
     fn into_iter(self) -> Self::IntoIter {
         self.ordered_entries().into_iter()
+    }
+}
+
+impl<V> TensorIndex for PartitionedTreeTN<V>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    type Index = DynIndex;
+    type Error = TensorVectorSpaceError;
+
+    fn external_indices(&self) -> Vec<Self::Index> {
+        self.ordered_patches()
+            .first()
+            .map(|patch| patch.data().external_indices())
+            .unwrap_or_default()
+    }
+
+    fn replaceind(
+        &self,
+        old_index: &Self::Index,
+        new_index: &Self::Index,
+    ) -> std::result::Result<Self, Self::Error> {
+        self.validate_contents().map_err(anyhow::Error::new)?;
+        let mut data = HashMap::with_capacity(self.data.len());
+        for (projector, patch) in &self.data {
+            let new_tree = patch
+                .data()
+                .replaceind(old_index, new_index)
+                .map_err(PartitionedTreeTNError::from)
+                .map_err(anyhow::Error::new)?;
+            let mut new_proj = projector.clone();
+            if let Some(coord) = new_proj.remove(old_index) {
+                new_proj
+                    .insert(new_index.clone(), coord)
+                    .map_err(anyhow::Error::new)?;
+            }
+            data.insert(
+                new_proj.clone(),
+                SubDomainTreeTN::new(new_tree, new_proj).map_err(anyhow::Error::new)?,
+            );
+        }
+        Ok(Self { data })
+    }
+
+    fn replace_indices(
+        &self,
+        old_indices: &[Self::Index],
+        new_indices: &[Self::Index],
+    ) -> std::result::Result<Self, Self::Error> {
+        if old_indices.len() != new_indices.len() {
+            return Err(anyhow::Error::new(PartitionedTreeTNError::InvalidOptions {
+                operation: "PartitionedTreeTN::replace_indices",
+                reason: "old_indices and new_indices must have equal length",
+            })
+            .into());
+        }
+        let mut current = self.clone();
+        for (old_idx, new_idx) in old_indices.iter().zip(new_indices.iter()) {
+            if old_idx != new_idx {
+                current = current.replaceind(old_idx, new_idx)?;
+            }
+        }
+        Ok(current)
+    }
+}
+
+/// Vector-space operations on nonempty partitioned TreeTNs.
+///
+/// Patches with equal projectors pair; a patch absent on one side is treated as
+/// zero. Linear combinations (`axpby`) are exact on the common refinement;
+/// compression belongs in [`PartitionedTreeTN::axpby_truncated`] or in a Krylov
+/// solver's truncation callback.
+impl<V> TensorVectorSpace for PartitionedTreeTN<V>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
+        PartitionedTreeTN::norm_squared(self)
+            .map_err(anyhow::Error::new)
+            .map_err(Into::into)
+    }
+
+    fn norm(&self) -> std::result::Result<f64, Self::Error> {
+        PartitionedTreeTN::norm(self)
+            .map_err(anyhow::Error::new)
+            .map_err(Into::into)
+    }
+
+    fn axpby(
+        &self,
+        a: AnyScalar,
+        other: &Self,
+        b: AnyScalar,
+    ) -> std::result::Result<Self, Self::Error> {
+        self.axpby_with(a, other, b, None, AUTOMATIC_REFINEMENT_LIMIT)
+            .map_err(anyhow::Error::new)
+            .map_err(Into::into)
+    }
+
+    fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error> {
+        PartitionedTreeTN::scale(self, scalar)
+            .map_err(anyhow::Error::new)
+            .map_err(Into::into)
+    }
+
+    fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, Self::Error> {
+        PartitionedTreeTN::inner(self, other)
+            .map_err(anyhow::Error::new)
+            .map_err(Into::into)
+    }
+
+    fn is_single_precision(&self) -> bool {
+        self.data
+            .values()
+            .any(|patch| TensorVectorSpace::is_single_precision(patch.data()))
+    }
+
+    fn is_complex(&self) -> bool {
+        self.data
+            .values()
+            .any(|patch| TensorVectorSpace::is_complex(patch.data()))
+    }
+
+    fn maxabs(&self) -> std::result::Result<f64, Self::Error> {
+        Err(anyhow::Error::new(PartitionedTreeTNError::InvalidOptions {
+            operation: "PartitionedTreeTN::maxabs",
+            reason: "maxabs requires explicit dense materialization; use a norm-based residual",
+        })
+        .into())
+    }
+
+    fn min_nonzero_abs(&self) -> std::result::Result<Option<f64>, Self::Error> {
+        Err(anyhow::Error::new(PartitionedTreeTNError::InvalidOptions {
+            operation: "PartitionedTreeTN::min_nonzero_abs",
+            reason: "min_nonzero_abs requires explicit dense materialization",
+        })
+        .into())
+    }
+
+    fn is_all_finite(&self) -> std::result::Result<bool, Self::Error> {
+        self.validate_contents().map_err(anyhow::Error::new)?;
+        for patch in self.ordered_patches() {
+            if !TensorVectorSpace::is_all_finite(patch.data())
+                .map_err(PartitionedTreeTNError::from)
+                .map_err(anyhow::Error::new)?
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn validate(&self) -> std::result::Result<(), Self::Error> {
+        self.validate_contents().map_err(anyhow::Error::new)?;
+        if self.is_empty() {
+            return Err(anyhow::Error::new(PartitionedTreeTNError::Empty).into());
+        }
+        for patch in self.ordered_patches() {
+            TensorVectorSpace::validate(patch.data())
+                .map_err(PartitionedTreeTNError::from)
+                .map_err(anyhow::Error::new)?;
+        }
+        Ok(())
     }
 }
 
