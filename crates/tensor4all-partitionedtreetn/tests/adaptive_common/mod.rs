@@ -886,7 +886,9 @@ pub(crate) fn assert_same_norm(a: &NormReport, b: &NormReport) {
 /// Two runs are identical: the same records in the same order, the same
 /// counts, and bitwise-identical stored patches (same legs in the same
 /// positional order, same raw column-major data). The fields exempt from the
-/// determinism claim are compared as in [`assert_same_norm`].
+/// determinism claim are compared as in [`assert_same_norm`]. Per-patch
+/// `log_norm` is additionally checked bitwise for these fixtures, a stronger
+/// check than the general norm-readout promise.
 pub(crate) fn assert_same_run(
     problem: &Problem,
     first: &PatchedInterpolationResult<Name>,
@@ -966,7 +968,8 @@ pub(crate) fn run_digest(result: PatchedInterpolationResult<Name>, problem: &Pro
 /// Two runs on separately built problems agree: every count and record
 /// bitwise, the projectors (accepted and zero) by site position, the stored
 /// patches by fingerprint, and the fields exempt from the determinism claim
-/// as in [`assert_same_norm`].
+/// as in [`assert_same_norm`]. Per-patch `log_norm` is additionally pinned
+/// bitwise for these fixtures, beyond the general norm-readout promise.
 pub(crate) fn assert_same_runs_across_problems(first: &RunDigest, second: &RunDigest) {
     let (a, b) = (&first.report, &second.report);
     assert_eq!(a.tolerance, b.tolerance);

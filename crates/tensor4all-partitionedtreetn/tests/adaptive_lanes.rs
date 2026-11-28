@@ -517,8 +517,8 @@ fn allowed_cpus_split_into_pinned_backends_builds_lanes_and_runs() {
 // generic-path guarantee remains unestablished.
 
 /// The lane counts compared; one lane is the reference. Four lanes claim the
-/// patches of a wave dynamically, so the order in which patches finish varies
-/// from run to run while the result must not.
+/// patches of a wave dynamically, so the order in which patches finish may
+/// vary from run to run while the result must not.
 const LANE_COUNTS: [usize; 3] = [1, 2, 4];
 
 /// `count` lanes, each with its own serial engine.
@@ -528,7 +528,8 @@ fn serial_lanes(count: usize) -> TenferroLanes {
 }
 
 /// Run `on` at every lane count and compare each run with the one-lane run.
-/// The fixture must split, so that a wave holds several patches for the lanes.
+/// The fixture must split into six stored patches. These assertions do not
+/// establish wave width or concurrent execution.
 fn assert_lane_count_identity(
     problem: &Problem,
     on: impl Fn(usize) -> PatchedInterpolationResult<Name>,
@@ -541,7 +542,7 @@ fn assert_lane_count_identity(
     );
     assert!(
         reference.report.splits >= 2 && reference.partition.len() >= 3,
-        "the fixture must give waves of several patches: {} splits, {} patches",
+        "the fixture must split into several patches: {} splits, {} patches",
         reference.report.splits,
         reference.partition.len()
     );
