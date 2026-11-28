@@ -8,6 +8,7 @@ use tensor4all_core::{AnyScalar, ColMajorArrayRef, DynIndex};
 
 use super::PartitionedTreeTN;
 use crate::error::{PartitionedTreeTNError, Result};
+use crate::projector::Projector;
 use crate::subdomain_tree_tn::{ScalarKind, SubDomainTreeTN};
 
 /// Patch ids of one group, keyed by the values the group's rows are fixed to.
@@ -143,8 +144,11 @@ where
     /// two-dimensional, its row count differs from `indices.len()`, `indices`
     /// repeats an index, or a value is out of bounds (checked for every point,
     /// covered or not); [`PartitionedTreeTNError::SiteIndexMismatch`] when
-    /// `indices` is not the partition's site space or a dimension differs; and
-    /// [`PartitionedTreeTNError::TreeTN`] when a patch evaluation fails.
+    /// `indices` is not the partition's site space or a dimension differs;
+    /// [`PartitionedTreeTNError::OutsideCoverage`] when the partition carries a
+    /// [`Self::coverage`] and any requested point lies outside it (leaving the
+    /// partition untouched); and [`PartitionedTreeTNError::TreeTN`] when a
+    /// patch evaluation fails.
     ///
     /// # Examples
     ///
@@ -198,19 +202,44 @@ where
         }
 
         let patches: Vec<&SubDomainTreeTN<V>> = self.ordered_patches();
+        if let Some(template) = patches.first() {
+            let (sites, _) = template.data().all_site_indices()?;
+            if sites.len() != rows {
+                return Err(PartitionedTreeTNError::SiteIndexMismatch);
+            }
+            for site in &sites {
+                match positions.get(site) {
+                    Some(&row) if indices[row].dim == site.dim => {}
+                    _ => return Err(PartitionedTreeTNError::SiteIndexMismatch),
+                }
+            }
+        }
+
+        if let Some(cov) = self.coverage() {
+            for point in 0..n_points {
+                let col = &data[point * rows..(point + 1) * rows];
+                let covered = cov.iter().any(|projector| {
+                    projector
+                        .iter()
+                        .all(|(idx, &val)| positions.get(idx).is_some_and(|&row| col[row] == val))
+                });
+                if !covered {
+                    let offending = Projector::from_entries(
+                        indices
+                            .iter()
+                            .enumerate()
+                            .map(|(row, idx)| (idx.clone(), col[row])),
+                    );
+                    return Err(PartitionedTreeTNError::OutsideCoverage {
+                        projector: offending,
+                    });
+                }
+            }
+        }
+
         let Some(template) = patches.first() else {
             return Ok(vec![AnyScalar::new_real(0.0); n_points]);
         };
-        let (sites, _) = template.data().all_site_indices()?;
-        if sites.len() != rows {
-            return Err(PartitionedTreeTNError::SiteIndexMismatch);
-        }
-        for site in &sites {
-            match positions.get(site) {
-                Some(&row) if indices[row].dim == site.dim => {}
-                _ => return Err(PartitionedTreeTNError::SiteIndexMismatch),
-            }
-        }
 
         let locator = PatchLocator::from_patches(patches.clone(), &positions)?;
         let mut owned: Vec<Vec<usize>> = vec![Vec::new(); patches.len()];

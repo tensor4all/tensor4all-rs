@@ -223,6 +223,20 @@ pub enum PartitionedTreeTNError {
     #[error("partitioned TreeTN is empty; add at least one patch")]
     Empty,
 
+    /// An operation required a region outside a partition's defined coverage.
+    ///
+    /// Inside a partition's coverage, an absent patch is an exact zero; outside
+    /// it, the value is unknown (uncomputed). Operations that read or depend on
+    /// an uncovered region fail with this error and leave all inputs untouched.
+    #[error(
+        "region {projector:?} lies outside the partition's defined coverage; \
+         restrict the operation to the covered region or compute the missing patches first"
+    )]
+    OutsideCoverage {
+        /// First offending projector that lies outside the defined coverage.
+        projector: Projector,
+    },
+
     /// A projector refers to a site index absent by full identity.
     #[error("projector index {index:?} is absent from the TreeTN site space")]
     ProjectorIndexNotFound {

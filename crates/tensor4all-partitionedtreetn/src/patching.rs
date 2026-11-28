@@ -1313,8 +1313,9 @@ where
 {
     validate_adaptive_truncation_options(cutoff, max_bond_dim)?;
     partitioned.validate_contents()?;
+    let coverage = partitioned.coverage().map(|cov| cov.to_vec());
     if partitioned.is_empty() {
-        return Ok(PartitionedTreeTN::new());
+        return Ok(PartitionedTreeTN::new().with_canonical_coverage(coverage));
     }
 
     let template = partitioned
@@ -1323,14 +1324,15 @@ where
         .ok_or(PartitionedTreeTNError::Empty)?;
     ensure_center(template.data(), center)?;
 
-    match allocation {
+    let truncated = match allocation {
         BudgetAllocation::Volume => {
-            truncate_adaptive_volume(partitioned, center, cutoff, max_bond_dim, records)
+            truncate_adaptive_volume(partitioned, center, cutoff, max_bond_dim, records)?
         }
         BudgetAllocation::Norm => {
-            truncate_adaptive_norm(partitioned, center, cutoff, max_bond_dim, records)
+            truncate_adaptive_norm(partitioned, center, cutoff, max_bond_dim, records)?
         }
-    }
+    };
+    Ok(truncated.with_canonical_coverage(coverage))
 }
 
 /// Volume allocation: absolute, volume-proportional squared-tail budgets.
