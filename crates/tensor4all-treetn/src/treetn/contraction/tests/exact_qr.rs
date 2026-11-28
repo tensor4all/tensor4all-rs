@@ -47,6 +47,10 @@ impl<'a> RecordingLeaves<'a> {
 }
 
 impl LeafOps<IdxTensor> for RecordingLeaves<'_> {
+    fn zipup_sweep_leaves(&self) -> &dyn LeafOps<IdxTensor> {
+        self.base.zipup_sweep_leaves()
+    }
+
     fn contract_pair(&self, lhs: &IdxTensor, rhs: &IdxTensor) -> anyhow::Result<IdxTensor> {
         self.base.contract_pair(lhs, rhs)
     }
@@ -90,6 +94,7 @@ impl LeafOps<IdxTensor> for RecordingLeaves<'_> {
 fn operator_and_state<T: TensorElement>(
     edges: &[(usize, usize)],
     entry: fn(&mut ChaCha8Rng) -> T,
+    site_free: Option<usize>,
 ) -> (TreeTN<IdxTensor, usize>, TreeTN<IdxTensor, usize>) {
     let nodes = edges.len() + 1;
     let mut random = ChaCha8Rng::seed_from_u64(1285);
@@ -97,6 +102,9 @@ fn operator_and_state<T: TensorElement>(
     let output: Vec<DynIndex> = (0..nodes).map(|_| DynIndex::new_dyn(2)).collect();
     let mut build = |sites: &dyn Fn(usize) -> Vec<DynIndex>| {
         let mut legs: Vec<Vec<DynIndex>> = (0..nodes).map(sites).collect();
+        if let Some(node) = site_free {
+            legs[node].clear();
+        }
         for &(left, right) in edges {
             let bond = DynIndex::new_dyn(3);
             legs[left].push(bond.clone());
@@ -162,7 +170,7 @@ fn check<T: TensorElement>(
 ) {
     let context = context();
     for scoped in [false, true] {
-        let (mut operator, mut state) = operator_and_state(edges, entry);
+        let (mut operator, mut state) = operator_and_state(edges, entry, None);
         let expected = host(&operator.contract_naive(&state).unwrap());
         if scoped {
             operator.adopt_into_in(&context).unwrap();
@@ -290,7 +298,7 @@ fn caller_session_contracts_a_shared_index_in_one_nary_block() {
 }
 
 fn check_caller_session_zipup<T: TensorElement>(entry: fn(&mut ChaCha8Rng) -> T) {
-    let (operator, state) = operator_and_state(&BRANCHED, entry);
+    let (operator, state) = operator_and_state(&BRANCHED, entry, None);
     let center = 1;
     let expected = host(&operator.contract_naive(&state).unwrap());
     let mut backend = CpuBackend::with_threads(1).unwrap();
@@ -352,4 +360,92 @@ fn caller_session_exact_zipup_keeps_tree_operand_order_real() {
 #[test]
 fn caller_session_exact_zipup_keeps_tree_operand_order_complex() {
     check_caller_session_zipup(complex);
+}
+
+#[test]
+fn caller_session_exact_chain_keeps_site_free_endpoint_when_requested() {
+    let (operator, state) = operator_and_state(&CHAIN, complex, Some(5));
+    let center = 2;
+    let expected = host(&operator.contract_naive(&state).unwrap());
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+
+    for topology in [
+        ContractionTopology::PruneScalarSubtrees,
+        ContractionTopology::PreserveInputTopology,
+    ] {
+        let (result, actual) = with_default_backend(|_global| {
+            let mut session = Session::new(backend.engine_mut());
+            let leaves = SessionViewLeaves::new(&mut session);
+            let result = operator
+                .contract_zipup_impl(
+                    &state,
+                    &center,
+                    CanonicalForm::Unitary,
+                    Some(SvdTruncationPolicy::new(0.0)),
+                    None,
+                    topology,
+                    &IdentityNodes::new(),
+                    &leaves,
+                )
+                .expect("chain zip-up and its final sweep use the borrowed session");
+            let actual = dense(&result, &leaves);
+            (result, actual)
+        });
+
+        if topology == ContractionTopology::PreserveInputTopology {
+            let edge = result.edge_between(&4, &5).unwrap();
+            assert_eq!(result.bond_index(edge).unwrap().dim(), 1);
+        } else {
+            assert!(result.node_index(&5).is_none());
+        }
+        assert_eq!(result.canonical_region(), &[center].into_iter().collect());
+        result.validate_ortho_consistency().unwrap();
+        let error = actual.sub(&expected).unwrap().maxabs().unwrap();
+        assert!(
+            error <= 1e-12 * expected.maxabs().unwrap(),
+            "error {error:e}"
+        );
+    }
+}
+
+#[test]
+fn caller_session_capped_chain_runs_final_svd_sweep() {
+    let (operator, state) = operator_and_state(&CHAIN, real, None);
+    let center = 2;
+    let policy = Some(SvdTruncationPolicy::new(0.0));
+    let run = |leaves: &dyn LeafOps<IdxTensor>| {
+        operator
+            .contract_zipup_impl(
+                &state,
+                &center,
+                CanonicalForm::Unitary,
+                policy,
+                Some(2),
+                ContractionTopology::PruneScalarSubtrees,
+                &IdentityNodes::new(),
+                leaves,
+            )
+            .expect("capped chain zip-up")
+    };
+    let reference = run(&GlobalLeaves);
+    let expected = dense(&reference, &GlobalLeaves);
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let (result, actual) = with_default_backend(|_global| {
+        let mut session = Session::new(backend.engine_mut());
+        let leaves = SessionViewLeaves::new(&mut session);
+        let result = run(&leaves);
+        let actual = dense(&result, &leaves);
+        (result, actual)
+    });
+
+    let dims = bond_dims(&result, &CHAIN);
+    assert_eq!(dims, bond_dims(&reference, &CHAIN));
+    assert!(dims.iter().all(|&dim| dim <= 2));
+    assert_eq!(result.canonical_region(), &[center].into_iter().collect());
+    result.validate_ortho_consistency().unwrap();
+    let error = actual.sub(&expected).unwrap().maxabs().unwrap();
+    assert!(
+        error <= 1e-12 * expected.maxabs().unwrap(),
+        "error {error:e}"
+    );
 }

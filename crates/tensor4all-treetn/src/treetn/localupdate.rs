@@ -16,6 +16,7 @@ use anyhow::Context;
 
 use tensor4all_core::{IndexLike, TensorLike};
 
+use super::contraction::{factorize_with_leaves, GlobalLeaves, LeafOps};
 use super::TreeTN;
 use crate::node_name_network::NodeNameNetwork;
 
@@ -450,7 +451,7 @@ where
 // TruncateUpdater - LocalUpdater implementation for truncation
 // ============================================================================
 
-use tensor4all_core::{Canonical, FactorizeOptions, SvdTruncationPolicy};
+use tensor4all_core::{Canonical, FactorizeOptions, FactorizeResult, SvdTruncationPolicy};
 
 /// Truncation updater for nsite=2 sweeps.
 ///
@@ -551,10 +552,57 @@ where
     ///
     fn update(
         &mut self,
-        mut subtree: TreeTN<T, V>,
+        subtree: TreeTN<T, V>,
         step: &LocalUpdateStep<V>,
         _full_treetn: &TreeTN<T, V>,
     ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError> {
+        self.update_with(subtree, step, &GlobalLeaves, |tensor, left, options| {
+            match &self.context {
+                Some(context) => tensor.factorize_in(left, options, context),
+                None => tensor.factorize(left, options),
+            }
+            .map_err(anyhow::Error::from)
+        })
+    }
+}
+
+pub(super) struct TruncateWithLeaves<'a, T: TensorLike> {
+    pub(super) updater: TruncateUpdater,
+    pub(super) leaves: &'a dyn LeafOps<T>,
+}
+
+impl<T, V> LocalUpdater<T, V> for TruncateWithLeaves<'_, T>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    fn update(
+        &mut self,
+        subtree: TreeTN<T, V>,
+        step: &LocalUpdateStep<V>,
+        _full_treetn: &TreeTN<T, V>,
+    ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError> {
+        self.updater
+            .update_with(subtree, step, self.leaves, |tensor, left, options| {
+                self.leaves.factorize(tensor, left, options)
+            })
+    }
+}
+
+impl TruncateUpdater {
+    fn update_with<T, V>(
+        &self,
+        mut subtree: TreeTN<T, V>,
+        step: &LocalUpdateStep<V>,
+        leaves: &dyn LeafOps<T>,
+        factorize: impl Fn(&T, &[T::Index], &FactorizeOptions) -> anyhow::Result<FactorizeResult<T>>,
+    ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+    where
+        T: TensorLike,
+        <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+        V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+    {
         // TruncateUpdater is designed for nsite=2
         if step.nodes.len() != 2 {
             return Err(anyhow::anyhow!(
@@ -641,42 +689,36 @@ where
         let conditioned = if rows.min(columns) <= bond_ab.dim() {
             None
         } else {
-            match self.context.as_ref() {
-                Some(context) => tensor_a.factorize_in(&left_inds, &qr_options, context),
-                None => tensor_a.factorize(&left_inds, &qr_options),
-            }
-            .ok()
-            .filter(|qr| qr.rank == bond_ab.dim())
+            factorize(tensor_a, &left_inds, &qr_options)
+                .ok()
+                .filter(|qr| qr.rank == bond_ab.dim())
         };
 
         // A site-free endpoint leaves one side of the split empty; the shared
         // helper handles that case with a dimension-one bond.
-        let context = self.context.as_ref();
         let (left_prefix, factor_input, factor_left_inds) = match conditioned {
             Some(qr) => {
-                let reduced = T::contract(&[&qr.right, tensor_b])
+                let reduced = leaves
+                    .contract_refs(&[&qr.right, tensor_b])
                     .context("Failed to contract the conditioned A with B")?;
                 (Some(qr.left), reduced, vec![qr.bond_index])
             }
             None => (
                 None,
-                T::contract(&[tensor_a, tensor_b]).context("Failed to contract A and B")?,
+                leaves
+                    .contract_refs(&[tensor_a, tensor_b])
+                    .context("Failed to contract A and B")?,
                 left_inds,
             ),
         };
-        let factorize_result = super::factorize_allowing_empty_side(
-            &factor_input,
-            &factor_left_inds,
-            |tensor, left| {
-                match context {
-                    Some(context) => tensor.factorize_in(left, &options, context),
-                    None => tensor.factorize(left, &options),
-                }
-                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
-            },
-        )?;
+        let factorize_result =
+            factorize_with_leaves(leaves, &factor_input, &factor_left_inds, |tensor, left| {
+                factorize(tensor, left, &options)
+                    .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
+            })?;
         let new_tensor_a = match left_prefix {
-            Some(q) => T::contract(&[&q, &factorize_result.left])
+            Some(q) => leaves
+                .contract_refs(&[&q, &factorize_result.left])
                 .context("Failed to apply the conditioning QR to A")?,
             None => factorize_result.left,
         };

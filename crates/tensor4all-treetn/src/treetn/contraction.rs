@@ -253,6 +253,32 @@ where
         options: &FactorizeOptions,
     ) -> Result<tensor4all_core::FactorizeResult<T>>;
 
+    /// Select the leaves for the exact preparation and final sweeps of zip-up.
+    ///
+    /// This keeps deterministic sweep factorizations separate from the
+    /// strategy used to factorize the contracted blocks.
+    fn zipup_sweep_leaves(&self) -> &dyn LeafOps<T>;
+
+    fn factorize_full_rank(
+        &self,
+        tensor: &T,
+        left_inds: &[T::Index],
+        alg: FactorizeAlg,
+        canonical: Canonical,
+    ) -> Result<tensor4all_core::FactorizeResult<T>> {
+        tensor
+            .factorize_full_rank(left_inds, alg, canonical)
+            .map_err(anyhow::Error::from)
+    }
+
+    fn stack_singleton(&self, tensor: &T, index: T::Index, axis: isize) -> Result<T> {
+        super::global_stack(tensor, index, axis)
+    }
+
+    fn select_singleton(&self, tensor: &T, index: &T::Index, position: usize) -> Result<T> {
+        super::global_select(tensor, index, position)
+    }
+
     /// Factorize using a continuous caller-owned stream.
     fn factorize_with_rng(
         &self,
@@ -276,6 +302,21 @@ where
     ) -> Result<tensor4all_core::FactorizeResult<T>>;
 }
 
+pub(super) fn factorize_with_leaves<T: TensorLike>(
+    leaves: &dyn LeafOps<T>,
+    tensor: &T,
+    left: &[T::Index],
+    factorize: impl FnOnce(&T, &[T::Index]) -> Result<tensor4all_core::FactorizeResult<T>>,
+) -> Result<tensor4all_core::FactorizeResult<T>> {
+    super::factorize_allowing_empty_side_with(
+        tensor,
+        left,
+        factorize,
+        |tensor, index, axis| leaves.stack_singleton(tensor, index, axis),
+        |tensor, index, position| leaves.select_singleton(tensor, index, position),
+    )
+}
+
 impl<T> std::fmt::Debug for dyn LeafOps<T> + '_
 where
     T: TensorLike,
@@ -292,6 +333,10 @@ impl<T> LeafOps<T> for GlobalLeaves
 where
     T: TensorLike + TensorContractionLike + TensorFactorizationLike,
 {
+    fn zipup_sweep_leaves(&self) -> &dyn LeafOps<T> {
+        self
+    }
+
     fn contract_pair(&self, lhs: &T, rhs: &T) -> Result<T> {
         lhs.contract_pair(rhs).map_err(anyhow::Error::from)
     }
@@ -472,6 +517,54 @@ impl LeafOps<tensor4all_core::IdxTensor> for SessionViewLeaves<'_, '_> {
         })
     }
 
+    fn zipup_sweep_leaves(&self) -> &dyn LeafOps<tensor4all_core::IdxTensor> {
+        self
+    }
+
+    fn factorize_full_rank(
+        &self,
+        tensor: &tensor4all_core::IdxTensor,
+        left_inds: &[tensor4all_core::DynIndex],
+        alg: FactorizeAlg,
+        canonical: Canonical,
+    ) -> Result<tensor4all_core::FactorizeResult<tensor4all_core::IdxTensor>> {
+        self.with_borrowed_session(|session| {
+            tensor4all_core::factorize_full_rank_on_session(
+                session, tensor, left_inds, alg, canonical,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    }
+
+    fn stack_singleton(
+        &self,
+        tensor: &tensor4all_core::IdxTensor,
+        index: tensor4all_core::DynIndex,
+        axis: isize,
+    ) -> Result<tensor4all_core::IdxTensor> {
+        self.with_borrowed_session(|session| {
+            tensor4all_core::stack_along_new_index_on_session(session, &[tensor], index, axis)
+                .map_err(anyhow::Error::from)
+        })
+    }
+
+    fn select_singleton(
+        &self,
+        tensor: &tensor4all_core::IdxTensor,
+        index: &tensor4all_core::DynIndex,
+        position: usize,
+    ) -> Result<tensor4all_core::IdxTensor> {
+        self.with_borrowed_session(|session| {
+            tensor4all_core::select_indices_on_session(
+                session,
+                tensor,
+                std::slice::from_ref(index),
+                &[position],
+            )
+            .map_err(anyhow::Error::from)
+        })
+    }
+
     /// The Gram shortcut has no session twin, so the session route factorizes directly with the
     /// same options.
     fn factorize_with_rng(
@@ -498,6 +591,12 @@ impl LeafOps<tensor4all_core::IdxTensor> for SessionViewLeaves<'_, '_> {
 }
 
 impl LeafOps<tensor4all_core::IdxTensor> for SessionLeaves {
+    fn zipup_sweep_leaves(&self) -> &dyn LeafOps<tensor4all_core::IdxTensor> {
+        // The compatibility context entry has always used the canonicalization
+        // and truncation sweeps of the plain route.
+        &GlobalLeaves
+    }
+
     fn contract_pair(
         &self,
         lhs: &tensor4all_core::IdxTensor,
@@ -1267,16 +1366,9 @@ where
         // well-conditioned without altering either caller-owned operand.
         let mut tn_a = self.clone();
         let mut tn_b = other.clone();
-        tn_a.canonicalize_impl(
-            [chain[0].clone()],
-            CanonicalForm::Unitary,
-            "contract_zipup: first operand QR",
-        )?;
-        tn_b.canonicalize_impl(
-            [chain[0].clone()],
-            CanonicalForm::Unitary,
-            "contract_zipup: second operand QR",
-        )?;
+        let sweep_leaves = leaves.zipup_sweep_leaves();
+        tn_a.canonicalize_zipup(&chain[0], "contract_zipup: first operand QR", sweep_leaves)?;
+        tn_b.canonicalize_zipup(&chain[0], "contract_zipup: second operand QR", sweep_leaves)?;
         let tn_a = tn_a.sim_internal_inds();
         let tn_b = tn_b.sim_internal_inds();
 
@@ -1372,7 +1464,7 @@ where
             // Under PreserveInputTopology a site-free node keeps its place on a
             // dimension-one bond via the shared empty-side factorization.
             let factorized =
-                super::factorize_allowing_empty_side(&contracted, &left_inds, |tensor, left| {
+                factorize_with_leaves(sweep_leaves, &contracted, &left_inds, |tensor, left| {
                     factorize_block(tensor, left, &factorize_left)
                 })
                 .context("contract_zipup: site factorization failed")?;
@@ -1466,7 +1558,7 @@ where
                 .cloned()
                 .collect();
             let factorized =
-                super::factorize_allowing_empty_side(&final_block, &last_inds, |tensor, left| {
+                factorize_with_leaves(sweep_leaves, &final_block, &last_inds, |tensor, left| {
                     factorize_block(tensor, left, &factorize_left)
                 })
                 .context("contract_zipup: final block factorization failed")?;
@@ -1475,7 +1567,7 @@ where
             result_tensors.insert(last.clone(), factorized.left);
         } else {
             let factorized =
-                super::factorize_allowing_empty_side(&final_block, &left_inds, |tensor, left| {
+                factorize_with_leaves(sweep_leaves, &final_block, &left_inds, |tensor, left| {
                     leaves.factorize_auto(tensor, left, &factorize_right)
                 })
                 .context("contract_zipup: final block factorization failed")?;
@@ -1551,16 +1643,17 @@ where
 
         if result.node_index(center).is_some() {
             match topology_mode {
-                ContractionTopology::PruneScalarSubtrees => result.truncate_impl(
-                    [center.clone()],
+                ContractionTopology::PruneScalarSubtrees => result.truncate_zipup(
+                    center,
                     svd_policy,
                     max_bond_dim,
                     "contract_zipup: final truncate",
+                    sweep_leaves,
                 )?,
-                ContractionTopology::PreserveInputTopology => result.canonicalize_impl(
-                    [center.clone()],
-                    CanonicalForm::Unitary,
+                ContractionTopology::PreserveInputTopology => result.canonicalize_zipup(
+                    center,
                     "contract_zipup: move center",
+                    sweep_leaves,
                 )?,
             }
         }
@@ -1858,11 +1951,13 @@ where
             // PreserveInputTopology a subtree without surviving site indices
             // stays connected by the dimension-one bond of the shared
             // empty-side factorization instead of being pruned.
-            let factorize_result =
-                super::factorize_allowing_empty_side(&c_temp, &left_inds, |tensor, left| {
-                    leaves.factorize(tensor, left, &factorize_options)
-                })
-                .context("Failed to factorize")?;
+            let factorize_result = factorize_with_leaves(
+                leaves.zipup_sweep_leaves(),
+                &c_temp,
+                &left_inds,
+                |tensor, left| leaves.factorize(tensor, left, &factorize_options),
+            )
+            .context("Failed to factorize")?;
 
             #[cfg(test)]
             zipup_control::tests::record_factorization();

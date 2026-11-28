@@ -36,6 +36,10 @@ impl<'a> CountedLeaves<'a> {
 }
 
 impl LeafOps<IdxTensor> for CountedLeaves<'_> {
+    fn zipup_sweep_leaves(&self) -> &dyn LeafOps<IdxTensor> {
+        self.base.zipup_sweep_leaves()
+    }
+
     fn contract_pair(&self, a: &IdxTensor, b: &IdxTensor) -> anyhow::Result<IdxTensor> {
         self.contractions.set(self.contractions.get() + 1);
         self.base.contract_pair(a, b)

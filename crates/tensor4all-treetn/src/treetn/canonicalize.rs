@@ -13,7 +13,7 @@ use tensor4all_tensorbackend::explicit::Session;
 use crate::algorithm::CanonicalForm;
 use tensor4all_core::{Canonical, DynIndex, FactorizeAlg, FactorizeResult, IdxTensor, TensorLike};
 
-use super::TreeTN;
+use super::{contraction::LeafOps, TreeTN};
 use crate::options::CanonicalizationOptions;
 
 impl<T, V> TreeTN<T, V>
@@ -232,35 +232,61 @@ where
             ));
         }
 
-        // Prepare sweep context
-        let sweep_ctx = self.prepare_sweep_to_center(canonical_region, context_name)?;
-
-        // If no centers (empty), nothing to do
-        let sweep_ctx = match sweep_ctx {
-            Some(ctx) => ctx,
-            None => return Ok(()),
-        };
-
-        // Process edges in order (leaves towards center)
-        for (src, dst) in &sweep_ctx.edges {
+        self.canonicalize_with_sweep(canonical_region, form, context_name, |tree, src, dst| {
             match context {
-                Some(execution) => self.sweep_edge_full_rank_in(
-                    *src,
-                    *dst,
+                Some(execution) => tree.sweep_edge_full_rank_in(
+                    src,
+                    dst,
                     alg,
                     Canonical::Left,
                     context_name,
                     execution,
-                )?,
-                None => {
-                    self.sweep_edge_full_rank(*src, *dst, alg, Canonical::Left, context_name)?
-                }
+                ),
+                None => tree.sweep_edge_full_rank(src, dst, alg, Canonical::Left, context_name),
             }
+        })
+    }
+
+    pub(super) fn canonicalize_zipup(
+        &mut self,
+        center: &V,
+        context_name: &str,
+        leaves: &dyn LeafOps<T>,
+    ) -> Result<()> {
+        let alg = FactorizeAlg::QR;
+        self.canonicalize_with_sweep(
+            [center.clone()],
+            CanonicalForm::Unitary,
+            context_name,
+            |tree, src, dst| {
+                tree.sweep_edge_with(
+                    src,
+                    dst,
+                    alg,
+                    context_name,
+                    |tensor, left| leaves.factorize_full_rank(tensor, left, alg, Canonical::Left),
+                    |lhs, rhs| leaves.contract_refs(&[lhs, rhs]),
+                    |tensor, index, axis| leaves.stack_singleton(tensor, index, axis),
+                    |tensor, index, position| leaves.select_singleton(tensor, index, position),
+                )
+            },
+        )
+    }
+
+    fn canonicalize_with_sweep(
+        &mut self,
+        canonical_region: impl IntoIterator<Item = V>,
+        form: CanonicalForm,
+        context_name: &str,
+        mut sweep_edge: impl FnMut(&mut Self, NodeIndex, NodeIndex) -> Result<()>,
+    ) -> Result<()> {
+        let Some(sweep_ctx) = self.prepare_sweep_to_center(canonical_region, context_name)? else {
+            return Ok(());
+        };
+        for (src, dst) in sweep_ctx.edges {
+            sweep_edge(self, src, dst)?;
         }
-
-        // Set the canonical form
         self.canonical_form = Some(form);
-
         Ok(())
     }
 }
@@ -407,16 +433,10 @@ where
             }
         };
 
-        let sweep_ctx = self.prepare_sweep_to_center(canonical_region, context_name)?;
-        let sweep_ctx = match sweep_ctx {
-            Some(ctx) => ctx,
-            None => return Ok(()),
-        };
-
-        for (src, dst) in &sweep_ctx.edges {
-            self.sweep_edge_with_on_session(
-                *src,
-                *dst,
+        self.canonicalize_with_sweep(canonical_region, form, context_name, |tree, src, dst| {
+            tree.sweep_edge_with_on_session(
+                src,
+                dst,
                 alg,
                 context_name,
                 session,
@@ -430,11 +450,8 @@ where
                     )
                     .map_err(anyhow::Error::from)
                 },
-            )?;
-        }
-
-        self.canonical_form = Some(form);
-        Ok(())
+            )
+        })
     }
 
     pub(super) fn sweep_edge_with_on_session(

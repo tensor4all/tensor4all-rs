@@ -34,6 +34,10 @@ pub(crate) fn leaves<'a, T: TensorLike + 'a, R: Rng + ?Sized + 'a>(
 }
 
 impl<T: TensorLike, R: Rng + ?Sized> LeafOps<T> for RandomizedLeaves<'_, T, R> {
+    fn zipup_sweep_leaves(&self) -> &dyn LeafOps<T> {
+        self.base.zipup_sweep_leaves()
+    }
+
     fn contract_pair(&self, a: &T, b: &T) -> Result<T> {
         self.base.contract_pair(a, b)
     }
