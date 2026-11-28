@@ -1536,13 +1536,23 @@ where
                 .cloned()
             {
                 let dim = canonical.dim();
-                let mut indicator = vec![0.0_f64; dim];
-                if let Some(slot) = indicator.get_mut(value) {
-                    *slot = 1.0;
+                let mask_storage = match scalar_kind(&tensor)? {
+                    ScalarKind::F32 | ScalarKind::C32 => {
+                        let mut indicator = vec![0.0_f32; dim];
+                        if let Some(slot) = indicator.get_mut(value) {
+                            *slot = 1.0_f32;
+                        }
+                        tensor4all_tensorbackend::Storage::from_dense_col_major(indicator, &[dim])
+                    }
+                    ScalarKind::F64 | ScalarKind::C64 => {
+                        let mut indicator = vec![0.0_f64; dim];
+                        if let Some(slot) = indicator.get_mut(value) {
+                            *slot = 1.0_f64;
+                        }
+                        tensor4all_tensorbackend::Storage::from_dense_col_major(indicator, &[dim])
+                    }
                 }
-                let mask_storage =
-                    tensor4all_tensorbackend::Storage::from_dense_col_major(indicator, &[dim])
-                        .map_err(|err| PartitionedTreeTNError::tree(err.to_string()))?;
+                .map_err(|err| PartitionedTreeTNError::tree(err.to_string()))?;
                 let mask = IdxTensor::from_storage(
                     vec![canonical.clone()],
                     std::sync::Arc::new(mask_storage),

@@ -822,3 +822,151 @@ fn lane_add_is_independent_of_index_allocation_and_item_sites_order() {
         }
     }
 }
+
+#[test]
+fn lane_add_preserves_f32_and_c32_under_refinement_and_single_node_on_session() {
+    use num_complex::Complex32;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use tensor4all_tensorbackend::with_default_backend;
+
+    let k = DynIndex::new_dyn(2);
+    let s = DynIndex::new_dyn(2);
+    let pk0 = Projector::from_pairs([(k.clone(), 0)]).unwrap();
+    let p00 = Projector::from_pairs([(k.clone(), 0), (s.clone(), 0)]).unwrap();
+    let p01 = Projector::from_pairs([(k.clone(), 0), (s.clone(), 1)]).unwrap();
+
+    // Multi-node f32 partition with overlapping projectors (triggers project_on_session).
+    let make_f32_chain = |seed: f32| {
+        let b = DynIndex::new_dyn(1);
+        let t0 = IdxTensor::from_dense(vec![k.clone(), b.clone()], vec![seed, seed + 1.0]).unwrap();
+        let t1 = IdxTensor::from_dense(vec![b, s.clone()], vec![1.0_f32, 2.0]).unwrap();
+        TreeTN::from_tensors(vec![t0, t1], vec![0usize, 1]).unwrap()
+    };
+    let f32_left = PartitionedTreeTN::from_subdomains(vec![SubDomainTreeTN::new(
+        make_f32_chain(1.5),
+        pk0.clone(),
+    )
+    .unwrap()])
+    .unwrap();
+    let f32_right = PartitionedTreeTN::from_subdomains(vec![
+        SubDomainTreeTN::new(make_f32_chain(2.5), p00.clone()).unwrap(),
+        SubDomainTreeTN::new(make_f32_chain(3.5), p01.clone()).unwrap(),
+    ])
+    .unwrap();
+    let f32_serial = f32_left.add(&f32_right).unwrap();
+
+    // 1-node Complex32 partition with permuted site order and refinement.
+    let c32_t_left = IdxTensor::from_dense(
+        vec![k.clone(), s.clone()],
+        vec![
+            Complex32::new(1.0, 0.5),
+            Complex32::new(2.0, -0.5),
+            Complex32::new(3.0, 0.25),
+            Complex32::new(4.0, -0.25),
+        ],
+    )
+    .unwrap();
+    let c32_t_right = IdxTensor::from_dense(
+        vec![s.clone(), k.clone()],
+        vec![
+            Complex32::new(0.5, 1.0),
+            Complex32::new(-0.5, 2.0),
+            Complex32::new(0.25, 3.0),
+            Complex32::new(-0.25, 4.0),
+        ],
+    )
+    .unwrap();
+    let c32_left = PartitionedTreeTN::from_subdomains(vec![SubDomainTreeTN::new(
+        TreeTN::from_tensors(vec![c32_t_left], vec![0usize]).unwrap(),
+        pk0,
+    )
+    .unwrap()])
+    .unwrap();
+    let c32_right = PartitionedTreeTN::from_subdomains(vec![SubDomainTreeTN::new(
+        TreeTN::from_tensors(vec![c32_t_right], vec![0usize]).unwrap(),
+        p00.clone(),
+    )
+    .unwrap()])
+    .unwrap();
+    let c32_serial = c32_left.add(&c32_right).unwrap();
+
+    let (f32_lanes, c32_lanes) = with_default_backend(|_global| {
+        let (tx, rx) = mpsc::channel();
+        let k_worker = k.clone();
+        let worker = std::thread::spawn(move || {
+            let mut lanes = make_lanes(2);
+            let f32_res = f32_left
+                .add_on_lanes(&f32_right, Some(vec![k_worker.clone()]), &mut lanes)
+                .unwrap();
+            let c32_res = c32_left
+                .add_on_lanes(&c32_right, Some(vec![k_worker]), &mut lanes)
+                .unwrap();
+            tx.send((f32_res, c32_res)).unwrap();
+        });
+        let pair = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("f32/c32 add_on_lanes blocked on global backend");
+        worker.join().unwrap();
+        pair
+    });
+
+    for key in [&p00, &p01] {
+        let a_patch = f32_lanes.get(key).unwrap();
+        let e_patch = f32_serial.get(key).unwrap();
+        for node in 0..2usize {
+            let at = a_patch
+                .data()
+                .tensor(a_patch.data().node_index(&node).unwrap())
+                .unwrap();
+            let et = e_patch
+                .data()
+                .tensor(e_patch.data().node_index(&node).unwrap())
+                .unwrap();
+            assert!(at.is_f32(), "expected f32 tensor after refinement");
+            let av: Vec<u32> = at
+                .to_vec::<f32>()
+                .unwrap()
+                .into_iter()
+                .map(f32::to_bits)
+                .collect();
+            let ev: Vec<u32> = et
+                .to_vec::<f32>()
+                .unwrap()
+                .into_iter()
+                .map(f32::to_bits)
+                .collect();
+            assert_eq!(av, ev);
+        }
+    }
+
+    for key in [&p00, &p01] {
+        let a_patch = c32_lanes.get(key).unwrap();
+        let e_patch = c32_serial.get(key).unwrap();
+        let at = a_patch
+            .data()
+            .tensor(a_patch.data().node_index(&0).unwrap())
+            .unwrap();
+        let et = e_patch
+            .data()
+            .tensor(e_patch.data().node_index(&0).unwrap())
+            .unwrap();
+        assert!(
+            at.is_c32(),
+            "expected Complex32 tensor after 1-node refinement"
+        );
+        let av: Vec<(u32, u32)> = at
+            .to_vec::<Complex32>()
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.re.to_bits(), c.im.to_bits()))
+            .collect();
+        let ev: Vec<(u32, u32)> = et
+            .to_vec::<Complex32>()
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.re.to_bits(), c.im.to_bits()))
+            .collect();
+        assert_eq!(av, ev);
+    }
+}
