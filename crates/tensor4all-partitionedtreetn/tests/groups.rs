@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, IdxTensor, TensorIndex};
+use tensor4all_core::{DynIndex, IdxTensor, TensorContractionLike, TensorIndex};
 use tensor4all_partitionedtreetn::{
     PartitionedTreeTN, PartitionedTreeTNError, Projector, SubDomainTreeTN,
 };
@@ -362,13 +362,63 @@ fn try_map_patch_groups_preserves_coverage_only_when_projectors_unchanged() {
     assert_eq!(dropped.coverage(), None);
 
     // 4. Empty partition with coverage preserves its coverage.
-    let empty_with_cov: PartitionedTreeTN<usize> = PartitionedTreeTN::new()
-        .with_coverage(coverage)
-        .unwrap();
+    let empty_with_cov: PartitionedTreeTN<usize> =
+        PartitionedTreeTN::new().with_coverage(coverage).unwrap();
     let empty_mapped = empty_with_cov
         .try_map_patch_groups(std::slice::from_ref(&site_g), |_, _| {
             Err(PartitionedTreeTNError::InvalidCenter)
         })
         .unwrap();
     assert_eq!(empty_mapped.coverage(), empty_with_cov.coverage());
+
+    // 5. Contracting out an unprojected site referenced by coverage drops coverage to None
+    // even when stored patch projectors remain unchanged.
+    let bond = DynIndex::new_dyn(1);
+    let t0 = IdxTensor::from_dense(
+        vec![site_g.clone(), bond.clone()],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+    )
+    .unwrap();
+    let t1 = IdxTensor::from_dense(
+        vec![bond, site_s.clone()],
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let tree = TreeTN::from_tensors(vec![t0, t1], vec![0usize, 1usize]).unwrap();
+    let partial = PartitionedTreeTN::from_subdomains(vec![SubDomainTreeTN::new(
+        tree,
+        Projector::from_pairs([(site_g.clone(), 0)]).unwrap(),
+    )
+    .unwrap()])
+    .unwrap()
+    .with_coverage(vec![
+        Projector::from_pairs([(site_g.clone(), 0)]).unwrap(),
+        Projector::from_pairs([(site_g.clone(), 1), (site_s.clone(), 0)]).unwrap(),
+    ])
+    .unwrap();
+    let ones_s = IdxTensor::from_dense(
+        vec![site_s.clone()],
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let reduced = partial
+        .try_map_patch_groups(std::slice::from_ref(&site_g), |_, group| {
+            let dense = group[0].data().to_dense().unwrap();
+            let contracted = dense.contract_pair(&ones_s).unwrap();
+            let new_tree = TreeTN::from_tensors(vec![contracted], vec![0usize]).unwrap();
+            Ok(vec![SubDomainTreeTN::new(
+                new_tree,
+                group[0].projector().clone(),
+            )?])
+        })
+        .unwrap();
+    assert_eq!(reduced.coverage(), None);
 }
