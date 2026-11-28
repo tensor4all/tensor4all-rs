@@ -105,10 +105,10 @@ where
     /// [`PartitionedTreeTNError::LayoutMismatch`] naming the first differing
     /// projector key in canonical order.
     ///
-    /// Until a separate coverage record exists, an absent patch has no entry
-    /// in the key set (so a zero patch on an existing layout is represented by
-    /// a stored zero tensor under that projector key, while a missing key is a
-    /// layout mismatch).
+    /// A key present in only one partition is a
+    /// [`PartitionedTreeTNError::LayoutMismatch`]; this function never reads an
+    /// absent patch as zero. A known-zero patch must be stored under its
+    /// projector key.
     ///
     /// # Errors
     ///
@@ -155,19 +155,32 @@ where
         self.validate_contents()?;
         other.validate_contents()?;
 
-        for (projector, _) in self.iter() {
-            if !other.contains(projector) {
+        let first_left_only = self
+            .iter()
+            .find(|(projector, _)| !other.contains(projector));
+        let first_right_only = other
+            .iter()
+            .find(|(projector, _)| !self.contains(projector));
+        match (first_left_only, first_right_only) {
+            (Some((left_proj, left_patch)), Some((right_proj, right_patch))) => {
+                let first = if left_patch.patch_order_key() <= right_patch.patch_order_key() {
+                    left_proj.clone()
+                } else {
+                    right_proj.clone()
+                };
+                return Err(PartitionedTreeTNError::LayoutMismatch { projector: first });
+            }
+            (Some((left_proj, _)), None) => {
                 return Err(PartitionedTreeTNError::LayoutMismatch {
-                    projector: projector.clone(),
+                    projector: left_proj.clone(),
                 });
             }
-        }
-        for (projector, _) in other.iter() {
-            if !self.contains(projector) {
+            (None, Some((right_proj, _))) => {
                 return Err(PartitionedTreeTNError::LayoutMismatch {
-                    projector: projector.clone(),
+                    projector: right_proj.clone(),
                 });
             }
+            (None, None) => {}
         }
 
         self.iter()

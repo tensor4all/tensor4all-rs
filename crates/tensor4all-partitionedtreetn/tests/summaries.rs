@@ -289,4 +289,13 @@ fn patch_distances_rejects_layout_mismatch_with_first_differing_projector() {
         matches!(err, PartitionedTreeTNError::LayoutMismatch { ref projector } if projector == &p2),
         "expected LayoutMismatch naming {p2:?}, got {err:?}"
     );
+
+    // First differing key belongs to `other` while `self` also has an extra key.
+    let only_p2 = PartitionedTreeTN::from_subdomains(vec![make(2.0, p2.clone())]).unwrap();
+    let only_p0 = PartitionedTreeTN::from_subdomains(vec![make(1.0, p0.clone())]).unwrap();
+    let err = only_p2.patch_distances(&only_p0).unwrap_err();
+    assert!(
+        matches!(err, PartitionedTreeTNError::LayoutMismatch { ref projector } if projector == &p0),
+        "expected LayoutMismatch naming {p0:?}, got {err:?}"
+    );
 }
