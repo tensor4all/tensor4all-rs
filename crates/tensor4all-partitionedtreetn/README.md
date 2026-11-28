@@ -118,24 +118,20 @@ See "Patch L2 estimators" in
   patches are reported in `PatchedInterpolationReport::zero_patches` and
   omitted from the partition.
 - Randomness comes from per-patch seeds derived from
-  `PatchedInterpolationOptions::seed`. For a fixed seed, a deterministic
-  evaluator, and a deterministic engine the report and every stored node
-  tensor are identical across runs on fresh threads within one process,
-  provided the measured network values are reproducible. This is tested for
-  `f64` on trees with exactly one site per node. The cached evaluator's
-  generic path (a site-free node, a node with several sites, or `f32`/`c32`
-  data) can differ at rounding level between threads and processes, an open
-  limitation tracked in
-  [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
-  Issue #795 closed the tracking/test gap through #816, not the planner fix.
-  The intended scope is bitwise identical results on the same machine and
-  build across threads, thread counts, and processes, with no cross-machine
-  promise; generic-path measurements still need deterministic contraction
-  paths, and reproducibility across processes is not claimed until a
-  two-process test passes. Issue #791 was fixed by #793: the old TreeTN
-  site/edge construction and dense-axis order nondeterminism is resolved.
-  `site_space` still has unspecified set iteration order, and cached generic
-  evaluation retains the distinct planner limitation above.
+  `PatchedInterpolationOptions::seed`. At a fixed thread count, fresh-thread
+  regressions cover raw-kernel and generic-path `f64` fixtures, including
+  site-free and multi-site nodes. The original default-planner defect
+  [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963) was
+  closed by [#2014](https://github.com/tensor4all/tenferro-rs/pull/2014);
+  the restored generic-path regressions pass at the pinned deterministic
+  greedy planner. This is fixture evidence, not a guarantee for every layout,
+  dtype or call history. The local generic-path M7 work remains accepted.
+  Cross-process identity awaits a two-process test; identity across thread
+  counts and machines is not promised. Norm-derived report fields have the
+  exclusions documented under "Randomness and determinism" in
+  `adaptive_interpolation`. #795 closed the tracking/test gap through #816;
+  #793 fixed TreeTN site/edge ordering. `site_space` still has unspecified
+  set iteration order.
 - `PartitionedTreeTN::contract` and `to_treetn` order patches and contributions
   by the patch index signature and the patch's projectors in logical labels.
   Patches that tie on that metadata are ordered by a content digest of their
