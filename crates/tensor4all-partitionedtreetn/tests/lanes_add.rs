@@ -74,10 +74,9 @@ fn assert_partitions_bit_identical(
     assert_eq!(actual.coverage(), expected.coverage(), "coverage mismatch");
     assert_eq!(actual.len(), expected.len(), "patch count mismatch");
 
-    let mut expected_keys: Vec<Projector> = expected.keys().cloned().collect();
-    expected_keys.sort();
-    let mut actual_keys: Vec<Projector> = actual.keys().cloned().collect();
-    actual_keys.sort();
+    let expected_keys: std::collections::HashSet<Projector> =
+        expected.projectors().cloned().collect();
+    let actual_keys: std::collections::HashSet<Projector> = actual.projectors().cloned().collect();
     assert_eq!(actual_keys, expected_keys, "projector keys mismatch");
 
     for key in &expected_keys {
@@ -261,7 +260,13 @@ fn lane_add_rejects_invalid_item_sites() {
     ));
 
     let err = left
-        .add_truncated_on_lanes(&left, &0, trunc_opts, Some(vec![foreign.clone()]), &mut lanes)
+        .add_truncated_on_lanes(
+            &left,
+            &0,
+            trunc_opts,
+            Some(vec![foreign.clone()]),
+            &mut lanes,
+        )
         .unwrap_err();
     assert!(matches!(
         err,
