@@ -119,25 +119,17 @@ where
 
     let resolved = resolve_item_sites(site_positions, sites)?;
 
-    for (_, _, site) in &resolved {
-        if keys.iter().any(|key| !key.is_projected_at(site)) {
-            return Err(PartitionedTreeTNError::InvalidItemSites {
-                index: site.clone(),
-            });
-        }
-    }
-
     let mut groups: BTreeMap<LogicalKey<V>, Vec<Projector>> = BTreeMap::new();
     for key in keys {
-        let group_key: LogicalKey<V> = resolved
-            .iter()
-            .map(|(node, axis, site)| {
-                let coord = key
-                    .get(site)
-                    .expect("validated that every patch projects every site in item_sites");
-                (node.clone(), *axis, coord)
-            })
-            .collect();
+        let mut group_key: LogicalKey<V> = Vec::with_capacity(resolved.len());
+        for (node, axis, site) in &resolved {
+            let Some(coord) = key.get(site) else {
+                return Err(PartitionedTreeTNError::InvalidItemSites {
+                    index: site.clone(),
+                });
+            };
+            group_key.push((node.clone(), *axis, coord));
+        }
         groups.entry(group_key).or_default().push(key);
     }
 
@@ -445,7 +437,7 @@ where
                     }
                     (Some(left), None) => left.clone(),
                     (None, Some(right)) => right.clone(),
-                    (None, None) => unreachable!("key came from union of operand keys"),
+                    (None, None) => continue,
                 };
                 results.push((projector, patch));
             }
