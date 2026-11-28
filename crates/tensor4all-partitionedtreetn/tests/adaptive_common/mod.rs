@@ -407,6 +407,13 @@ pub(crate) fn dense_l2_residual(
     dense.sub(reference).unwrap().norm().unwrap()
 }
 
+/// A peak on [`raw_kernel_tree`] (site order a0, a1, b0, b1, c, d0, d1) whose
+/// height depends on the junction site `c`.
+pub(crate) fn raw_kernel_peak(p: &[usize]) -> f64 {
+    let (x, y, u) = (quantics(&p[0..2]), quantics(&p[2..4]), quantics(&p[5..7]));
+    (1.0 + 0.5 * p[4] as f64) * gaussian(x, 0.3, 0.12) * gaussian(y, 0.6, 0.12) + 0.2 * (x * y + u)
+}
+
 /// A peak at (0.3, 0.6) whose height depends on the flag; site order
 /// x0, x1, x2, y0, y1, y2, z.
 pub(crate) fn tree_peak(p: &[usize]) -> f64 {
@@ -879,7 +886,9 @@ pub(crate) fn assert_same_norm(a: &NormReport, b: &NormReport) {
 /// Two runs are identical: the same records in the same order, the same
 /// counts, and bitwise-identical stored patches (same legs in the same
 /// positional order, same raw column-major data). The fields exempt from the
-/// determinism claim are compared as in [`assert_same_norm`].
+/// determinism claim are compared as in [`assert_same_norm`]. Per-patch
+/// `log_norm` is additionally checked bitwise for these fixtures, a stronger
+/// check than the general norm-readout promise.
 pub(crate) fn assert_same_run(
     problem: &Problem,
     first: &PatchedInterpolationResult<Name>,
@@ -887,12 +896,16 @@ pub(crate) fn assert_same_run(
 ) {
     let (a, b) = (&first.report, &second.report);
     assert_eq!(a.tolerance, b.tolerance);
+    assert_eq!(a.patch_order, b.patch_order);
+    assert_eq!(a.max_bond_dim, b.max_bond_dim);
     assert_same_norm(&a.norm, &b.norm);
     assert_eq!(a.splits, b.splits);
     assert_eq!(a.function_evaluations, b.function_evaluations);
     assert_eq!(a.cache_hits, b.cache_hits);
     assert_eq!(a.measurement_evaluations, b.measurement_evaluations);
     assert_eq!(a.audit_evaluations, b.audit_evaluations);
+    assert_eq!(a.residual_evaluations, b.residual_evaluations);
+    assert_eq!(a.residual_saturations, b.residual_saturations);
     assert_eq!(a.verification_failures, b.verification_failures);
     assert_eq!(a.engine_retries, b.engine_retries);
     assert_eq!(a.zero_patches, b.zero_patches);
@@ -913,6 +926,7 @@ pub(crate) fn assert_same_run(
         assert_eq!(x.acceptance, y.acceptance);
         assert_eq!(x.audit, y.audit);
         assert_eq!(x.status, y.status);
+        assert_eq!(x.log_norm.map(f64::to_bits), y.log_norm.map(f64::to_bits));
     }
     assert_eq!(first.partition.len(), second.partition.len());
     assert_eq!(fingerprint(first, problem), fingerprint(second, problem));
@@ -954,15 +968,20 @@ pub(crate) fn run_digest(result: PatchedInterpolationResult<Name>, problem: &Pro
 /// Two runs on separately built problems agree: every count and record
 /// bitwise, the projectors (accepted and zero) by site position, the stored
 /// patches by fingerprint, and the fields exempt from the determinism claim
-/// as in [`assert_same_norm`].
+/// as in [`assert_same_norm`]. Per-patch `log_norm` is additionally pinned
+/// bitwise for these fixtures, beyond the general norm-readout promise.
 pub(crate) fn assert_same_runs_across_problems(first: &RunDigest, second: &RunDigest) {
     let (a, b) = (&first.report, &second.report);
+    assert_eq!(a.tolerance, b.tolerance);
+    assert_eq!(a.max_bond_dim, b.max_bond_dim);
     assert_same_norm(&a.norm, &b.norm);
     assert_eq!(a.splits, b.splits);
     assert_eq!(a.function_evaluations, b.function_evaluations);
     assert_eq!(a.cache_hits, b.cache_hits);
     assert_eq!(a.measurement_evaluations, b.measurement_evaluations);
     assert_eq!(a.audit_evaluations, b.audit_evaluations);
+    assert_eq!(a.residual_evaluations, b.residual_evaluations);
+    assert_eq!(a.residual_saturations, b.residual_saturations);
     assert_eq!(a.verification_failures, b.verification_failures);
     assert_eq!(a.engine_retries, b.engine_retries);
     assert_eq!(first.zero_patches, second.zero_patches);
@@ -987,6 +1006,7 @@ pub(crate) fn assert_same_runs_across_problems(first: &RunDigest, second: &RunDi
         assert_eq!(x.acceptance, y.acceptance);
         assert_eq!(x.audit, y.audit);
         assert_eq!(x.status, y.status);
+        assert_eq!(x.log_norm.map(f64::to_bits), y.log_norm.map(f64::to_bits));
     }
     // Accepted projectors by position, and the stored data.
     assert_eq!(first.patches, second.patches);

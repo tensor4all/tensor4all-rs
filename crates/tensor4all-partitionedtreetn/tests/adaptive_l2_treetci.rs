@@ -225,11 +225,6 @@ fn assert_deterministic_across_threads(problem: fn() -> Problem, f: fn(&[usize])
     assert_same_runs_across_problems(&one_run(), &one_run());
 }
 
-fn raw_kernel_peak(p: &[usize]) -> f64 {
-    let (x, y, u) = (quantics(&p[0..2]), quantics(&p[2..4]), quantics(&p[5..7]));
-    (1.0 + 0.5 * p[4] as f64) * gaussian(x, 0.3, 0.12) * gaussian(y, 0.6, 0.12) + 0.2 * (x * y + u)
-}
-
 #[test]
 fn l2_runs_are_reproducible_on_fresh_threads_on_a_raw_kernel_tree() {
     assert!(max_degree(&raw_kernel_tree()) >= 3);
