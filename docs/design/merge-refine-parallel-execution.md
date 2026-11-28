@@ -136,8 +136,8 @@ tenferro, default planning does not anneal and uses the deterministic greedy
 planner (`tenferro-einsum/src/planning/tree.rs:49-57`, `207-215`;
 tenferro-rs#2014, which closed tenferro-rs#1963). The planner tie that the M7
 prerequisite targets therefore does not apply to this path.
-[tree-patching-findings.md](./tree-patching-findings.md) still lists #1963 as
-open. This is a code-reading argument; no cross-lane test has been run. Two
+[tree-patching-findings.md](./tree-patching-findings.md) records #1963 as
+closed upstream by #2014. This is a code-reading argument; no cross-lane test has been run. Two
 inputs remain unproven. The first is the operand order of each N-ary call: it
 comes from a BFS over the graph (`contraction.rs:1706`,
 `node_name_network.rs:492-502`), so it depends on node insertion order. The

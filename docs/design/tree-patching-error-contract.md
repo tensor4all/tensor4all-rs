@@ -25,8 +25,11 @@ code-reading argument, see [Determinism](#determinism)).
 The original generic-path failures were measured before the upstream fix.
 Revalidation at the pinned tenferro `5df83672` now passes the fresh-thread
 measurement, DenseEngine and TreeTCI generic-path regressions; these tests
-are enabled again. This is evidence for their `f64` fixtures, not a proof for
-all trees, dtypes, call histories or processes. The local steps (c) and (a)
+are enabled again. The DenseEngine variant uses rank-one patches that also
+passed before the fix, so it is a restored regression, not evidence that the
+planner tie was fixed. The measurement and TreeTCI cases exercise the
+historical failures. These `f64` fixtures do not prove every tree, dtype,
+call history or process boundary. The local steps (c) and (a)
 remain the accepted generic-path M7 work; see [Determinism](#determinism).
 
 Every proposal was implemented as the default, and the evidence that bears on
@@ -2134,12 +2137,15 @@ text left open.
   rounded up) times a headroom factor of 4. Heavier cancellation exceeds it,
   as the text anticipates.
 - **Test 14.** The fresh-thread run tests pass on the raw-kernel tree with
-  the dense engine and with TreeTCI. The generic-path variants are ignored
-  with a reference to open question 8. With TreeTCI on the extended
-  `quantics_tree` they fail (the certified `rms_error` differed by 13 units
-  in the last place between two threads). With the dense engine, whose patches
-  there have rank one, they passed in three processes, which is not a
-  guarantee.
+  the dense engine and with TreeTCI. The generic-path variants now run at the
+  pinned planner without `#[ignore]`: TreeTCI on the extended `quantics_tree`
+  and the dense engine both pass. The earlier TreeTCI run differed by 13
+  units in the last place in certified `rms_error` between two threads;
+  this is the historical failure, not the current state. The dense-engine
+  variant has rank-one patches that already agreed under the old planner:
+  it is a restored regression, not evidence about the planner tie. Those
+  earlier observations in three processes did not establish a general
+  cross-process guarantee.
 - **Lower-layer defect, relied on by the report (fixed by #799).**
   Before #799, `TreeTN::log_norm`, and with it `TreeTN::norm`
   (`log_norm().exp()`) and `norm_squared`, overestimated the norm of a
