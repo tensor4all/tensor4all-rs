@@ -513,3 +513,145 @@ fn lane_add_and_truncated_add_never_enter_global_backend() {
         assert_eq!(trunc_len, 3);
     });
 }
+
+#[test]
+fn lane_add_is_independent_of_index_allocation_and_item_sites_order() {
+    let build_pair = |k: &DynIndex, s: &DynIndex, x: &DynIndex| {
+        let p00 = Projector::from_pairs([(k.clone(), 0), (s.clone(), 0)]).unwrap();
+        let p01 = Projector::from_pairs([(k.clone(), 0), (s.clone(), 1)]).unwrap();
+        let p10 = Projector::from_pairs([(k.clone(), 1), (s.clone(), 0)]).unwrap();
+        let p11 = Projector::from_pairs([(k.clone(), 1), (s.clone(), 1)]).unwrap();
+
+        let left = PartitionedTreeTN::from_subdomains(vec![
+            SubDomainTreeTN::new(make_complex_chain(k, s, x, 2, 1.0), p00.clone()).unwrap(),
+            SubDomainTreeTN::new(make_complex_chain(k, s, x, 2, 2.0), p01.clone()).unwrap(),
+            SubDomainTreeTN::new(make_complex_chain(k, s, x, 2, 3.0), p10.clone()).unwrap(),
+            SubDomainTreeTN::new(make_complex_chain(k, s, x, 2, 4.0), p11.clone()).unwrap(),
+        ])
+        .unwrap();
+        let right = PartitionedTreeTN::from_subdomains(vec![
+            SubDomainTreeTN::new(make_complex_chain(k, s, x, 2, 5.0), p00).unwrap(),
+            SubDomainTreeTN::new(make_complex_chain(k, s, x, 2, 6.0), p01).unwrap(),
+            SubDomainTreeTN::new(make_complex_chain(k, s, x, 2, 7.0), p10).unwrap(),
+            SubDomainTreeTN::new(make_complex_chain(k, s, x, 2, 8.0), p11).unwrap(),
+        ])
+        .unwrap();
+        (left, right)
+    };
+
+    // Allocation order A: k before s.
+    let k_a = DynIndex::new_dyn(2);
+    let s_a = DynIndex::new_dyn(2);
+    let x_a = DynIndex::new_dyn(2);
+    let (left_a, right_a) = build_pair(&k_a, &s_a, &x_a);
+
+    // Allocation order B: s before k.
+    let s_b = DynIndex::new_dyn(2);
+    let k_b = DynIndex::new_dyn(2);
+    let x_b = DynIndex::new_dyn(2);
+    let (left_b, right_b) = build_pair(&k_b, &s_b, &x_b);
+
+    let trunc_opts = TruncationOptions::default().with_max_bond_dim(2);
+    let mut lanes = make_lanes(2);
+
+    let exact_a = left_a
+        .add_on_lanes(&right_a, Some(vec![k_a.clone()]), &mut lanes)
+        .unwrap();
+    let exact_b = left_b
+        .add_on_lanes(&right_b, Some(vec![k_b.clone()]), &mut lanes)
+        .unwrap();
+    let trunc_a = left_a
+        .add_truncated_on_lanes(
+            &right_a,
+            &0,
+            trunc_opts,
+            Some(vec![k_a.clone()]),
+            &mut lanes,
+        )
+        .unwrap();
+    let trunc_b = left_b
+        .add_truncated_on_lanes(
+            &right_b,
+            &0,
+            trunc_opts,
+            Some(vec![k_b.clone()]),
+            &mut lanes,
+        )
+        .unwrap();
+
+    // Slice order [k, s] vs [s, k] produces bit-identical results.
+    let exact_ks = left_a
+        .add_on_lanes(&right_a, Some(vec![k_a.clone(), s_a.clone()]), &mut lanes)
+        .unwrap();
+    let exact_sk = left_a
+        .add_on_lanes(&right_a, Some(vec![s_a.clone(), k_a.clone()]), &mut lanes)
+        .unwrap();
+    assert_partitions_bit_identical(&exact_ks, &exact_sk);
+
+    let trunc_ks = left_a
+        .add_truncated_on_lanes(
+            &right_a,
+            &0,
+            trunc_opts,
+            Some(vec![k_a.clone(), s_a.clone()]),
+            &mut lanes,
+        )
+        .unwrap();
+    let trunc_sk = left_a
+        .add_truncated_on_lanes(
+            &right_a,
+            &0,
+            trunc_opts,
+            Some(vec![s_a.clone(), k_a.clone()]),
+            &mut lanes,
+        )
+        .unwrap();
+    assert_partitions_bit_identical(&trunc_ks, &trunc_sk);
+
+    // Every logical (k, s) patch matches bit-for-bit between allocation orders A and B.
+    for ik in 0..2 {
+        for is in 0..2 {
+            let pa = Projector::from_pairs([(k_a.clone(), ik), (s_a.clone(), is)]).unwrap();
+            let pb = Projector::from_pairs([(k_b.clone(), ik), (s_b.clone(), is)]).unwrap();
+            for (res_a, res_b, label) in [
+                (&exact_a, &exact_b, "exact"),
+                (&trunc_a, &trunc_b, "truncated"),
+            ] {
+                let patch_a = res_a.get(&pa).unwrap();
+                let patch_b = res_b.get(&pb).unwrap();
+                assert_eq!(
+                    patch_a.data().link_dims(),
+                    patch_b.data().link_dims(),
+                    "{label} link_dims mismatch at (k={ik}, s={is})"
+                );
+                for node in 0..3usize {
+                    let va = patch_a
+                        .data()
+                        .tensor(patch_a.data().node_index(&node).unwrap())
+                        .unwrap()
+                        .to_vec::<Complex64>()
+                        .unwrap();
+                    let vb = patch_b
+                        .data()
+                        .tensor(patch_b.data().node_index(&node).unwrap())
+                        .unwrap()
+                        .to_vec::<Complex64>()
+                        .unwrap();
+                    assert_eq!(va.len(), vb.len());
+                    for (i, (a, b)) in va.iter().zip(vb.iter()).enumerate() {
+                        assert_eq!(
+                            a.re.to_bits(),
+                            b.re.to_bits(),
+                            "{label} real bit mismatch at (k={ik}, s={is}) node {node} entry {i}"
+                        );
+                        assert_eq!(
+                            a.im.to_bits(),
+                            b.im.to_bits(),
+                            "{label} imag bit mismatch at (k={ik}, s={is}) node {node} entry {i}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
