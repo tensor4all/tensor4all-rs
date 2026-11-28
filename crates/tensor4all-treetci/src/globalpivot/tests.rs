@@ -903,8 +903,9 @@ fn assert_readout_matches_pointwise(
     }
 
     // Fresh evaluators on this tree reproduce the same batch values bit for
-    // bit on the same thread (the generic path used for f32/Complex32 is not
-    // reproducible across threads, see issue #795).
+    // bit on the same thread. Cross-thread coverage of the f32/Complex32
+    // generic path remains incomplete; the old default-planner tie defect
+    // tracked by #795 / tenferro-rs#1963 was fixed by tenferro-rs#2014.
     let again = cached_batched_readout(treetn, &indices, points).unwrap();
     for (a, b) in cached.iter().zip(&again) {
         assert_eq!(a.real().to_bits(), b.real().to_bits());
