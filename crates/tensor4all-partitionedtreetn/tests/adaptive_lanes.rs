@@ -197,7 +197,8 @@ fn same_report(
             ))
             .collect::<Vec<_>>()
     );
-    // The stored patch networks agree up to the round-off of two sessions.
+    // The stored patch networks agree up to the ~1 ULP round-off of two
+    // sessions (see the `# Rounding` note on `TreeTN::truncate_on_session`).
     let left_dense = left
         .partition
         .to_treetn()

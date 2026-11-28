@@ -78,6 +78,26 @@ pub enum PartitionedTreeTNError {
     #[error("the requested TreeTN center is absent; choose an existing node name")]
     InvalidCenter,
 
+    /// An `item_sites` entry is not projected by every patch in a lanes operation.
+    ///
+    /// Every site named in `item_sites` must belong to the layout and be
+    /// projected by every patch that the operation runs on.
+    #[error(
+        "item_sites index {index:?} is not projected by every patch; \
+         choose a subset of the projected sites carried by all patches or pass None"
+    )]
+    InvalidItemSites {
+        /// First offending site index in `item_sites`.
+        index: DynIndex,
+    },
+
+    /// The lane executor failed to run, join, or clean up a lane.
+    #[error("lane executor failed: {message}; check the lane pool configuration")]
+    LaneFanOut {
+        /// Diagnostic message reported by the lane executor.
+        message: String,
+    },
+
     /// The supplied operation options are invalid or select a forbidden path.
     #[error("invalid {operation} options: {reason}")]
     InvalidOptions {

@@ -516,6 +516,32 @@ where
         Self::from_masked_data(data, merged_projector, self.budget_squared).map(Some)
     }
 
+    /// Project this subdomain onto `projector` on a caller-owned explicit `Session`.
+    ///
+    /// Identical to [`Self::project`] except that every index mask contraction
+    /// runs on `session` instead of the process-global execution backend.
+    pub(crate) fn project_on_session(
+        &self,
+        projector: &Projector,
+        session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    ) -> Result<Option<Self>> {
+        self.validate_projector(projector)?;
+        let Some(merged_projector) = self.projector.intersection(projector) else {
+            return Ok(None);
+        };
+        self.validate_projector(&merged_projector)?;
+
+        let mut additions = Projector::new();
+        for (index, &value) in projector.iter() {
+            if self.projector.get(index) != Some(value) {
+                additions.insert(index.clone(), value)?;
+            }
+        }
+
+        let data = rebuild_masked_tree_on_session(&self.data, &additions, session)?;
+        Self::from_masked_data(data, merged_projector, self.budget_squared).map(Some)
+    }
+
     /// Add two subdomains with the same projector using strict TreeTN addition.
     ///
     /// The stored TreeTNs are already eagerly masked, so this method performs no
@@ -554,6 +580,71 @@ where
     /// ```
     pub fn add(&self, other: &Self) -> Result<Self> {
         Self::exact_sum(&[self, other], SumEngine::Binary)
+    }
+
+    /// Add two subdomains with the same projector on a caller-owned explicit `Session`.
+    ///
+    /// For multi-node trees this delegates to [`Self::add`] (block-diagonal
+    /// direct sum on host storage). For single-node trees it aligns axes via
+    /// `permute_indices_on_session` and sums dense host `Storage` via `axpby`
+    /// so no call enters the process-global execution backend.
+    pub(crate) fn add_on_session(
+        &self,
+        other: &Self,
+        session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    ) -> Result<Self> {
+        if self.node_count() != 1 {
+            return self.add(other);
+        }
+        let first = Self::validate_sum_terms(&[self, other])?;
+        let node_names = first.data.node_names();
+        let name = &node_names[0];
+        let lhs_idx = self
+            .data
+            .node_index(name)
+            .ok_or_else(|| PartitionedTreeTNError::tree("TreeTN node name has no node index"))?;
+        let rhs_idx = other
+            .data
+            .node_index(name)
+            .ok_or_else(|| PartitionedTreeTNError::tree("TreeTN node name has no node index"))?;
+        let lhs = self
+            .data
+            .tensor(lhs_idx)
+            .ok_or_else(|| PartitionedTreeTNError::tree("TreeTN node has no tensor"))?;
+        let rhs = other
+            .data
+            .tensor(rhs_idx)
+            .ok_or_else(|| PartitionedTreeTNError::tree("TreeTN node has no tensor"))?;
+
+        // Publish both operands through `session` in `lhs`'s index order as
+        // compact host storage so `storage()` never enters the process-global
+        // backend (even when an input was created eagerly and `permute` is a no-op).
+        let lhs_compact = tensor4all_core::select_indices_on_session(session, lhs, &[], &[])
+            .map_err(|err| PartitionedTreeTNError::tree(err.to_string()))?;
+        let rhs_permuted = if rhs.indices() == lhs.indices() {
+            rhs.clone()
+        } else {
+            tensor4all_core::permute_indices_on_session(session, rhs, lhs.indices())
+                .map_err(|err| PartitionedTreeTNError::tree(err.to_string()))?
+        };
+        let rhs_compact =
+            tensor4all_core::select_indices_on_session(session, &rhs_permuted, &[], &[])
+                .map_err(|err| PartitionedTreeTNError::tree(err.to_string()))?;
+        let one = tensor4all_tensorbackend::BackendScalar::from(1.0);
+        let lhs_storage = lhs_compact
+            .storage()
+            .map_err(|err| PartitionedTreeTNError::tree(err.to_string()))?;
+        let rhs_storage = rhs_compact
+            .storage()
+            .map_err(|err| PartitionedTreeTNError::tree(err.to_string()))?;
+        let sum_storage = lhs_storage
+            .axpby(&one, rhs_storage.as_ref(), &one)
+            .map_err(|err| PartitionedTreeTNError::tree(err.to_string()))?;
+        let sum_tensor =
+            IdxTensor::from_storage(lhs.indices().to_vec(), std::sync::Arc::new(sum_storage))
+                .map_err(|err| PartitionedTreeTNError::tree(err.to_string()))?;
+        let tree = TreeTN::from_tensors(vec![sum_tensor], node_names)?;
+        Self::from_masked_data(tree, first.projector.clone(), first.budget_squared)
     }
 
     /// Sum subdomains with one projector exactly, building the sum with the
@@ -707,6 +798,68 @@ where
         let original = self.data.clone();
         let mut data = original.clone();
         data.truncate_mut([center.clone()], options)
+            .map_err(PartitionedTreeTNError::from)?;
+        ensure_same_tree_structure(&original, &data)?;
+        validate_data(&data)?;
+        validate_projector_against_data(&data, &self.projector)?;
+        self.data = data;
+        Ok(())
+    }
+
+    /// Truncate this eagerly masked subdomain towards an explicit TreeTN center
+    /// on a caller-owned explicit `Session`.
+    ///
+    /// Mirrors [`Self::truncate`] while routing pre-canonicalization,
+    /// conditioning QR, two-site SVD, and internal contractions through
+    /// `session` via [`TreeTN::truncate_mut_on_session`], so no stage enters
+    /// the process-global execution backend.
+    ///
+    /// Results are bit-identical across repeated session runs and agree with
+    /// eager [`Self::truncate`] up to the ~1 ULP concrete-session `S * V^H`
+    /// rounding boundary documented on [`TreeTN::truncate_on_session`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::truncate`]. The receiver is unchanged
+    /// on error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_partitionedtreetn::SubDomainTreeTN;
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    /// use tensor4all_treetn::{TreeTN, TruncationOptions};
+    ///
+    /// let site = DynIndex::new_dyn(2);
+    /// let tree = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense(vec![site], vec![3.0_f64, 4.0])?],
+    ///     vec!["center".to_string()],
+    /// )?;
+    /// let mut subdomain = SubDomainTreeTN::from_treetn(tree)?;
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let mut session = Session::new(backend.engine_mut());
+    /// subdomain.truncate_on_session(
+    ///     &"center".to_string(),
+    ///     TruncationOptions::default(),
+    ///     &mut session,
+    /// )?;
+    /// assert_eq!(subdomain.node_count(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn truncate_on_session(
+        &mut self,
+        center: &V,
+        options: TruncationOptions,
+        session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    ) -> Result<()> {
+        validate_truncation_options(&options)?;
+        self.validate_invariants()?;
+        ensure_center(&self.data, center)?;
+
+        let original = self.data.clone();
+        let mut data = original.clone();
+        data.truncate_mut_on_session([center.clone()], options, session)
             .map_err(PartitionedTreeTNError::from)?;
         ensure_same_tree_structure(&original, &data)?;
         validate_data(&data)?;
@@ -1348,6 +1501,70 @@ where
                 .find(|candidate| *candidate == index)
             {
                 tensor = tensor.mask_index(canonical, value)?;
+            }
+        }
+        tensors.push(tensor);
+    }
+
+    TreeTN::from_tensors(tensors, node_names).map_err(PartitionedTreeTNError::from)
+}
+
+fn rebuild_masked_tree_on_session<V>(
+    data: &TreeTN<IdxTensor, V>,
+    projector: &Projector,
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+) -> Result<TreeTN<IdxTensor, V>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let node_names = data.node_names();
+    let mut tensors = Vec::with_capacity(node_names.len());
+
+    for name in &node_names {
+        let node = data
+            .node_index(name)
+            .ok_or_else(|| PartitionedTreeTNError::tree("TreeTN node name has no node index"))?;
+        let source = data
+            .tensor(node)
+            .ok_or_else(|| PartitionedTreeTNError::tree("TreeTN node has no tensor"))?;
+        let mut tensor = source.clone();
+        for (index, &value) in projector.iter() {
+            if let Some(canonical) = tensor
+                .indices()
+                .iter()
+                .find(|candidate| *candidate == index)
+                .cloned()
+            {
+                let dim = canonical.dim();
+                let mask_storage = match scalar_kind(&tensor)? {
+                    ScalarKind::F32 | ScalarKind::C32 => {
+                        let mut indicator = vec![0.0_f32; dim];
+                        if let Some(slot) = indicator.get_mut(value) {
+                            *slot = 1.0_f32;
+                        }
+                        tensor4all_tensorbackend::Storage::from_dense_col_major(indicator, &[dim])
+                    }
+                    ScalarKind::F64 | ScalarKind::C64 => {
+                        let mut indicator = vec![0.0_f64; dim];
+                        if let Some(slot) = indicator.get_mut(value) {
+                            *slot = 1.0_f64;
+                        }
+                        tensor4all_tensorbackend::Storage::from_dense_col_major(indicator, &[dim])
+                    }
+                }
+                .map_err(|err| PartitionedTreeTNError::tree(err.to_string()))?;
+                let mask = IdxTensor::from_storage(
+                    vec![canonical.clone()],
+                    std::sync::Arc::new(mask_storage),
+                )
+                .map_err(|err| PartitionedTreeTNError::tree(err.to_string()))?;
+                tensor = tensor4all_core::contract_with_options_on_session(
+                    session,
+                    &[&tensor, &mask],
+                    tensor4all_core::ContractionOptions::new()
+                        .with_retain_indices(std::slice::from_ref(&canonical)),
+                )
+                .map_err(|err| PartitionedTreeTNError::tree(err.to_string()))?;
             }
         }
         tensors.push(tensor);

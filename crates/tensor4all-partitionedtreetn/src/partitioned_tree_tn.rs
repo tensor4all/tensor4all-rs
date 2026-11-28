@@ -2,6 +2,7 @@
 
 mod coverage;
 mod evaluate;
+mod lanes_add;
 mod map;
 mod materialize;
 mod restrict;
