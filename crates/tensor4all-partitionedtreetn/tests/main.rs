@@ -21,6 +21,7 @@ mod coverage;
 mod dense_restrict_coverage;
 mod heavy_adaptive_l2_corner_miss;
 mod heavy_project_first_add;
+mod lanes_add;
 mod map;
 mod operator_state_network;
 mod output_region_contract;
