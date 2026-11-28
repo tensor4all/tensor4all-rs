@@ -1,5 +1,6 @@
 //! Errors returned by partitioned TreeTN operations.
 
+use crate::projector::Projector;
 use tensor4all_core::{DynIndex, IdxTensorError, TensorStorageError};
 use tensor4all_treetn::TreeTNOperationError;
 use thiserror::Error;
@@ -62,6 +63,16 @@ pub enum PartitionedTreeTNError {
     /// Two subdomains do not use the same projector key for strict addition.
     #[error("strict subdomain addition requires identical projector keys")]
     ProjectorMismatch,
+
+    /// Two partitions do not have the same set of projector keys.
+    #[error(
+        "patch layouts differ at projector {projector:?}; refine both partitions onto a common layout first"
+    )]
+    LayoutMismatch {
+        /// The first projector key in canonical order present in one partition
+        /// and absent from the other.
+        projector: Projector,
+    },
 
     /// An explicit TreeTN center is absent from the network.
     #[error("the requested TreeTN center is absent; choose an existing node name")]
