@@ -1275,7 +1275,10 @@ where
                 SubDomainTreeTN::new(scaled, projector.clone())?,
             );
         }
-        Ok(Self { data })
+        Ok(Self {
+            data,
+            coverage: self.coverage.clone(),
+        })
     }
 
     /// Compute the exact inner product `⟨self, other⟩ = Σ conj(self)_i * other_i`.
@@ -1457,6 +1460,24 @@ where
         truncation: Option<(&V, TruncationOptions)>,
     ) -> Result<Self> {
         ensure_union_disjoint(&self.data, &other.data)?;
+
+        let result_coverage = intersect_coverages(self.coverage(), other.coverage());
+        if let Some(ref cov) = result_coverage {
+            let needs_clip = self
+                .data
+                .keys()
+                .chain(other.data.keys())
+                .any(|projector| !projector_covered_by(projector, cov));
+            if needs_clip {
+                let cells = disjoint_cover(cov);
+                let left = self.refine_to(&cells)?;
+                let right = other.refine_to(&cells)?;
+                let mut combined = left.axpby_patchwise(a, &right, b, truncation)?;
+                combined.coverage = result_coverage;
+                return Ok(combined);
+            }
+        }
+
         let mut data = HashMap::with_capacity(self.data.len() + other.data.len());
         for (projector, left) in &self.data {
             let mut combined = if let Some(right) = other.data.get(projector) {
@@ -1488,7 +1509,10 @@ where
                 data.insert(projector.clone(), scaled);
             }
         }
-        Ok(Self { data })
+        Ok(Self {
+            data,
+            coverage: result_coverage,
+        })
     }
 
     /// Shared body of [`Self::add`] and [`Self::add_truncated`]: validate the
@@ -2319,7 +2343,23 @@ where
                 SubDomainTreeTN::new(new_tree, new_proj).map_err(anyhow::Error::new)?,
             );
         }
-        Ok(Self { data })
+        let coverage = match &self.coverage {
+            None => None,
+            Some(cov) => {
+                let mut renamed = Vec::with_capacity(cov.len());
+                for projector in cov {
+                    let mut new_proj = projector.clone();
+                    if let Some(coord) = new_proj.remove(old_index) {
+                        new_proj
+                            .insert(new_index.clone(), coord)
+                            .map_err(anyhow::Error::new)?;
+                    }
+                    renamed.push(new_proj);
+                }
+                Some(canonicalize_coverage(renamed))
+            }
+        };
+        Ok(Self { data, coverage })
     }
 
     fn replace_indices(
