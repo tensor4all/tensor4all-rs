@@ -3,6 +3,7 @@
 mod coverage;
 mod evaluate;
 mod map;
+mod materialize;
 mod restrict;
 mod summaries;
 
