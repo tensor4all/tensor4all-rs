@@ -1110,7 +1110,8 @@ pub struct MaxReferenceSearch {
     pub evaluations: usize,
     /// Points the search found in the cache.
     pub cache_hits: usize,
-    /// Wall time of the search in seconds.
+    /// Wall time of the search in seconds; a diagnostic outside the
+    /// bitwise reproducibility claim, including identity across lane counts.
     pub seconds: f64,
 }
 

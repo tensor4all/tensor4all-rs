@@ -1287,8 +1287,11 @@ one tier 2026-11-09, owner decision after #1202).** There is one promise:
 Bitwise identity **across** thread counts is not promised, for any operation.
 The owner decided this after #1202: making a partition independent of the thread
 count removes parallel freedom, and no caller needs the same bits at one thread
-and at eight. The configurations recorded below are **observations under Tier 1**:
-they say what this host does today, and how far it reaches.
+and at eight. Tier 1 is the one promise about thread counts; the lane entries
+carry a separate one, [lane-count identity](#lane-count-identity), which is not
+an exception to this rule because it holds every lane at one thread. The
+configurations recorded below are **observations under Tier 1**: they say what
+this host does today, and how far it reaches.
 
 **When results are compared, pin the thread count — also when a cache is shared
 across runs.** A digest, a stored baseline, or a cache key computed at one thread
@@ -1388,6 +1391,81 @@ and a fresh
 with the same chunking, center, and hint; all repetitions must give bitwise
 identical residuals. "The same patch" is never the same object. Repetitions on
 the same thread are not a valid test of this property.
+
+#### Lane-count identity
+
+**A separate promise (owner decision 2026-11-27,
+[#1497](https://github.com/tensor4all/tensor4all-rs/issues/1497#issuecomment-7229306374)):
+bitwise identity across lane counts, at a fixed per-lane engine profile.** For
+a fixed seed, a deterministic evaluator and a deterministic engine, this
+adaptive driver's `patched_interpolate_on_lanes` and
+`patched_elementwise_on_lanes` give the same report and stored node tensors, bit for
+bit, on one lane and on eight, when every lane runs one serial engine of the
+same kind (one thread per lane, as with `CpuEngine::serial()`). The scope and
+exclusions are Tier 1's: the same machine and build, no cross-machine claim.
+For an L2 run, `report.norm` is not excluded as a whole: its reference,
+source, allowance, domain size, certified fraction and global error statistic
+are compared bitwise. A `SampledMax` run also records the reference search's
+wall time (`search.seconds`), which stays outside this claim. The L2 rounding
+exclusions are `approximation_rms`, `rounding_allowance_rms`,
+`relative_error_bound` and `relative_bound_estimate`, with
+`rounding_limited` compared only away from its threshold. Counts, ordered
+patch records and stored node tensors are checked too. The norm
+canonicalization caveat also applies to per-patch `log_norm`: #1528 checks it
+bitwise for its fixtures, which is stronger than the general norm-readout
+promise and does not establish every canonicalization path.
+
+This promise is not implied by Tier 1. Tier 1 is identity at a fixed thread count
+only, and changing the lane count changes the number of threads in the run. The
+lane driver carries this requirement instead: the arithmetic of a patch must be a
+function of the patch, its path-derived seeds and its lane's engine profile, not
+of which lane pulled it, how many lanes there are or what the other lanes do,
+and the results are merged in canonical path order. Persistent lane engines,
+thread-local contraction-plan caches and pooled evaluator histories must be
+checked at their owning seams; canonical merging alone does not establish
+arithmetic independence. **A multi-threaded lane voids
+the promise**: its kernels run as a team, whose bits Tier 1 fixes only per thread
+count and which can take a different kernel from a serial engine altogether (the
+`Complex64` dense products recorded above split serial against parallel).
+
+How it is verified: a cross-lane test runs one problem at several lane counts
+with serial lane engines and compares the report and the stored node tensors
+bitwise, not within a tolerance. Where a lane operation issues N-ary
+contractions, the test also compares each N-ary call's operand *sequence* per
+lane, not only the resulting bits. The operand order comes from the shared graph
+(a breadth-first walk) and is not re-sorted inside the contraction, because a
+reordering changes the floating-point sums and with them truncation decisions;
+a lane that sees a different order is a seam bug to fix, not a reason to sort.
+
+Coverage status (2026-11-28), scoped to these two adaptive-driver entries:
+
+- The existing interpolation tests compare the serial entry with one and two
+  serial lanes, checking report counters and records with equality and the
+  norm's debug representation, and stored patches within `1e-12`. Debug
+  equality is not a bitwise check of floating-point representations. The
+  elementwise unit test compares three lanes with serial within `1e-12`.
+- Companion PR #1528 adds fixture-level lane-count checks for TreeTCI
+  interpolation and an elementwise product; see its test definitions for the
+  lane counts and partition sizes. The tests compare stored tensor bits and
+  report counters/records, with global norm diagnostics using
+  `assert_same_norm` and an additional bitwise `log_norm` check.
+  Source routing classifies the elementwise restricted inputs as generic:
+  `restrict_fixed_sites` removes fixed site legs, leaving site-free nodes that
+  `raw_centre_route_available` rejects. This is a code-reading classification,
+  not an instrumented assertion of the production route. The tests do not
+  establish every layout, dtype or pooled history, instrument N-ary operand
+  sequences, or assert concurrent execution. They belong to #1528 and are
+  not added by this documentation PR.
+- Separate `tensor4all-interpolativeqtt` APIs already have lane tests:
+  `interpolate_patched_nd_on_lanes` (`src/patched/tests/parallel.rs`) compares
+  values with `assert_eq!`, which does not distinguish signed zero;
+  `interpolate_chebyshev_patches_on_lanes`
+  (`src/chebyshev_patches/tests/parallel.rs`) compares bit patterns. Neither
+  establishes the adaptive partitioned driver or its pooled evaluators.
+- The contraction, sums, truncation and Fourier lane variants requested in
+  #1495/#1497 do not exist yet. Their tests must also compare N-ary operand
+  sequences when applicable. The broader generic-path and two-process
+  coverage limitations remain as recorded above.
 
 ## Placement
 
@@ -1921,6 +1999,13 @@ defaults reproduce M3 exactly.
    as observations about the host and provider named with them. This narrowing is
    a correction of this document, not a retreat from the 2026-10-03 decision about
    *which machine* the promise covers.
+
+   **Lane counts, 2026-11-27 (owner decision in
+   [#1497](https://github.com/tensor4all/tensor4all-rs/issues/1497#issuecomment-7229306374)).**
+   The lane entries carry a separate promise, bitwise identity across lane counts
+   at a fixed per-lane engine profile with each lane serial internally, recorded
+   under [Lane-count identity](#lane-count-identity). It does not widen Tier 1,
+   and a multi-threaded lane voids it.
 
 ## Implementation decisions
 

@@ -233,9 +233,9 @@ fn lanes_and_serial_produce_the_same_report() {
     }
 }
 
-/// Every patch is evaluated, measured and published in its lane's child
-/// session: the evaluator issues a real indexed contraction there, and the
-/// context reports serial application parallelism.
+/// Every patch is evaluated, measured and published on its lane's engine
+/// through a session: the evaluator issues a real indexed contraction there,
+/// and the context reports serial application parallelism.
 #[test]
 fn the_evaluator_computes_in_the_lane_session() {
     let problem = chain();

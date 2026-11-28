@@ -19,10 +19,12 @@
 //!   whole run.
 //! - [`patched_interpolate_on_lanes`] fans a wave out over the lanes of a
 //!   caller-owned [`TenferroLanes`](hataori_tenferro::TenferroLanes): each patch
-//!   runs in the child session of the lane that pulled it, and the evaluator
-//!   must be `Fn + Sync`. The root wave and every wave smaller than the lane
-//!   count run one patch at a time, so a single item keeps the backend's whole
-//!   team.
+//!   runs on the engine of the lane that pulled it, and the evaluator must be
+//!   `Fn + Sync`. A lane runs one patch at a time and may claim several
+//!   patches from the same wave. A wave smaller than the lane count leaves
+//!   lanes idle; the caller sizes each lane's engine.
+//!   [Lane-count identity](#lane-count-identity) states what the lane count
+//!   may not change.
 //! - `patched_interpolate_mpi` (feature `hataori-mpi` or `hataori-mpi-rsmpi-rt`)
 //!   distributes each wave over MPI ranks through `hataori::pmap_lanes`; the
 //!   root owns the queue, the merge, the pinned references and the result.
@@ -31,8 +33,8 @@
 //!
 //! Every numerical step of a run - the engine call, the re-embedding of fixed
 //! sites, the measurement of a stored patch and the readout of its norm - runs
-//! on one session: the session of the caller's [`EvalContext`], or the child
-//! session of the lane that runs the patch. The evaluator receives that same
+//! on one session: the session of the caller's [`EvalContext`], or a session
+//! over the engine of the lane that runs the patch. The evaluator receives that same
 //! context, so a caller-owned execution capability reaches every stage and an
 //! evaluator that needs numerical work of its own can issue it on the session.
 //! No step enters the process-global session, an eager runtime or a
@@ -284,6 +286,23 @@
 //! outside the bitwise claim. Issue #791 was fixed by #793: TreeTN site/edge
 //! construction and dense-axis order no longer inherit the old hash ordering.
 //! `site_space` is still a set with unspecified iteration order.
+//!
+//! # Lane-count identity
+//!
+//! [`patched_interpolate_on_lanes`] and [`patched_elementwise_on_lanes`] are
+//! held to bitwise identity across lane counts at a fixed per-lane engine
+//! profile: every lane uses the same engine kind and runs serially (for
+//! example `tenferro_cpu::CpuEngine::serial()`). A multi-threaded lane voids
+//! this separate promise, which is not implied by fixed-thread-count Tier 1.
+//! The norm-field exclusions above apply. A `SampledMax` reference search's
+//! wall time (`search.seconds`) is diagnostic and outside the bitwise claim;
+//! norm canonicalization's per-patch `log_norm` remains unaudited generally.
+//! Canonical wave merging fixes the driver's output order; it does not prove
+//! that a stateful evaluator's arithmetic is independent of the lane's prior work. In particular, the
+//! elementwise entry pools cached evaluators across lanes.
+//!
+//! The authoritative scope, verification procedure and coverage status are
+//! in the [design contract](https://github.com/tensor4all/tensor4all-rs/blob/main/docs/design/tree-patching-error-contract.md#lane-count-identity).
 //!
 //! # Examples
 //!
