@@ -16,7 +16,9 @@
 ## Verification conclusions and constraints
 
 - The restored regressions pass at the pinned default planner on their `f64`
-  fixtures, with fresh threads and rebuilt index identities. This establishes
+  fixtures, with fresh threads and rebuilt index identities. The dense-engine
+  fixture has rank-one patches that also passed before the planner fix; it
+  remains a regression, not evidence for that fix. This establishes
   those cases, not all generic layouts, dtypes or pooled evaluator histories.
 - Cross-process values have no two-process regression here. #1497's Fourier
   cross-lane result and N-ary operand-sequence test also remains outstanding;
