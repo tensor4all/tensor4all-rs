@@ -69,8 +69,8 @@ where
     /// })?;
     ///
     /// assert_eq!(relabeled.len(), 2);
-    /// assert!(relabeled.contains_key(&Projector::from_pairs([(new_site.clone(), 0)])?));
-    /// assert!(relabeled.contains_key(&Projector::from_pairs([(new_site, 1)])?));
+    /// assert!(relabeled.contains(&Projector::from_pairs([(new_site.clone(), 0)])?));
+    /// assert!(relabeled.contains(&Projector::from_pairs([(new_site, 1)])?));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn try_map_patches<F>(&self, f: F) -> Result<Self>
