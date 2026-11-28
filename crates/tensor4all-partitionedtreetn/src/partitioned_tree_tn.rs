@@ -1274,7 +1274,10 @@ where
                 SubDomainTreeTN::new(scaled, projector.clone())?,
             );
         }
-        Ok(Self { data })
+        Ok(Self {
+            data,
+            coverage: self.coverage.clone(),
+        })
     }
 
     /// Compute the exact inner product `⟨self, other⟩ = Σ conj(self)_i * other_i`.
@@ -1487,7 +1490,10 @@ where
                 data.insert(projector.clone(), scaled);
             }
         }
-        Ok(Self { data })
+        Ok(Self {
+            data,
+            coverage: intersect_coverages(self.coverage(), other.coverage()),
+        })
     }
 
     /// Shared body of [`Self::add`] and [`Self::add_truncated`]: validate the
@@ -2318,7 +2324,28 @@ where
                 SubDomainTreeTN::new(new_tree, new_proj).map_err(anyhow::Error::new)?,
             );
         }
-        Ok(Self { data })
+        let coverage = self
+            .coverage
+            .as_ref()
+            .map(|cov| {
+                cov.iter()
+                    .map(|projector| {
+                        let mut renamed = projector.clone();
+                        if let Some(coord) = renamed.remove(old_index) {
+                            renamed
+                                .insert(new_index.clone(), coord)
+                                .map_err(anyhow::Error::new)?;
+                        }
+                        Ok(renamed)
+                    })
+                    .collect::<std::result::Result<Vec<_>, anyhow::Error>>()
+            })
+            .transpose()?;
+        Ok(Self {
+            data,
+            coverage: None,
+        }
+        .with_canonical_coverage(coverage))
     }
 
     fn replace_indices(

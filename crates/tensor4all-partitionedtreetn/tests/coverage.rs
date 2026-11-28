@@ -1,7 +1,7 @@
 //! Coverage metadata tests for `PartitionedTreeTN`.
 
 use num_complex::Complex64;
-use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
+use tensor4all_core::{AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor, TensorIndex};
 use tensor4all_partitionedtreetn::{
     truncate_adaptive, BudgetAllocation, PartitionedTreeTN, PartitionedTreeTNError, Projector,
     SubDomainTreeTN,
@@ -326,5 +326,83 @@ fn coverage_add_clips_partially_covered_patch_and_preserves_values(
         PartitionedTreeTNError::OutsideCoverage { ref projector } if projector == &expected_offending
     ));
 
+    Ok(())
+}
+
+/// Three length-3 vector patches over `x`, with the coverage {p0, p1}.
+fn three_point_partition(
+    x: &DynIndex,
+    keys: &[usize],
+    coverage: &[usize],
+) -> Result<PartitionedTreeTN<usize>, Box<dyn std::error::Error>> {
+    let tree = TreeTN::from_tensors(
+        vec![IdxTensor::from_dense(
+            vec![x.clone()],
+            vec![1.0_f64, 2.0, 3.0],
+        )?],
+        vec![0usize],
+    )?;
+    let proj = |i: usize| Projector::from_pairs([(x.clone(), i)]);
+    let patches = keys
+        .iter()
+        .map(|&i| Ok(SubDomainTreeTN::new(tree.clone(), proj(i)?)?))
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+    let cov = coverage
+        .iter()
+        .map(|&i| proj(i))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(PartitionedTreeTN::from_subdomains(patches)?.with_coverage(cov)?)
+}
+
+#[test]
+fn coverage_scale_keeps_coverage() -> Result<(), Box<dyn std::error::Error>> {
+    let x = DynIndex::new_dyn(3);
+    let p0 = Projector::from_pairs([(x.clone(), 0)])?;
+    let p1 = Projector::from_pairs([(x.clone(), 1)])?;
+    let partition = three_point_partition(&x, &[0], &[0, 1])?;
+
+    let scaled = partition.scale(AnyScalar::new_real(2.0))?;
+    assert_eq!(scaled.coverage(), Some(&[p0, p1][..]));
+    // Scaling a coverage-free partition stays coverage-free.
+    let unbounded = PartitionedTreeTN::from_subdomains(vec![SubDomainTreeTN::new(
+        TreeTN::from_tensors(
+            vec![IdxTensor::from_dense(vec![x.clone()], vec![1.0_f64; 3])?],
+            vec![0usize],
+        )?,
+        Projector::from_pairs([(x, 0)])?,
+    )?])?;
+    assert_eq!(unbounded.scale(AnyScalar::new_real(2.0))?.coverage(), None);
+    Ok(())
+}
+
+#[test]
+fn coverage_axpby_patchwise_intersects_coverages() -> Result<(), Box<dyn std::error::Error>> {
+    let x = DynIndex::new_dyn(3);
+    let p1 = Projector::from_pairs([(x.clone(), 1)])?;
+    // Same patch key, so the patch-wise path is taken; coverages {p0,p1} and {p1,p2}.
+    let left = three_point_partition(&x, &[1], &[0, 1])?;
+    let right = three_point_partition(&x, &[1], &[1, 2])?;
+
+    let combined = left.axpby_truncated(
+        AnyScalar::new_real(2.0),
+        &right,
+        AnyScalar::new_real(-1.0),
+        &0usize,
+        TruncationOptions::default(),
+    )?;
+    assert_eq!(combined.coverage(), Some(&[p1][..]));
+    Ok(())
+}
+
+#[test]
+fn coverage_replaceind_renames_coverage_projectors() -> Result<(), Box<dyn std::error::Error>> {
+    let x = DynIndex::new_dyn(3);
+    let y = DynIndex::new_dyn(3);
+    let partition = three_point_partition(&x, &[0], &[0, 1])?;
+
+    let renamed = partition.replaceind(&x, &y)?;
+    let q0 = Projector::from_pairs([(y.clone(), 0)])?;
+    let q1 = Projector::from_pairs([(y, 1)])?;
+    assert_eq!(renamed.coverage(), Some(&[q0, q1][..]));
     Ok(())
 }
