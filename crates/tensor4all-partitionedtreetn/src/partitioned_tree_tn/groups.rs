@@ -36,7 +36,14 @@ where
     /// `group_by`; it is never silently re-keyed. All returned patches across
     /// all groups must have distinct, pairwise disjoint projectors and share
     /// one named topology, site-index placement, and scalar dtype, validated
-    /// through [`Self::from_subdomains`]. `f` is `Sync` so a lane-parallel
+    /// through [`Self::from_subdomains`].
+    ///
+    /// The coverage contract of [`Self::coverage`] is preserved when `f` returns
+    /// patches whose projector set matches `self`'s projectors identically. If
+    /// `f` adds, drops, merges, or changes any projector, the old coverage
+    /// cannot be transported in general, so the result carries no coverage
+    /// (`None`); re-attach one with [`Self::with_coverage`].
+    /// `f` is `Sync` so a lane-parallel
     /// variant can reuse the same closure bound without changing callers. On
     /// any error, `self` is left untouched.
     ///
@@ -106,7 +113,7 @@ where
         F: Fn(&Projector, &[&SubDomainTreeTN<V>]) -> Result<Vec<SubDomainTreeTN<V>>> + Sync,
     {
         if self.is_empty() {
-            return Ok(Self::new());
+            return Ok(Self::new().with_canonical_coverage(self.coverage().map(<[_]>::to_vec)));
         }
 
         let mut groups: HashMap<Projector, Vec<&SubDomainTreeTN<V>>> = HashMap::new();
@@ -136,6 +143,15 @@ where
             }
         }
 
-        Self::from_subdomains(mapped)
+        let result = Self::from_subdomains(mapped)?;
+        // A coverage is stated in terms of projectors, so it can only be carried
+        // over when `f` left the set of projectors unchanged.
+        let projectors_preserved =
+            seen_projectors.len() == self.len() && seen_projectors.iter().all(|p| self.contains(p));
+        if projectors_preserved {
+            Ok(result.with_canonical_coverage(self.coverage().map(<[_]>::to_vec)))
+        } else {
+            Ok(result)
+        }
     }
 }
