@@ -39,10 +39,12 @@ where
     /// through [`Self::from_subdomains`].
     ///
     /// The coverage contract of [`Self::coverage`] is preserved when `f` returns
-    /// patches whose projector set matches `self`'s projectors identically. If
-    /// `f` adds, drops, merges, or changes any projector, the old coverage
-    /// cannot be transported in general, so the result carries no coverage
-    /// (`None`); re-attach one with [`Self::with_coverage`].
+    /// patches whose projector set matches `self`'s projectors identically and
+    /// the old coverage remains valid on the mapped site space. If `f` adds,
+    /// drops, merges, or changes any projector, or removes or changes a site
+    /// index referenced by the coverage, the old coverage cannot be transported
+    /// in general, so the result carries no coverage (`None`); re-attach one
+    /// with [`Self::with_coverage`].
     /// `f` is `Sync` so a lane-parallel
     /// variant can reuse the same closure bound without changing callers. On
     /// any error, `self` is left untouched.
@@ -149,9 +151,23 @@ where
         let projectors_preserved =
             seen_projectors.len() == self.len() && seen_projectors.iter().all(|p| self.contains(p));
         if projectors_preserved {
-            Ok(result.with_canonical_coverage(self.coverage().map(<[_]>::to_vec)))
-        } else {
-            Ok(result)
+            if let Some(cov) = self.coverage() {
+                let site_indices = if let Some(template) = result.data.values().next() {
+                    let (sites, _) = template
+                        .data()
+                        .all_site_indices()
+                        .map_err(PartitionedTreeTNError::from)?;
+                    Some(sites)
+                } else {
+                    None
+                };
+                if super::validate_coverage(cov, site_indices.as_deref(), std::iter::empty())
+                    .is_ok()
+                {
+                    return Ok(result.with_canonical_coverage(Some(cov.to_vec())));
+                }
+            }
         }
+        Ok(result)
     }
 }
