@@ -4,8 +4,8 @@ mod coverage;
 mod evaluate;
 
 pub(crate) use coverage::{
-    canonicalize_coverage, derive_contraction_coverage, ensure_covered, intersect_coverages,
-    projector_covered_by, refine_coverage, validate_coverage,
+    canonicalize_coverage, derive_contraction_coverage, disjoint_cover, ensure_covered,
+    intersect_coverages, projector_covered_by, refine_coverage, validate_coverage,
 };
 pub(crate) use evaluate::PatchLocator;
 
@@ -351,7 +351,8 @@ where
     /// Inside the returned coverage, an absent patch is an exact zero; outside
     /// it, the value is unknown (uncomputed). When `None`, every absent patch
     /// is an exact zero. The returned slice is in deterministic canonical order
-    /// with no duplicates.
+    /// with no duplicates. Coverage is preserved by `Clone`; `PartitionedTreeTN`
+    /// does not implement `PartialEq`.
     ///
     /// # Examples
     ///
@@ -866,7 +867,8 @@ where
     /// restrictions of the patch they were projected from. A layout projector that
     /// conflicts with every patch contributes nothing, a patch region that no
     /// layout projector covers is dropped, and an empty `layout` returns an empty
-    /// partition.
+    /// partition. When `self` carries a coverage, the result carries that coverage
+    /// intersected with `layout`.
     ///
     /// # Errors
     ///
@@ -1083,6 +1085,11 @@ where
     /// zero contribution. To truncate the summed keys in the same call, use
     /// [`Self::add_truncated`].
     ///
+    /// When either operand carries a [`Self::coverage`], the result carries the
+    /// intersection of the operands' coverages (`None` acts as the whole domain),
+    /// and any patch extending outside that intersection is projected onto the
+    /// covered region (patches completely outside it are dropped).
+    ///
     /// Every sum here has exactly two terms, one per operand, so this method
     /// takes no [`SumEngine`]: for two terms the binary add and the N-ary
     /// direct sum do the same work. To sum many partitions at once, collect
@@ -1151,7 +1158,9 @@ where
     ///
     /// Each key present in both operands is added exactly, as in [`Self::add`],
     /// and the sum is then truncated towards `center` with `options`. A key
-    /// present on only one side is copied without truncation.
+    /// present on only one side is copied without truncation. Coverage is
+    /// intersected and patches are restricted to the intersected coverage as in
+    /// [`Self::add`].
     ///
     /// The resulting error is not bounded by the cutoff in `options`: that
     /// threshold bounds the discarded weight of one local factorization, and
@@ -1261,13 +1270,24 @@ where
         ensure_union_disjoint(&self.data, &other.data)?;
 
         let result_coverage = intersect_coverages(self.coverage(), other.coverage());
+        if let Some(ref cov) = result_coverage {
+            let needs_clip = self
+                .data
+                .keys()
+                .chain(other.data.keys())
+                .any(|projector| !projector_covered_by(projector, cov));
+            if needs_clip {
+                let cells = disjoint_cover(cov);
+                let left = self.refine_to(&cells)?;
+                let right = other.refine_to(&cells)?;
+                let mut summed = left.add_patchwise(&right, truncation)?;
+                summed.coverage = result_coverage;
+                return Ok(summed);
+            }
+        }
+
         let mut data = HashMap::with_capacity(self.data.len() + other.data.len());
         for (projector, left) in &self.data {
-            if let Some(ref cov) = result_coverage {
-                if !projector_covered_by(projector, cov) {
-                    continue;
-                }
-            }
             if let Some(right) = other.data.get(projector) {
                 let mut sum = left.add(right)?;
                 if let Some((center, options)) = truncation {
@@ -1280,11 +1300,6 @@ where
         }
         for (projector, right) in &other.data {
             if !self.data.contains_key(projector) {
-                if let Some(ref cov) = result_coverage {
-                    if !projector_covered_by(projector, cov) {
-                        continue;
-                    }
-                }
                 data.insert(projector.clone(), right.clone());
             }
         }
@@ -1334,7 +1349,13 @@ where
     /// stored layout is invalid, [`PartitionedTreeTNError::RefinementTooLarge`]
     /// when the refinement grid has more than [`AUTOMATIC_REFINEMENT_LIMIT`]
     /// atoms, [`PartitionedTreeTNError::GroupSumLimit`] when an exact group sum
-    /// would exceed the configured limit, or a typed TreeTN/backend error.
+    /// would exceed the configured limit,
+    /// [`PartitionedTreeTNError::OutsideCoverage`] under the conservative
+    /// contraction coverage rule when either operand's coverage constrains a
+    /// contracted index (leaving both inputs untouched), or a typed
+    /// TreeTN/backend error. When neither operand's coverage constrains a
+    /// contracted index, the result carries the intersection of the operands'
+    /// coverages on the output indices.
     /// Method-specific initialization, RSVD, and SRC option failures are
     /// [`PartitionedTreeTNError::TreeTN`] with a
     /// `TreeTNOperationError::InvalidConfiguration` source; the other invalid
@@ -1465,8 +1486,12 @@ where
     /// [`PartitionedTreeTNError::InvalidOptions`],
     /// [`PartitionedTreeTNError::OverlappingProjectors`] for overlapping wanted
     /// output layouts, [`PartitionedTreeTNError::GroupSumLimit`] when a wanted
-    /// output's exact sum would exceed the configured limit, or a typed
-    /// TreeTN/backend error. Operand validation runs even when no pair is
+    /// output's exact sum would exceed the configured limit,
+    /// [`PartitionedTreeTNError::OutsideCoverage`] when either operand's
+    /// coverage constrains a contracted index (conservative rule) or when any
+    /// projector in `wanted` lies outside the operands' derived output
+    /// coverage, or a typed TreeTN/backend error. When all checks succeed, the
+    /// result's coverage is set to the canonicalized `wanted` projectors. Operand validation runs even when no pair is
     /// selected. Method-specific invalid initialization, RSVD, or SRC options
     /// use [`PartitionedTreeTNError::TreeTN`] with an
     /// `TreeTNOperationError::InvalidConfiguration` source; other invalid

@@ -46,6 +46,27 @@ pub(crate) fn projector_covered_by(target: &Projector, coverage: &[Projector]) -
     first_uncovered_in(target, coverage).is_none()
 }
 
+/// Decompose the union of `coverage` into pairwise-disjoint projectors in
+/// canonical order.
+pub(crate) fn disjoint_cover(coverage: &[Projector]) -> Vec<Projector> {
+    let mut cells: Vec<Projector> = Vec::new();
+    for cov in coverage {
+        let mut pending = vec![cov.clone()];
+        for cell in &cells {
+            pending = pending
+                .into_iter()
+                .flat_map(|piece| match piece.split_by(cell) {
+                    Some(pieces) => pieces.into_iter().skip(1).collect(),
+                    None => vec![piece],
+                })
+                .collect();
+        }
+        cells.extend(pending);
+    }
+    cells.sort_by(Projector::canonical_cmp);
+    cells
+}
+
 /// Ensure `target` lies completely inside `coverage` (`None` covers everything).
 pub(crate) fn ensure_covered(target: &Projector, coverage: Option<&[Projector]>) -> Result<()> {
     let Some(cov) = coverage else {

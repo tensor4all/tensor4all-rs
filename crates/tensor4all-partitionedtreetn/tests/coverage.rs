@@ -1,7 +1,7 @@
 //! Coverage metadata tests for `PartitionedTreeTN`.
 
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, IdxTensor};
+use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_partitionedtreetn::{
     truncate_adaptive, BudgetAllocation, PartitionedTreeTN, PartitionedTreeTNError, Projector,
     SubDomainTreeTN,
@@ -263,6 +263,68 @@ fn coverage_none_preserves_existing_behavior() -> Result<(), Box<dyn std::error:
 
     let sum = left.add(&left)?;
     assert_eq!(sum.coverage(), None);
+
+    Ok(())
+}
+
+#[test]
+fn coverage_add_clips_partially_covered_patch_and_preserves_values(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let x = DynIndex::new_dyn(2);
+    let y = DynIndex::new_dyn(2);
+    // f(x, y): column-major over [x, y] -> (0,0)=1, (1,0)=2, (0,1)=3, (1,1)=4
+    let f_tree = TreeTN::from_tensors(
+        vec![IdxTensor::from_dense(
+            vec![x.clone(), y.clone()],
+            vec![
+                Complex64::new(1.0, 0.0),
+                Complex64::new(2.0, 0.0),
+                Complex64::new(3.0, 0.0),
+                Complex64::new(4.0, 0.0),
+            ],
+        )?],
+        vec![0usize],
+    )?;
+    // g(x, y): constant 10
+    let g_tree = TreeTN::from_tensors(
+        vec![IdxTensor::from_dense(
+            vec![x.clone(), y.clone()],
+            vec![Complex64::new(10.0, 0.0); 4],
+        )?],
+        vec![0usize],
+    )?;
+
+    let x0 = Projector::from_pairs([(x.clone(), 0)])?;
+    let x0_y0 = Projector::from_pairs([(x.clone(), 0), (y.clone(), 0)])?;
+    let x1_y0 = Projector::from_pairs([(x.clone(), 1), (y.clone(), 0)])?;
+
+    // left has patch {x=0} with coverage None; right has patch {x=1, y=0} with coverage [{x=0,y=0}, {x=1,y=0}].
+    let left = PartitionedTreeTN::from_subdomain(SubDomainTreeTN::new(f_tree, x0)?)?;
+    let right = PartitionedTreeTN::from_subdomain(SubDomainTreeTN::new(g_tree, x1_y0.clone())?)?
+        .with_coverage(vec![x1_y0.clone(), x0_y0.clone()])?;
+
+    let sum = left.add(&right)?;
+    assert_eq!(sum.coverage(), Some(&[x0_y0, x1_y0][..]));
+
+    // Evaluate at covered points (0, 0) and (1, 0): must preserve f(0,0)=1 and g(1,0)=10.
+    let pts = [0usize, 0, 1, 0];
+    let vals = sum.evaluate_batched(
+        &[x.clone(), y.clone()],
+        ColMajorArrayRef::new(&pts, &[2, 2])?,
+    )?;
+    assert_eq!(vals[0].real(), 1.0);
+    assert_eq!(vals[1].real(), 10.0);
+
+    // Evaluating at an uncovered point (1, 1) must fail with OutsideCoverage.
+    let bad_pt = [1usize, 1];
+    let expected_offending = Projector::from_pairs([(x.clone(), 1), (y.clone(), 1)])?;
+    let err = sum
+        .evaluate_batched(&[x, y], ColMajorArrayRef::new(&bad_pt, &[2, 1])?)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        PartitionedTreeTNError::OutsideCoverage { ref projector } if projector == &expected_offending
+    ));
 
     Ok(())
 }
