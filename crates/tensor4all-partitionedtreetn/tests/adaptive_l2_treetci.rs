@@ -232,9 +232,9 @@ fn l2_runs_are_reproducible_on_fresh_threads_on_a_raw_kernel_tree() {
 }
 
 #[test]
-#[ignore = "open question 8 of docs/design/tree-patching-error-contract.md: the generic IdxTensor \
-            path of TreeTNCachedEvaluator is not reproducible across threads (omeco breaks \
-            contraction-path cost ties in HashMap order)"]
+// The default planner tie-break was fixed by tenferro-rs#2014. Keep this
+// fresh-thread regression active; it covers this fixture, not every dtype
+// or cross-process execution.
 fn l2_runs_are_reproducible_on_fresh_threads_on_a_generic_path_tree() {
     assert_deterministic_across_threads(extended_quantics_tree, extended_peak);
 }

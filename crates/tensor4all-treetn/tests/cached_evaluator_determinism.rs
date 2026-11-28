@@ -12,17 +12,12 @@
 //! so any dependence on index-identity hashing changes the summation order and
 //! shows up as a different bit pattern.
 //!
-//! LIMITATION (measured while investigating #795): this test pins *in-process*
-//! rebuild stability only. Repeated runs of the same binary return two
-//! different bit patterns for this network when the evaluation center is a leaf
-//! (a 4-operand rooted message contraction) or when the center is chosen by the
-//! greedy search, while the uncached `TreeTN::evaluate` path stays
-//! bit-identical and the contraction spec passed to the backend is identical in
-//! every process. The variation is therefore the N-ary contraction path
-//! selection, which is not process-reproducible: `ContractionTree::optimize`
-//! returns different equal-cost paths per process. That is tracked in
-//! tensor4all/tenferro-rs#1963, so cross-process bitwise reproducibility is not
-//! guaranteed by this evaluator until that lands.
+//! Historical limitation measured in #795: the old default planner returned
+//! different equal-cost paths across processes, despite identical backend
+//! contraction specs. tenferro-rs#2014 closed tenferro-rs#1963 for default
+//! non-annealing options; the pinned planner now uses deterministic greedy
+//! ties. This test still pins in-process rebuild stability only, not
+//! cross-process values. Annealing retains the upstream omeco caveat.
 
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;

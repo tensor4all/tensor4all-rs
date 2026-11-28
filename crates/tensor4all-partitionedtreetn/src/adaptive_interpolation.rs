@@ -19,10 +19,12 @@
 //!   whole run.
 //! - [`patched_interpolate_on_lanes`] fans a wave out over the lanes of a
 //!   caller-owned [`TenferroLanes`](hataori_tenferro::TenferroLanes): each patch
-//!   runs in the child session of the lane that pulled it, and the evaluator
-//!   must be `Fn + Sync`. The root wave and every wave smaller than the lane
-//!   count run one patch at a time, so a single item keeps the backend's whole
-//!   team.
+//!   runs on the engine of the lane that pulled it, and the evaluator must be
+//!   `Fn + Sync`. A lane runs one patch at a time and may claim several
+//!   patches from the same wave. A wave smaller than the lane count leaves
+//!   lanes idle; the caller sizes each lane's engine.
+//!   [Lane-count identity](#lane-count-identity) states what the lane count
+//!   may not change.
 //! - `patched_interpolate_mpi` (feature `hataori-mpi` or `hataori-mpi-rsmpi-rt`)
 //!   distributes each wave over MPI ranks through `hataori::pmap_lanes`; the
 //!   root owns the queue, the merge, the pinned references and the result.
@@ -31,8 +33,8 @@
 //!
 //! Every numerical step of a run - the engine call, the re-embedding of fixed
 //! sites, the measurement of a stored patch and the readout of its norm - runs
-//! on one session: the session of the caller's [`EvalContext`], or the child
-//! session of the lane that runs the patch. The evaluator receives that same
+//! on one session: the session of the caller's [`EvalContext`], or a session
+//! over the engine of the lane that runs the patch. The evaluator receives that same
 //! context, so a caller-owned execution capability reaches every stage and an
 //! evaluator that needs numerical work of its own can issue it on the session.
 //! No step enters the process-global session, an eager runtime or a
@@ -261,33 +263,46 @@
 //! the processing order.
 //!
 //! For a fixed seed, a deterministic evaluator, and a deterministic engine,
-//! the report and every stored node tensor (values and positional axis order)
-//! are identical across runs on fresh threads within one process, provided
-//! every measured network value is reproducible. The schedule is not part of
-//! that contract either: the wave merge sorts by canonical path, the counters
-//! are per patch, and a lanes run at one or two lanes reproduces the serial
-//! report on such fixtures. This is tested for `f64` on
-//! trees where every node carries exactly one site, where the measurement
-//! takes the cached evaluator's raw kernels. Each measurement uses a fresh
-//! `TreeTNCachedEvaluator` centered at the smallest node name, the default
-//! hint, and fixed-size chunks. On other trees (a site-free node, a node with
-//! several sites, or `f32`/`c32` data) the evaluator's generic path can
-//! differ at rounding level between threads and processes, so an L2
-//! acceptance near `tau` may then differ between runs; this is an open
-//! evaluator limitation tracked upstream in
-//! [tenferro-rs #1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
-//! [Issue #795](https://github.com/tensor4all/tensor4all-rs/issues/795) closed
-//! the tracking and test gap through PR #816; it did not fix the planner.
-//! The intended scope is bitwise identical results on the same machine and
-//! build across threads, thread counts, and processes, with no cross-machine
-//! promise. It is not reached yet: generic-path measurements need deterministic
-//! contraction paths, and reproducibility across processes is not claimed
-//! until a two-process test passes, which does not exist yet. The bitwise claim
-//! never covers `approximation_rms` and the fields derived from it. Issue #791
-//! was fixed by PR #793: TreeTN construction, external-site order, and dense
-//! output order no longer inherit the old hash-iteration nondeterminism.
-//! `site_space` remains a set with unspecified iteration order; generic cached
-//! evaluation still has the separate planner limitation above.
+//! the report and stored node tensors agree on the tested fresh-thread
+//! fixtures within one process, subject to the norm-field exclusions below.
+//! The wave merge sorts by canonical path and counters are per patch. The
+//! measurement, DenseEngine and TreeTCI regressions cover raw-kernel and
+//! generic-path `f64` fixtures (including site-free and multi-site nodes).
+//! Each measurement uses a fresh `TreeTNCachedEvaluator`, the smallest node
+//! name as center, the default hint and fixed-size chunks.
+//!
+//! The original generic-path planner defect was closed by
+//! [tenferro-rs#2014](https://github.com/tensor4all/tenferro-rs/pull/2014),
+//! which resolved [#1963](https://github.com/tensor4all/tenferro-rs/issues/1963):
+//! the pinned default planner uses deterministic greedy ties. Fresh-thread
+//! regressions pass for their fixtures; they do not establish every generic
+//! layout, dtype or pooled-evaluator call history. The local raw-message and
+//! positional-contraction work remains the generic-path M7 prerequisite.
+//! Issue #795 closed the tracking/test gap through #816, not the planner fix.
+//! The intended scope is the same machine and build at a fixed thread count;
+//! cross-process identity awaits a two-process test. Identity across thread
+//! counts is not promised. `approximation_rms`, its rounding allowance and
+//! relative-bound derivatives, and `rounding_limited` at its threshold remain
+//! outside the bitwise claim. Issue #791 was fixed by #793: TreeTN site/edge
+//! construction and dense-axis order no longer inherit the old hash ordering.
+//! `site_space` is still a set with unspecified iteration order.
+//!
+//! # Lane-count identity
+//!
+//! [`patched_interpolate_on_lanes`] and [`patched_elementwise_on_lanes`] are
+//! held to bitwise identity across lane counts at a fixed per-lane engine
+//! profile: every lane uses the same engine kind and runs serially (for
+//! example `tenferro_cpu::CpuEngine::serial()`). A multi-threaded lane voids
+//! this separate promise, which is not implied by fixed-thread-count Tier 1.
+//! The norm-field exclusions above apply. A `SampledMax` reference search's
+//! wall time (`search.seconds`) is diagnostic and outside the bitwise claim;
+//! norm canonicalization's per-patch `log_norm` remains unaudited generally.
+//! Canonical wave merging fixes the driver's output order; it does not prove
+//! that a stateful evaluator's arithmetic is independent of the lane's prior work. In particular, the
+//! elementwise entry pools cached evaluators across lanes.
+//!
+//! The authoritative scope, verification procedure and coverage status are
+//! in the [design contract](https://github.com/tensor4all/tensor4all-rs/blob/main/docs/design/tree-patching-error-contract.md#lane-count-identity).
 //!
 //! # Examples
 //!

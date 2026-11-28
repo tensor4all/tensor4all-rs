@@ -30,7 +30,7 @@ hataori-mpi-core = [
 [dependencies]
 anyhow.workspace = true
 # The lane fan-out of the adaptive patch driver: hataori schedules, tenferro owns
-# the pool and one child session per lane.
+# one caller-sized engine per lane.
 hataori.workspace = true
 hataori-tenferro.workspace = true
 # Wire types of the MPI fan-out (`hataori-mpi*` features).

@@ -17,11 +17,20 @@ The two prerequisites: the frozen M2 golden outputs were committed before the
 refactor ([Tests](#tests)); the evaluator fix of
 [Determinism](#determinism) is still open, with its order decided (open
 question 8). Issue [#795](https://github.com/tensor4all/tensor4all-rs/issues/795)
-closed the tracking and test gap through PR #816, while the planner fix remains
-open upstream in [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
-The cross-thread determinism test ran early: it passes on trees whose nodes
-carry one site each and fails, as predicted, on the generic path, where it is
-kept as an ignored test with that reason.
+closed the tracking and test gap through PR #816, and the upstream planner fix
+([tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963)) was
+closed by [tenferro-rs#2014](https://github.com/tensor4all/tenferro-rs/pull/2014),
+so the planner tie is no longer a prerequisite for the patched Fourier path (a
+code-reading argument, see [Determinism](#determinism)).
+The original generic-path failures were measured before the upstream fix.
+Revalidation at the pinned tenferro `5df83672` now passes the fresh-thread
+measurement, DenseEngine and TreeTCI generic-path regressions; these tests
+are enabled again. The DenseEngine variant uses rank-one patches that also
+passed before the fix, so it is a restored regression, not evidence that the
+planner tie was fixed. The measurement and TreeTCI cases exercise the
+historical failures. These `f64` fixtures do not prove every tree, dtype,
+call history or process boundary. The local steps (c) and (a)
+remain the accepted generic-path M7 work; see [Determinism](#determinism).
 
 Every proposal was implemented as the default, and the evidence that bears on
 each open question is recorded below. Open questions 1, 2, 4, 5, 8, and 9 were
@@ -133,16 +142,13 @@ checked against the `cargo run -p xtask --release -- api-dump` inventory
   generic path mints per message (lines 4388, 4759, 5592) do not affect the
   operation order. Index IDs stay in the determinism test as an excluded
   risk.
-- **Contraction-path ties (the cause).** For an N-ary contraction the
-  default planner of tenferro-einsum uses omeco's greedy planner, and omeco
-  0.2.6 `tree_greedy` (`src/greedy.rs:170-307`) iterates
-  `IncidenceList::vertices()`, which is `HashMap::keys()`
-  (`src/incidence_list.rs:82-84`). Ties between equally cheap pairs are
-  therefore broken by hash order, which differs across threads and
-  processes. The chosen plan is cached per thread
-  (`CONCRETE_EINSUM_PLAN_CACHE`,
-  `tensor4all-tensorbackend/src/tenferro_bridge.rs:144, 276`), so repetitions
-  on one thread reuse one plan and agree bitwise.
+- **Contraction-path ties (historical cause, fixed for default options).**
+  The original investigation used omeco 0.2.6's hash-ordered greedy planner.
+  tenferro-rs#2014 closed #1963: at the pinned `5df83672`, default
+  non-annealing calls use the local `optimize_self_greedy_pairs` with
+  index-ordered ties, not omeco. Annealing still uses omeco; it is not the
+  workspace's default path. A thread-local plan cache can hide an ordering
+  defect within one thread, which is why the regressions use fresh threads.
 - **Norms of networks.** `SubDomainTreeTN::norm_squared` clones and
   canonicalizes the patch. `TreeTN::log_norm` (`treetn/ops.rs:120-188`)
   canonicalizes to the smallest node name and then takes
@@ -1176,17 +1182,18 @@ those are reproducible only up to rounding, and the boolean
 `rounding_limited` only away from its threshold (see
 [Records and report](#records-and-report) and test 14).
 
-**Root cause.** On trees where `TreeTNCachedEvaluator` takes its generic
-`IdxTensor` path (a site-free node, a node with several sites, or `f32`/`c32`
-data), its N-ary contractions at a node with two or more children and at a
-center with two or more neighbors go through tenferro-einsum's default
-planner, and omeco's greedy planner breaks ties between equally cheap pairs
-in `HashMap` order. The chosen plan, and with it the rounding of the result,
-can differ between threads and between processes. The plan is cached per
-thread, so repetitions on one thread agree bitwise and cannot reveal the
-problem. The M3 test tree (`quantics_tree`) takes this path.
-`TreeTNEvaluator` contracts a whole network per point through
-`contract_to_tensor` and is not used for the measurement.
+**Historical cause and current evidence.** On trees where
+`TreeTNCachedEvaluator` takes its generic `IdxTensor` path (a site-free node,
+a node with several sites, or `f32`/`c32` data), N-ary message and center
+contractions use the backend planner. The original failures came from
+omeco's hash-ordered greedy ties, not from thread scheduling. At the pinned
+tenferro `5df83672`, default non-annealing planning instead uses the
+deterministic local greedy introduced by tenferro-rs#2014. The old cause no
+longer explains a present failure. The fresh-thread measurement, DenseEngine
+and TreeTCI regressions pass on their generic `f64` fixtures and are enabled
+again; other dtypes, pooled call histories and two-process execution are not
+established by those tests. `TreeTNEvaluator` contracts a whole network per
+point and is not used for the measurement.
 
 **Checked and excluded.** Random index IDs are not the cause. This record
 verified that the evaluator does not sort by ID (a complete search of
@@ -1226,33 +1233,43 @@ deterministic evaluator and engine, and a reproducible network evaluation the
 report is bitwise identical within the scope below; `approximation_rms` and
 the fields derived from it remain outside that claim.
 
-Under these controls the separate investigation found the raw-kernel trees
-bitwise reproducible across rebuilds, threads, processes, and thread counts;
-this record did not rerun that check. The evaluator's part
-is not satisfied on generic-path trees. **Prerequisite**: a fix of the
-contraction-path ties. It was planned before the M3 implementation, was not
-done then, and is now a prerequisite of M7. The order is decided
-([open question 8](#open-questions-for-the-user)). Issue
-[#795](https://github.com/tensor4all/tensor4all-rs/issues/795) closed the
-tracking/test gap through #816; the following local prerequisites remain
-unimplemented, and the upstream planner fix is tracked by
-[tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963):
+The original investigation found raw-kernel trees reproducible under these
+controls. Revalidation at the pinned tenferro also passes the generic-path
+`f64` fixtures in `adaptive_interpolation/verify/tests.rs`, `adaptive_l2.rs`
+and `adaptive_l2_treetci.rs`. These tests use fresh threads; they do not
+establish every generic layout, dtype or process boundary.
 
-- (c) first: extend the raw kernels of `TreeTNCachedEvaluator` to site-free
-  nodes. Driver patches keep at most one site per node, but the trees in use
-  have site-free nodes (a site-free root, the junction of `quantics_tree`),
-  and `can_use_raw_messages` (`cached_evaluator.rs`, lines 2530-2543) sends
-  any tree with a site-free node to the generic path. (c) covers the
-  driver's trees, is deterministic, and removes the generic-path overhead;
-- (a) next: in `tensor4all-treetn`, fold the N-ary contractions of the generic
-  message and center paths pairwise in positional order (children in sorted
-  name order), so no planner runs there; this covers trees with a multi-site
-  node and `f32`/`c32` data;
-- (b) long term: upstream, deterministic tie-breaking in omeco or in the
-  tenferro-einsum planner, which also covers every other N-ary contraction in
-  the workspace.
+**Remaining accepted local work (M7, open question 8).** The maintainer's
+2026-11-27 decision in [#1497](https://github.com/tensor4all/tensor4all-rs/issues/1497#issuecomment-7229306374)
+keeps (c) and (a) as the generic-path prerequisite. They have benefits beyond
+the closed default-planner defect: (c) removes generic-message overhead for
+site-free nodes; (a) makes generic message/center arithmetic independent of
+planner choices and versions, including multi-site and `f32`/`c32` layouts.
+Passing the present `f64` regressions does not cancel that accepted work or
+prove those other cases.
 
-The driver does not work around it.
+- (c) first: extend `TreeTNCachedEvaluator`'s raw kernels to site-free nodes.
+  Driver patches keep at most one site per node, but a site-free junction
+  currently routes the tree to generic messages.
+- (a) next: fold generic message and center contractions pairwise in
+  positional order, with children in sorted name order. This removes the
+  planner from these calls, at the cost of its cost optimization.
+
+**Completed upstream work (b).** Deterministic default planner tie-breaking
+was tracked by [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963)
+and closed by [tenferro-rs#2014](https://github.com/tensor4all/tenferro-rs/pull/2014).
+The pinned default uses deterministic greedy planning; annealing remains a
+separate caveat. [#795](https://github.com/tensor4all/tensor4all-rs/issues/795)
+closed the repository's tracking/test gap through #816, not the upstream fix.
+The driver adds no planner workaround.
+
+For the patched Fourier transform's level-zero stored-patch applications,
+the planner tie is no longer a live prerequisite: these use the zip-up's
+N-ary `T::contract`, not `TreeTNCachedEvaluator`. General merge-refine
+`Patch::Product` terms instead use `partial_contract`; they are not covered
+by that zip-up call-chain argument. The Fourier conclusion remains a
+code-reading argument until #1497's Fourier cross-lane result and operand
+sequence test runs; the interpolation tests of #1528 are not that test.
 
 **Scope (decided, [open question 9](#open-questions-for-the-user); narrowed to
 one tier 2026-11-09, owner decision after #1202).** There is one promise:
@@ -1270,8 +1287,11 @@ one tier 2026-11-09, owner decision after #1202).** There is one promise:
 Bitwise identity **across** thread counts is not promised, for any operation.
 The owner decided this after #1202: making a partition independent of the thread
 count removes parallel freedom, and no caller needs the same bits at one thread
-and at eight. The configurations recorded below are **observations under Tier 1**:
-they say what this host does today, and how far it reaches.
+and at eight. Tier 1 is the one promise about thread counts; the lane entries
+carry a separate one, [lane-count identity](#lane-count-identity), which is not
+an exception to this rule because it holds every lane at one thread. The
+configurations recorded below are **observations under Tier 1**: they say what
+this host does today, and how far it reaches.
 
 **When results are compared, pin the thread count — also when a cache is shared
 across runs.** A digest, a stored baseline, or a cache key computed at one thread
@@ -1353,11 +1373,11 @@ products agree, and `qr` splits above `m*n ~ 16k` elements.
   a sequential accumulation.
 
 There is no cross-machine promise; M8 (MPI) states its own contract. What is
-tested today is narrower still than Tier 1: fresh threads within one process,
-on `f64` trees whose nodes carry exactly one site each (the raw kernels).
-Until the local steps (c) and (a) land, generic-path trees (a site-free node, a
-multi-site node, or `f32`/`c32` data) are not reproducible across threads, and
-the two-process CI test does not exist yet, so no cross-process claim is made.
+tested today is narrower still than Tier 1: fresh threads within one process
+on the raw-kernel and generic-path `f64` fixtures named above. No current
+failure is attributed to the closed planner defect. Coverage for all generic
+layouts and `f32`/`c32` remains incomplete, and the two-process CI test does
+not exist yet, so no cross-process claim is made.
 
 The test (a unit test of the measurement): build patches on two trees, a
 branched tree with a multi-site node and a site-free junction (generic path)
@@ -1371,6 +1391,81 @@ and a fresh
 with the same chunking, center, and hint; all repetitions must give bitwise
 identical residuals. "The same patch" is never the same object. Repetitions on
 the same thread are not a valid test of this property.
+
+#### Lane-count identity
+
+**A separate promise (owner decision 2026-11-27,
+[#1497](https://github.com/tensor4all/tensor4all-rs/issues/1497#issuecomment-7229306374)):
+bitwise identity across lane counts, at a fixed per-lane engine profile.** For
+a fixed seed, a deterministic evaluator and a deterministic engine, this
+adaptive driver's `patched_interpolate_on_lanes` and
+`patched_elementwise_on_lanes` give the same report and stored node tensors, bit for
+bit, on one lane and on eight, when every lane runs one serial engine of the
+same kind (one thread per lane, as with `CpuEngine::serial()`). The scope and
+exclusions are Tier 1's: the same machine and build, no cross-machine claim.
+For an L2 run, `report.norm` is not excluded as a whole: its reference,
+source, allowance, domain size, certified fraction and global error statistic
+are compared bitwise. A `SampledMax` run also records the reference search's
+wall time (`search.seconds`), which stays outside this claim. The L2 rounding
+exclusions are `approximation_rms`, `rounding_allowance_rms`,
+`relative_error_bound` and `relative_bound_estimate`, with
+`rounding_limited` compared only away from its threshold. Counts, ordered
+patch records and stored node tensors are checked too. The norm
+canonicalization caveat also applies to per-patch `log_norm`: #1528 checks it
+bitwise for its fixtures, which is stronger than the general norm-readout
+promise and does not establish every canonicalization path.
+
+This promise is not implied by Tier 1. Tier 1 is identity at a fixed thread count
+only, and changing the lane count changes the number of threads in the run. The
+lane driver carries this requirement instead: the arithmetic of a patch must be a
+function of the patch, its path-derived seeds and its lane's engine profile, not
+of which lane pulled it, how many lanes there are or what the other lanes do,
+and the results are merged in canonical path order. Persistent lane engines,
+thread-local contraction-plan caches and pooled evaluator histories must be
+checked at their owning seams; canonical merging alone does not establish
+arithmetic independence. **A multi-threaded lane voids
+the promise**: its kernels run as a team, whose bits Tier 1 fixes only per thread
+count and which can take a different kernel from a serial engine altogether (the
+`Complex64` dense products recorded above split serial against parallel).
+
+How it is verified: a cross-lane test runs one problem at several lane counts
+with serial lane engines and compares the report and the stored node tensors
+bitwise, not within a tolerance. Where a lane operation issues N-ary
+contractions, the test also compares each N-ary call's operand *sequence* per
+lane, not only the resulting bits. The operand order comes from the shared graph
+(a breadth-first walk) and is not re-sorted inside the contraction, because a
+reordering changes the floating-point sums and with them truncation decisions;
+a lane that sees a different order is a seam bug to fix, not a reason to sort.
+
+Coverage status (2026-11-28), scoped to these two adaptive-driver entries:
+
+- The existing interpolation tests compare the serial entry with one and two
+  serial lanes, checking report counters and records with equality and the
+  norm's debug representation, and stored patches within `1e-12`. Debug
+  equality is not a bitwise check of floating-point representations. The
+  elementwise unit test compares three lanes with serial within `1e-12`.
+- Companion PR #1528 adds fixture-level lane-count checks for TreeTCI
+  interpolation and an elementwise product; see its test definitions for the
+  lane counts and partition sizes. The tests compare stored tensor bits and
+  report counters/records, with global norm diagnostics using
+  `assert_same_norm` and an additional bitwise `log_norm` check.
+  Source routing classifies the elementwise restricted inputs as generic:
+  `restrict_fixed_sites` removes fixed site legs, leaving site-free nodes that
+  `raw_centre_route_available` rejects. This is a code-reading classification,
+  not an instrumented assertion of the production route. The tests do not
+  establish every layout, dtype or pooled history, instrument N-ary operand
+  sequences, or assert concurrent execution. They belong to #1528 and are
+  not added by this documentation PR.
+- Separate `tensor4all-interpolativeqtt` APIs already have lane tests:
+  `interpolate_patched_nd_on_lanes` (`src/patched/tests/parallel.rs`) compares
+  values with `assert_eq!`, which does not distinguish signed zero;
+  `interpolate_chebyshev_patches_on_lanes`
+  (`src/chebyshev_patches/tests/parallel.rs`) compares bit patterns. Neither
+  establishes the adaptive partitioned driver or its pooled evaluators.
+- The contraction, sums, truncation and Fourier lane variants requested in
+  #1495/#1497 do not exist yet. Their tests must also compare N-ary operand
+  sequences when applicable. The broader generic-path and two-process
+  coverage limitations remain as recorded above.
 
 ## Placement
 
@@ -1851,8 +1946,10 @@ defaults reproduce M3 exactly.
    `tensor4all-treetn` work and a prerequisite of M7. Issue
    [#795](https://github.com/tensor4all/tensor4all-rs/issues/795) closed the
    tracking/test gap through #816; it did not implement these steps. The
-   upstream step is tracked by
-   [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
+   upstream step was tracked by
+   [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963),
+   which [tenferro-rs#2014](https://github.com/tensor4all/tenferro-rs/pull/2014)
+   closed.
    - (c), new and first: extend the raw kernels of `TreeTNCachedEvaluator`
      to site-free nodes. Driver patches keep at most one site per node, but
      the trees in use have site-free nodes (the site-free root, the junction
@@ -1862,8 +1959,8 @@ defaults reproduce M3 exactly.
      deterministic, and removes the generic-path overhead.
    - (a) next: pairwise positional contraction on the generic path, for
      trees with a multi-site node and for `f32`/`c32` data.
-   - (b) long term: deterministic tie-breaking upstream in omeco or
-     tenferro.
+   - (b), completed for default options by tenferro-rs#2014: deterministic
+     tie-breaking in tenferro; annealing remains a separate caveat.
 
    Correction: the review of the open questions started from the premise
    that driver patches mostly take the raw kernels. They do only on trees
@@ -1884,9 +1981,10 @@ defaults reproduce M3 exactly.
    (the same test binary run twice). There is no cross-machine promise; M8
    (MPI) must state its own contract. This is the target; the current tested
    state is recorded in [Determinism](#determinism): fresh threads within one
-   process, on `f64` trees with exactly one site per node. Until the local steps (c) and
-   (a) land, generic-path trees are not reproducible across threads, and the
-   two-process CI test does not exist yet.
+   process on raw-kernel and generic-path `f64` fixtures. The generic-path
+   regressions now pass at the pinned planner and are enabled; this does not
+   establish every generic layout or dtype. The local steps (c) and (a)
+   remain accepted M7 work, and the two-process CI test does not exist yet.
 
    **Narrowed to Tier 1, 2026-11-08 (after #1162) and to Tier 1 only,
    2026-11-09 (owner decision, after #1202).** What CI enforces, and the whole of
@@ -1901,6 +1999,13 @@ defaults reproduce M3 exactly.
    as observations about the host and provider named with them. This narrowing is
    a correction of this document, not a retreat from the 2026-10-03 decision about
    *which machine* the promise covers.
+
+   **Lane counts, 2026-11-27 (owner decision in
+   [#1497](https://github.com/tensor4all/tensor4all-rs/issues/1497#issuecomment-7229306374)).**
+   The lane entries carry a separate promise, bitwise identity across lane counts
+   at a fixed per-lane engine profile with each lane serial internally, recorded
+   under [Lane-count identity](#lane-count-identity). It does not widen Tier 1,
+   and a multi-threaded lane voids it.
 
 ## Implementation decisions
 
@@ -2032,12 +2137,15 @@ text left open.
   rounded up) times a headroom factor of 4. Heavier cancellation exceeds it,
   as the text anticipates.
 - **Test 14.** The fresh-thread run tests pass on the raw-kernel tree with
-  the dense engine and with TreeTCI. The generic-path variants are ignored
-  with a reference to open question 8. With TreeTCI on the extended
-  `quantics_tree` they fail (the certified `rms_error` differed by 13 units
-  in the last place between two threads). With the dense engine, whose patches
-  there have rank one, they passed in three processes, which is not a
-  guarantee.
+  the dense engine and with TreeTCI. The generic-path variants now run at the
+  pinned planner without `#[ignore]`: TreeTCI on the extended `quantics_tree`
+  and the dense engine both pass. The earlier TreeTCI run differed by 13
+  units in the last place in certified `rms_error` between two threads;
+  this is the historical failure, not the current state. The dense-engine
+  variant has rank-one patches that already agreed under the old planner:
+  it is a restored regression, not evidence about the planner tie. Those
+  earlier observations in three processes did not establish a general
+  cross-process guarantee.
 - **Lower-layer defect, relied on by the report (fixed by #799).**
   Before #799, `TreeTN::log_norm`, and with it `TreeTN::norm`
   (`log_norm().exp()`) and `norm_squared`, overestimated the norm of a

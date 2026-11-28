@@ -12,9 +12,9 @@
 //!
 //! # One engine per lane
 //!
-//! Every wave runs one patch per lane, whatever its size: a lane owns one
-//! fixed `tenferro_cpu::CpuEngine` that the caller built and
-//! sized, and a patch runs on the engine of the lane that pulled it. A wave
+//! A lane runs one patch at a time and may claim several patches of a wave.
+//! It owns one fixed `tenferro_cpu::CpuEngine` that the caller built and
+//! sized; every patch it claims runs on that engine. A wave
 //! with fewer patches than lanes leaves the remaining lanes idle. The driver
 //! opens no child sessions and does not divide a pool between items, so the
 //! caller decides each lane's thread count when it builds the engines.
@@ -23,15 +23,12 @@
 //!
 //! # Determinism
 //!
-//! The driver's own contract does not change: every patch derives its
-//! sub-seeds from the seed and its path, patches are merged in canonical path
-//! order, and the report is a function of the problem, not of the schedule.
-//! Counters are per patch and summed, so they do not depend on the number of
-//! lanes. The measured network values of the generic cached-evaluator path can
-//! still differ at rounding level between threads near `tau` (see "Randomness
-//! and determinism" in the documentation of the parent module): serial and
-//! lane runs agree on fixtures whose measurements use the raw kernels, and no
-//! bitwise cross-thread or cross-process claim is made for the generic path.
+//! Per-patch seeds and canonical wave merging make the driver's bookkeeping
+//! independent of which lane claims each patch. The lane engine persists
+//! across patches, as can a stateful evaluator's caches; these facts alone
+//! do not prove schedule-independent arithmetic. See
+//! [lane-count identity](super#lane-count-identity) for the serial per-lane
+//! engine requirement, exclusions and the design contract's coverage status.
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -133,6 +130,14 @@ where
 /// evaluator and the resource limits, plus
 /// [`PatchedInterpolationError::FanOut`] when the lane executor itself fails to
 /// run, join, or clean up a lane.
+///
+/// # Determinism
+///
+/// The result is to be bitwise identical across lane counts when every lane
+/// runs one serial engine of the same kind (one thread per lane, as with
+/// `CpuEngine::serial()` below); a multi-threaded lane voids this. See
+/// [lane-count identity](crate::adaptive_interpolation#lane-count-identity)
+/// for the scope and for what the tests check today.
 ///
 /// # Examples
 ///
@@ -240,7 +245,7 @@ where
     assemble(plan, merged)
 }
 
-/// Run one patch per lane and keep each patch's typed error.
+/// Spread a wave over lanes and keep each patch's typed error.
 ///
 /// The evaluator stays behind a shared reference: every lane builds a session
 /// over its own engine and calls the evaluator on its own thread.

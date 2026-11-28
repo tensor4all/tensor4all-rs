@@ -279,14 +279,18 @@ generations of the patch queue. `patched_interpolate` runs every patch on the
 caller's session, one after another.
 `adaptive_interpolation::patched_interpolate_on_lanes` fans each wave out over
 the lanes of a caller-owned `hataori_tenferro::TenferroLanes`, so every patch
-runs in the child session of the lane that pulled it; the root wave and waves
-smaller than the lane count run one patch at a time, so a single item keeps
-the backend's whole team.
+runs on the engine of the lane that pulled it. A lane runs one patch at a
+time and may claim several patches of the same wave; a wave smaller than the
+lane count leaves lanes idle. The caller sizes each lane's engine.
 `adaptive_interpolation::patched_interpolate_mpi` (feature `hataori-mpi` or
 `hataori-mpi-rsmpi-rt`) distributes each wave over MPI ranks through
 `hataori::pmap_lanes`, with the root owning the queue and the result. The
 schedule does not change the report: seeds come from the seed and the patch
 path, counters are per patch, and the wave merge is in canonical path order.
+The two adaptive-driver lane entries also follow the separate
+[lane-count identity contract](https://github.com/tensor4all/tensor4all-rs/blob/main/docs/design/tree-patching-error-contract.md#lane-count-identity).
+It requires the same serial engine profile per lane and carries the norm-field
+exclusions; that section records the tests and remaining coverage gaps.
 
 The accuracy requirement is an `ErrorNorm` with an
 `ErrorTolerance { rtol, atol }`. The default, `ErrorNorm::L2`, bounds the L2
@@ -506,24 +510,19 @@ samples are all exactly zero is first screened (and under L2 measured); zero
 patches are reported in `report.zero_patches` and left out of the partition,
 which treats an absent patch as zero.
 
-Execution is sequential. For a fixed `seed`, a deterministic evaluator, and a
-deterministic engine, the report and every stored node tensor (values and
-positional axis order) are identical across runs on fresh threads within one
-process as long as the measured network values are reproducible. This is
-tested for `f64` on trees with exactly one site per node. On trees with a
-site-free node or a node with several sites, or with `f32`/`c32` data, the
-cached evaluator can round differently between threads and processes, an
-open limitation tracked in
-[tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
-Issue #795 closed the tracking/test gap through #816; it did not fix the
-planner. The intended scope is bitwise identical results on the same machine
-and build across threads, thread counts, and processes, with no cross-machine
-promise. Generic-path measurements still need deterministic contraction paths;
-reproducibility across processes is not claimed until a two-process test passes.
-Issue #791 was fixed by #793: TreeTN site/edge construction and dense-axis order
-no longer inherit that hash-iteration nondeterminism. `site_space` is still a set
-with unspecified iteration order; cached generic evaluation retains the
-separate planner limitation above.
+For a fixed seed, deterministic evaluator and deterministic engine at a
+fixed thread count, fresh-thread tests cover raw-kernel and generic-path
+`f64` fixtures, including site-free and multi-site nodes. The old planner
+cause ([tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963))
+was closed by [#2014](https://github.com/tensor4all/tenferro-rs/pull/2014);
+the generic-path regressions pass at the current pin and are enabled again.
+This does not establish every generic layout, dtype or pooled call history.
+The local raw-message and positional-contraction M7 work remains accepted.
+Cross-process identity awaits a two-process test; identity across thread
+counts and machines is not promised. See "Randomness and determinism" in
+`adaptive_interpolation` for the norm-field exclusions. #795 closed the
+tracking/test gap through #816, not the planner fix; #793 fixed TreeTN
+site/edge ordering. `site_space` remains a set with unspecified iteration order.
 
 ## Reconstruction with a fixed global L2 tolerance
 
