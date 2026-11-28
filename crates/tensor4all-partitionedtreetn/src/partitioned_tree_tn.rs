@@ -1,6 +1,7 @@
 //! Collections of eagerly projected [`SubDomainTreeTN`] patches.
 
 mod evaluate;
+mod groups;
 mod map;
 
 pub(crate) use evaluate::PatchLocator;
