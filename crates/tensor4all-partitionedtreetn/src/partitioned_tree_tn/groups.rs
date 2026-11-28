@@ -65,10 +65,11 @@ where
     ///
     /// let site_g = DynIndex::new_dyn(2);
     /// let site_s = DynIndex::new_dyn(2);
+    /// let bond = DynIndex::new_dyn(1);
     /// let tree = TreeTN::from_tensors(
     ///     vec![
-    ///         IdxTensor::from_dense(vec![site_g.clone()], vec![1.0_f64, 2.0])?,
-    ///         IdxTensor::from_dense(vec![site_s.clone()], vec![3.0_f64, 4.0])?,
+    ///         IdxTensor::from_dense(vec![site_g.clone(), bond.clone()], vec![1.0_f64, 2.0])?,
+    ///         IdxTensor::from_dense(vec![bond, site_s.clone()], vec![3.0_f64, 4.0])?,
     ///     ],
     ///     vec![0usize, 1usize],
     /// )?;
