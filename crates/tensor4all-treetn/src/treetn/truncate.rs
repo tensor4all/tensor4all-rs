@@ -409,3 +409,158 @@ where
         Ok(())
     }
 }
+
+impl<V> TreeTN<tensor4all_core::IdxTensor, V>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    /// Truncate this TreeTN towards `canonical_region` on a caller-owned
+    /// explicit `Session`.
+    ///
+    /// Pre-canonicalization, the conditioning QR, the two-site SVD, and every
+    /// internal contraction run through `session`, so no stage enters the
+    /// process-global execution backend.
+    ///
+    /// # Rounding
+    ///
+    /// The concrete-session SVD multiplies `S * V^H` via dense contraction on
+    /// `session`, whereas the legacy eager `truncate` path scales `V^H` by a
+    /// compact diagonal tensor. Results are bit-identical across repeated
+    /// session runs, and agree with eager `truncate` up to ~1 ULP rounding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeTNOperationError`] when truncation options are invalid,
+    /// when `canonical_region` has more than one node, or when canonicalization
+    /// or a two-site factorization on `session` fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    /// use tensor4all_treetn::{TreeTN, TruncationOptions};
+    ///
+    /// let s0 = DynIndex::new_dyn(2);
+    /// let s1 = DynIndex::new_dyn(2);
+    /// let bond = DynIndex::new_dyn(3);
+    /// let t0 = IdxTensor::from_dense(vec![s0, bond.clone()], vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0])?;
+    /// let t1 = IdxTensor::from_dense(vec![bond, s1], vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0])?;
+    /// let tn = TreeTN::<_, usize>::from_tensors(vec![t0, t1], vec![0, 1])?;
+    ///
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let mut session = Session::new(backend.engine_mut());
+    /// let truncated = tn.truncate_on_session(
+    ///     [1],
+    ///     TruncationOptions::default().with_max_bond_dim(1),
+    ///     &mut session,
+    /// )?;
+    /// assert_eq!(truncated.link_dims(), vec![1]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn truncate_on_session(
+        mut self,
+        canonical_region: impl IntoIterator<Item = V>,
+        options: TruncationOptions,
+        session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    ) -> std::result::Result<Self, TreeTNOperationError> {
+        self.truncate_impl_on_session(
+            canonical_region,
+            options.svd_policy(),
+            options.truncation.max_bond_dim,
+            "truncate_on_session",
+            session,
+        )
+        .map_err(TreeTNOperationError::from)?;
+        Ok(self)
+    }
+
+    /// Truncate this TreeTN in place towards `canonical_region` on a
+    /// caller-owned explicit `Session`.
+    ///
+    /// The `&mut self` twin of [`Self::truncate_on_session`]. The network is
+    /// left unchanged if an error is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeTNOperationError`] under the same conditions as
+    /// [`Self::truncate_on_session`].
+    pub fn truncate_mut_on_session(
+        &mut self,
+        canonical_region: impl IntoIterator<Item = V>,
+        options: TruncationOptions,
+        session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    ) -> std::result::Result<(), TreeTNOperationError> {
+        let original = self.clone();
+        let taken = std::mem::take(self);
+        match taken.truncate_on_session(canonical_region, options, session) {
+            Ok(result) => {
+                *self = result;
+                Ok(())
+            }
+            Err(error) => {
+                *self = original;
+                Err(error)
+            }
+        }
+    }
+
+    fn truncate_impl_on_session(
+        &mut self,
+        canonical_region: impl IntoIterator<Item = V>,
+        svd_policy: Option<SvdTruncationPolicy>,
+        max_bond_dim: Option<usize>,
+        context_name: &str,
+        session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    ) -> Result<()> {
+        validate_svd_truncation_options(max_bond_dim, svd_policy)
+            .with_context(|| format!("{context_name}: invalid truncation options"))?;
+
+        let center_nodes: HashSet<V> = canonical_region.into_iter().collect();
+        if center_nodes.is_empty() {
+            return Ok(());
+        }
+        if center_nodes.len() != 1 {
+            return Err(anyhow::anyhow!(
+                "truncate currently requires a single-node center, got {} nodes",
+                center_nodes.len()
+            )
+            .context(format!("{context_name}: multi-node center not supported")));
+        }
+
+        let center_node = center_nodes
+            .iter()
+            .next()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("truncate requires a center node"))
+            .context(format!("{context_name}: missing center node"))?;
+
+        self.canonicalize_impl_on_session(
+            [center_node.clone()],
+            CanonicalForm::Unitary,
+            &format!("{context_name}: pre-canonicalize"),
+            session,
+        )?;
+
+        let plan = LocalUpdateSweepPlan::from_treetn(self, &center_node, 2)
+            .ok_or_else(|| {
+                anyhow::anyhow!("Failed to create sweep plan from center {:?}", center_node)
+            })
+            .context(format!("{context_name}: sweep plan creation failed"))?;
+
+        if plan.is_empty() {
+            return Ok(());
+        }
+
+        let mut updater = super::localupdate::SessionTruncateUpdater {
+            max_bond_dim,
+            svd_policy,
+            session,
+        };
+        apply_local_update_sweep(self, &plan, &mut updater)
+            .context(format!("{context_name}: truncation sweep failed"))?;
+
+        self.canonical_form = Some(CanonicalForm::Unitary);
+        Ok(())
+    }
+}

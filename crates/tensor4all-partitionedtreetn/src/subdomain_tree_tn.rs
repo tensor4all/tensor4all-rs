@@ -715,6 +715,68 @@ where
         Ok(())
     }
 
+    /// Truncate this eagerly masked subdomain towards an explicit TreeTN center
+    /// on a caller-owned explicit `Session`.
+    ///
+    /// Mirrors [`Self::truncate`] while routing pre-canonicalization,
+    /// conditioning QR, two-site SVD, and internal contractions through
+    /// `session` via [`TreeTN::truncate_mut_on_session`], so no stage enters
+    /// the process-global execution backend.
+    ///
+    /// Results are bit-identical across repeated session runs and agree with
+    /// eager [`Self::truncate`] up to the ~1 ULP concrete-session `S * V^H`
+    /// rounding boundary documented on [`TreeTN::truncate_on_session`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::truncate`]. The receiver is unchanged
+    /// on error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_partitionedtreetn::SubDomainTreeTN;
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    /// use tensor4all_treetn::{TreeTN, TruncationOptions};
+    ///
+    /// let site = DynIndex::new_dyn(2);
+    /// let tree = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense(vec![site], vec![3.0_f64, 4.0])?],
+    ///     vec!["center".to_string()],
+    /// )?;
+    /// let mut subdomain = SubDomainTreeTN::from_treetn(tree)?;
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let mut session = Session::new(backend.engine_mut());
+    /// subdomain.truncate_on_session(
+    ///     &"center".to_string(),
+    ///     TruncationOptions::default(),
+    ///     &mut session,
+    /// )?;
+    /// assert_eq!(subdomain.node_count(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn truncate_on_session(
+        &mut self,
+        center: &V,
+        options: TruncationOptions,
+        session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    ) -> Result<()> {
+        validate_truncation_options(&options)?;
+        self.validate_invariants()?;
+        ensure_center(&self.data, center)?;
+
+        let original = self.data.clone();
+        let mut data = original.clone();
+        data.truncate_mut_on_session([center.clone()], options, session)
+            .map_err(PartitionedTreeTNError::from)?;
+        ensure_same_tree_structure(&original, &data)?;
+        validate_data(&data)?;
+        validate_projector_against_data(&data, &self.projector)?;
+        self.data = data;
+        Ok(())
+    }
+
     /// Contract two compatible subdomains at an explicit TreeTN center.
     ///
     /// The operation contracts the already masked stored TreeTNs directly.

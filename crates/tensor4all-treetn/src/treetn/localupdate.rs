@@ -699,6 +699,144 @@ where
     }
 }
 
+/// Two-site truncation updater bound to a caller-owned explicit `Session`.
+///
+/// Mirrors [`TruncateUpdater`] for concrete [`IdxTensor`] networks while
+/// routing both the conditioning QR, the two-site SVD, and every internal
+/// pairwise contraction through `session` so no call enters the process-global
+/// execution backend.
+pub(crate) struct SessionTruncateUpdater<'a, 'b> {
+    pub(crate) max_bond_dim: Option<usize>,
+    pub(crate) svd_policy: Option<SvdTruncationPolicy>,
+    pub(crate) session: &'a mut tensor4all_tensorbackend::explicit::Session<'b>,
+}
+
+impl<V> LocalUpdater<tensor4all_core::IdxTensor, V> for SessionTruncateUpdater<'_, '_>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    fn update(
+        &mut self,
+        mut subtree: TreeTN<tensor4all_core::IdxTensor, V>,
+        step: &LocalUpdateStep<V>,
+        _full_treetn: &TreeTN<tensor4all_core::IdxTensor, V>,
+    ) -> std::result::Result<TreeTN<tensor4all_core::IdxTensor, V>, TreeTNOperationError> {
+        use tensor4all_core::{
+            contract_pair_on_session, factorize_on_session, PairwiseContractionOptions, TensorIndex,
+        };
+
+        if step.nodes.len() != 2 {
+            return Err(anyhow::anyhow!(
+                "SessionTruncateUpdater requires exactly 2 nodes, got {}",
+                step.nodes.len()
+            )
+            .into());
+        }
+
+        let node_a = &step.nodes[0];
+        let node_b = &step.nodes[1];
+
+        let idx_a = subtree
+            .node_index(node_a)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in subtree", node_a))?;
+        let idx_b = subtree
+            .node_index(node_b)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in subtree", node_b))?;
+
+        let edge_ab = subtree
+            .edge_between(node_a, node_b)
+            .ok_or_else(|| anyhow::anyhow!("No edge between {:?} and {:?}", node_a, node_b))?;
+        let bond_ab = subtree
+            .bond_index(edge_ab)
+            .ok_or_else(|| anyhow::anyhow!("Bond index not found"))?
+            .clone();
+
+        let tensor_a = subtree
+            .tensor(idx_a)
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in subtree", node_a))?;
+        let tensor_b = subtree
+            .tensor(idx_b)
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in subtree", node_b))?;
+
+        let left_inds: Vec<_> = tensor_a
+            .external_indices()
+            .iter()
+            .filter(|idx| *idx != &bond_ab)
+            .cloned()
+            .collect();
+
+        let mut options = FactorizeOptions::svd().with_canonical(Canonical::Left);
+        if let Some(max_bond_dim) = self.max_bond_dim {
+            options = options.with_max_bond_dim(max_bond_dim);
+        }
+        if let Some(policy) = self.svd_policy {
+            options = options.with_svd_policy(policy);
+        }
+        options
+            .validate()
+            .map_err(|error| anyhow::anyhow!("Invalid factorization options: {error}"))?;
+
+        let columns: usize = tensor_b
+            .external_indices()
+            .iter()
+            .filter(|index| *index != &bond_ab)
+            .map(|index| index.dim())
+            .product();
+        let rows: usize = left_inds.iter().map(|index| index.dim()).product();
+        let qr_options = FactorizeOptions::qr().with_qr_rtol(0.0);
+        let conditioned = if rows.min(columns) <= bond_ab.dim() {
+            None
+        } else {
+            factorize_on_session(self.session, tensor_a, &left_inds, &qr_options)
+                .ok()
+                .filter(|qr| qr.rank == bond_ab.dim())
+        };
+
+        let contract_opts = PairwiseContractionOptions::default();
+        let (left_prefix, factor_input, factor_left_inds) = match conditioned {
+            Some(qr) => {
+                let reduced =
+                    contract_pair_on_session(self.session, &qr.right, tensor_b, contract_opts)
+                        .context("Failed to contract the conditioned A with B on session")?;
+                (Some(qr.left), reduced, vec![qr.bond_index])
+            }
+            None => (
+                None,
+                contract_pair_on_session(self.session, tensor_a, tensor_b, contract_opts)
+                    .context("Failed to contract A and B on session")?,
+                left_inds,
+            ),
+        };
+
+        let factorize_result = super::factorize_allowing_empty_side(
+            &factor_input,
+            &factor_left_inds,
+            |tensor, left| {
+                factorize_on_session(self.session, tensor, left, &options)
+                    .map_err(|e| anyhow::anyhow!("Factorization on session failed: {e}"))
+            },
+        )?;
+
+        let new_tensor_a = match left_prefix {
+            Some(q) => {
+                contract_pair_on_session(self.session, &q, &factorize_result.left, contract_opts)
+                    .context("Failed to apply the conditioning QR to A on session")?
+            }
+            None => factorize_result.left,
+        };
+        let new_tensor_b = factorize_result.right;
+        let new_bond = factorize_result.bond_index;
+
+        subtree.replace_edge_bond(edge_ab, new_bond.clone())?;
+        subtree.replace_tensor(idx_a, new_tensor_a)?;
+        subtree.replace_tensor(idx_b, new_tensor_b)?;
+        subtree.set_ortho_towards(&new_bond, Some(step.new_center.clone()));
+        subtree.set_canonical_region([step.new_center.clone()])?;
+
+        Ok(subtree)
+    }
+}
+
 // ============================================================================
 // Sub-tree extraction
 // ============================================================================

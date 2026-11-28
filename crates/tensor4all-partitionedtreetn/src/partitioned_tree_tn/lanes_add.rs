@@ -1,7 +1,6 @@
 //! Patch-wise addition and truncated addition on caller-owned scheduler lanes
 //! (#1495, #1498).
 
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -9,8 +8,8 @@ use std::sync::Mutex;
 
 use hataori::{map_in_lanes, MapInError};
 use hataori_tenferro::TenferroLanes;
-use tensor4all_core::DynIndex;
-use tensor4all_treetn::TruncationOptions;
+use tensor4all_core::{DynIndex, IdxTensor};
+use tensor4all_treetn::{TreeTN, TruncationOptions};
 
 use super::{
     disjoint_cover, ensure_center, ensure_refinement_within, ensure_same_dtype,
@@ -22,39 +21,105 @@ use crate::error::{PartitionedTreeTNError, Result};
 use crate::projector::Projector;
 use crate::subdomain_tree_tn::SubDomainTreeTN;
 
-#[derive(Eq, PartialEq)]
-struct CanonicalProjector(Projector);
+type SitePositions<V> = HashMap<DynIndex, (V, usize, usize)>;
+type LogicalKey<V> = Vec<(V, usize, usize)>;
 
-impl Ord for CanonicalProjector {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.canonical_cmp(&other.0)
+/// Map every site index in `template` to its logical `(node_name, axis, dim)`
+/// position, independent of `DynIndex` allocation IDs.
+fn template_site_positions<V>(template: &TreeTN<IdxTensor, V>) -> SitePositions<V>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let mut names = template.node_names();
+    names.sort();
+    let mut positions = HashMap::new();
+    for name in names {
+        for (axis, index) in template
+            .node_site_indices(&name)
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+        {
+            positions.insert(index.clone(), (name.clone(), axis, index.dim));
+        }
     }
+    positions
 }
 
-impl PartialOrd for CanonicalProjector {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+/// Validate `item_sites` against the shared template site space and return the
+/// deduplicated `(node_name, axis, index)` entries in logical `(node_name, axis)`
+/// order.
+fn resolve_item_sites<V>(
+    site_positions: &SitePositions<V>,
+    item_sites: &[DynIndex],
+) -> Result<Vec<(V, usize, DynIndex)>>
+where
+    V: Clone + Ord,
+{
+    let mut resolved: Vec<(V, usize, DynIndex)> = Vec::with_capacity(item_sites.len());
+    for site in item_sites {
+        let Some((node, axis, template_dim)) = site_positions.get(site) else {
+            return Err(PartitionedTreeTNError::InvalidItemSites {
+                index: site.clone(),
+            });
+        };
+        if *template_dim != site.dim {
+            return Err(PartitionedTreeTNError::SiteIndexMismatch);
+        }
+        resolved.push((node.clone(), *axis, site.clone()));
     }
+    resolved.sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));
+    resolved.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+    Ok(resolved)
 }
 
-/// Group sorted patch keys into deterministic lane items.
+/// Logical ordering key for a patch projector: sorted `(node_name, axis, coord)`
+/// tuples in the shared template topology, independent of `DynIndex` allocation IDs.
+fn patch_logical_key<V>(projector: &Projector, site_positions: &SitePositions<V>) -> LogicalKey<V>
+where
+    V: Clone + Ord,
+{
+    let mut entries: LogicalKey<V> = projector
+        .iter()
+        .filter_map(|(index, &coord)| {
+            site_positions
+                .get(index)
+                .map(|(node, axis, _)| (node.clone(), *axis, coord))
+        })
+        .collect();
+    entries.sort_by(|a, b| (&a.0, a.1, a.2).cmp(&(&b.0, b.1, b.2)));
+    entries
+}
+
+/// Group patch keys into deterministic lane items using logical
+/// `(node_name, axis, coord)` keys from `template`.
 ///
-/// When `item_sites` is `None`, each patch forms its own item in canonical
-/// sorted [`Projector`] order. When `item_sites` is `Some(sites)`, every site
-/// in `sites` must be projected by every patch in `keys`; patches that agree on
-/// the projected values of `sites` are grouped into one item, groups are
-/// ordered canonically by their restricted [`Projector`] key (independent of
-/// the order of `sites`), and patches within each group keep their canonical
-/// sorted [`Projector`] order.
-fn group_patch_keys(
-    keys: Vec<Projector>,
+/// - When `item_sites` is `None`, each patch forms its own item, ordered by its
+///   logical `(node_name, axis, coord)` key.
+/// - When `item_sites` is `Some(sites)`, every site in `sites` must belong to
+///   `template` with matching dimension and be projected by every patch in
+///   `keys`. Patches that agree on the projected coordinates of `sites` form
+///   one item; groups are ordered by their sorted `(node_name, axis, coord)`
+///   key (independent of `sites` order and `DynIndex` allocation IDs), and
+///   patches within each group keep their logical `(node_name, axis, coord)`
+///   order.
+fn group_patch_keys<V>(
+    site_positions: &SitePositions<V>,
+    mut keys: Vec<Projector>,
     item_sites: Option<&[DynIndex]>,
-) -> Result<Vec<Vec<Projector>>> {
+) -> Result<Vec<Vec<Projector>>>
+where
+    V: Clone + Ord,
+{
+    keys.sort_by_key(|key| patch_logical_key(key, site_positions));
+
     let Some(sites) = item_sites else {
         return Ok(keys.into_iter().map(|key| vec![key]).collect());
     };
 
-    for site in sites {
+    let resolved = resolve_item_sites(site_positions, sites)?;
+
+    for (_, _, site) in &resolved {
         if keys.iter().any(|key| !key.is_projected_at(site)) {
             return Err(PartitionedTreeTNError::InvalidItemSites {
                 index: site.clone(),
@@ -62,18 +127,18 @@ fn group_patch_keys(
         }
     }
 
-    let mut groups: BTreeMap<CanonicalProjector, Vec<Projector>> = BTreeMap::new();
+    let mut groups: BTreeMap<LogicalKey<V>, Vec<Projector>> = BTreeMap::new();
     for key in keys {
-        let group_key = Projector::from_pairs(sites.iter().map(|site| {
-            let coord = key
-                .get(site)
-                .expect("validated that every patch projects every site in item_sites");
-            (site.clone(), coord)
-        }))?;
-        groups
-            .entry(CanonicalProjector(group_key))
-            .or_default()
-            .push(key);
+        let group_key: LogicalKey<V> = resolved
+            .iter()
+            .map(|(node, axis, site)| {
+                let coord = key
+                    .get(site)
+                    .expect("validated that every patch projects every site in item_sites");
+                (node.clone(), *axis, coord)
+            })
+            .collect();
+        groups.entry(group_key).or_default().push(key);
     }
 
     Ok(groups.into_values().collect())
@@ -91,12 +156,18 @@ where
     /// runs its assigned item's patches sequentially through the same code path
     /// as the serial routine, with no `lanes.len() == 1` special case.
     ///
-    /// When `item_sites` is `None`, each patch is one lane item in canonical
-    /// sorted [`Projector`] order. When `item_sites` is `Some(sites)`, patches
-    /// that agree on the projected coordinates of `sites` form one item and run
-    /// sequentially on one lane in canonical [`Projector`] order; groups are
-    /// ordered canonically by their restricted [`Projector`] key, independent
-    /// of the order of `sites`.
+    /// # Grouping and deterministic order
+    ///
+    /// - When `item_sites` is `None`, each patch is one lane item, ordered by
+    ///   its logical `(node_name, axis, coord)` key in the shared topology
+    ///   (independent of `DynIndex` allocation IDs and insertion order).
+    /// - When `item_sites` is `Some(sites)`, patches that agree on the
+    ///   projected coordinates of `sites` form one item and run sequentially on
+    ///   one lane. Groups are enumerated in deterministic order sorted by their
+    ///   `(node_name, axis, coord)` tuple on `sites` (independent of `sites`
+    ///   slice order, insertion order, and `DynIndex` allocation IDs), and
+    ///   patches within each item keep the logical `(node_name, axis, coord)`
+    ///   patch order.
     ///
     /// # Arguments
     ///
@@ -110,10 +181,11 @@ where
     ///
     /// Returns [`PartitionedTreeTNError::Empty`] for an empty operand,
     /// [`PartitionedTreeTNError::TopologyMismatch`],
-    /// [`PartitionedTreeTNError::SiteIndexMismatch`], or
-    /// [`PartitionedTreeTNError::DTypeMismatch`] before patch shortcuts,
-    /// [`PartitionedTreeTNError::OverlappingProjectors`] for an operand whose
-    /// own stored layout is invalid,
+    /// [`PartitionedTreeTNError::SiteIndexMismatch`] (including when an
+    /// `item_sites` index has a dimension different from the partition's site
+    /// space), or [`PartitionedTreeTNError::DTypeMismatch`] before patch
+    /// shortcuts, [`PartitionedTreeTNError::OverlappingProjectors`] for an
+    /// operand whose own stored layout is invalid,
     /// [`PartitionedTreeTNError::RefinementTooLarge`] when the common refinement
     /// has more than [`AUTOMATIC_REFINEMENT_LIMIT`] atoms,
     /// [`PartitionedTreeTNError::InvalidItemSites`] when `item_sites` names a
@@ -179,7 +251,8 @@ where
     /// sequentially through the same code path as the serial routine, with no
     /// `lanes.len() == 1` special case.
     ///
-    /// See [`Self::add_on_lanes`] for the `item_sites` grouping contract.
+    /// See [`Self::add_on_lanes`] for the `item_sites` grouping and
+    /// deterministic ordering contract.
     ///
     /// # Arguments
     ///
@@ -270,20 +343,35 @@ where
             ensure_center(right_template.data(), center)?;
         }
 
+        let site_positions = template_site_positions(left_template.data());
+        if let Some(sites) = item_sites {
+            // Validate item_sites against the template site space up front so
+            // invalid sites or dimension mismatches are caught even when
+            // coverage clipping empties the active patch set.
+            let _ = resolve_item_sites(&site_positions, sites)?;
+        }
+
         if ensure_union_disjoint(&self.data, &other.data).is_ok() {
-            return self.add_patchwise_on_lanes(other, truncation, item_sites, lanes);
+            return self.add_patchwise_on_lanes(
+                other,
+                truncation,
+                &site_positions,
+                item_sites,
+                lanes,
+            );
         }
         let atoms = Self::common_refinement(&[self, other])?;
         ensure_refinement_within(atoms.len(), limit)?;
         let left = self.refine_to(&atoms)?;
         let right = other.refine_to(&atoms)?;
-        left.add_patchwise_on_lanes(&right, truncation, item_sites, lanes)
+        left.add_patchwise_on_lanes(&right, truncation, &site_positions, item_sites, lanes)
     }
 
     fn add_patchwise_on_lanes(
         &self,
         other: &Self,
         truncation: Option<(&V, TruncationOptions)>,
+        site_positions: &SitePositions<V>,
         item_sites: Option<&[DynIndex]>,
         lanes: &mut TenferroLanes,
     ) -> Result<Self> {
@@ -300,8 +388,13 @@ where
                 let cells = disjoint_cover(cov);
                 let left = self.refine_to(&cells)?;
                 let right = other.refine_to(&cells)?;
-                let mut summed =
-                    left.add_patchwise_on_lanes(&right, truncation, item_sites, lanes)?;
+                let mut summed = left.add_patchwise_on_lanes(
+                    &right,
+                    truncation,
+                    site_positions,
+                    item_sites,
+                    lanes,
+                )?;
                 summed.coverage = result_coverage;
                 return Ok(summed);
             }
@@ -313,14 +406,14 @@ where
                 all_keys.push(key.clone());
             }
         }
-        all_keys.sort_by(Projector::canonical_cmp);
 
-        let groups = group_patch_keys(all_keys, item_sites)?;
+        let groups = group_patch_keys(site_positions, all_keys, item_sites)?;
         let indexed_groups: Vec<(usize, Vec<Projector>)> = groups.into_iter().enumerate().collect();
         let errors: Mutex<Vec<Option<PartitionedTreeTNError>>> =
             Mutex::new((0..indexed_groups.len()).map(|_| None).collect());
 
-        let outcome = map_in_lanes(lanes, indexed_groups, |(group_idx, keys), _lane| {
+        let outcome = map_in_lanes(lanes, indexed_groups, |(group_idx, keys), lane| {
+            let mut session = tensor4all_tensorbackend::explicit::Session::new(lane);
             let mut results: Vec<(Projector, SubDomainTreeTN<V>)> = Vec::with_capacity(keys.len());
             for projector in keys {
                 let patch = match (self.data.get(&projector), other.data.get(&projector)) {
@@ -338,7 +431,7 @@ where
                             }
                         };
                         if let Some((center, options)) = truncation
-                            && let Err(err) = sum.truncate(center, options)
+                            && let Err(err) = sum.truncate_on_session(center, options, &mut session)
                         {
                             let msg = err.to_string();
                             if let Ok(mut slots) = errors.lock()
@@ -394,5 +487,73 @@ where
             data,
             coverage: result_coverage,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_two_site_template(k: &DynIndex, s: &DynIndex) -> TreeTN<IdxTensor, usize> {
+        let bond = DynIndex::new_dyn(1);
+        let t0 = IdxTensor::from_dense(vec![k.clone(), bond.clone()], vec![1.0_f64, 1.0]).unwrap();
+        let t1 = IdxTensor::from_dense(vec![bond, s.clone()], vec![1.0_f64, 1.0]).unwrap();
+        TreeTN::from_tensors(vec![t0, t1], vec![0usize, 1]).unwrap()
+    }
+
+    #[test]
+    fn group_patch_keys_groups_by_item_sites_independently_of_allocation_and_slice_order() {
+        // Allocation order A: k before s.
+        let k_a = DynIndex::new_dyn(2);
+        let s_a = DynIndex::new_dyn(2);
+        let tpl_a = make_two_site_template(&k_a, &s_a);
+        let pos_a = template_site_positions(&tpl_a);
+        let keys_a = vec![
+            Projector::from_pairs([(k_a.clone(), 1), (s_a.clone(), 1)]).unwrap(),
+            Projector::from_pairs([(k_a.clone(), 0), (s_a.clone(), 1)]).unwrap(),
+            Projector::from_pairs([(k_a.clone(), 1), (s_a.clone(), 0)]).unwrap(),
+            Projector::from_pairs([(k_a.clone(), 0), (s_a.clone(), 0)]).unwrap(),
+        ];
+
+        // Allocation order B: s before k.
+        let s_b = DynIndex::new_dyn(2);
+        let k_b = DynIndex::new_dyn(2);
+        let tpl_b = make_two_site_template(&k_b, &s_b);
+        let pos_b = template_site_positions(&tpl_b);
+        let keys_b = vec![
+            Projector::from_pairs([(k_b.clone(), 1), (s_b.clone(), 1)]).unwrap(),
+            Projector::from_pairs([(k_b.clone(), 0), (s_b.clone(), 1)]).unwrap(),
+            Projector::from_pairs([(k_b.clone(), 1), (s_b.clone(), 0)]).unwrap(),
+            Projector::from_pairs([(k_b.clone(), 0), (s_b.clone(), 0)]).unwrap(),
+        ];
+
+        let groups_k_a =
+            group_patch_keys(&pos_a, keys_a.clone(), Some(std::slice::from_ref(&k_a))).unwrap();
+        let groups_k_b =
+            group_patch_keys(&pos_b, keys_b.clone(), Some(std::slice::from_ref(&k_b))).unwrap();
+
+        // Two groups (k=0, k=1), each with 2 patches in fixed (s=0, s=1) order.
+        let coords = |groups: &[Vec<Projector>], pos: &SitePositions<usize>| {
+            groups
+                .iter()
+                .map(|g| {
+                    g.iter()
+                        .map(|p| patch_logical_key(p, pos))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let expected = vec![
+            vec![vec![(0, 0, 0), (1, 0, 0)], vec![(0, 0, 0), (1, 0, 1)]],
+            vec![vec![(0, 0, 1), (1, 0, 0)], vec![(0, 0, 1), (1, 0, 1)]],
+        ];
+        assert_eq!(coords(&groups_k_a, &pos_a), expected);
+        assert_eq!(coords(&groups_k_b, &pos_b), expected);
+
+        // Slice order [k, s] vs [s, k] produces identical group order.
+        let groups_ks =
+            group_patch_keys(&pos_a, keys_a.clone(), Some(&[k_a.clone(), s_a.clone()])).unwrap();
+        let groups_sk = group_patch_keys(&pos_a, keys_a, Some(&[s_a, k_a])).unwrap();
+        assert_eq!(coords(&groups_ks, &pos_a), coords(&groups_sk, &pos_a));
     }
 }

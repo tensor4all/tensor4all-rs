@@ -119,6 +119,57 @@ fn assert_partitions_bit_identical(
     }
 }
 
+/// Assert two partitions match in keys, coverage, link dims, and dense values
+/// within relative tolerance `rtol` (used across the eager vs concrete-session
+/// ~1 ULP `S * V^H` rounding boundary per D4).
+fn assert_partitions_close_to_serial(
+    actual: &PartitionedTreeTN<usize>,
+    expected: &PartitionedTreeTN<usize>,
+    rtol: f64,
+) {
+    assert_eq!(actual.coverage(), expected.coverage(), "coverage mismatch");
+    assert_eq!(actual.len(), expected.len(), "patch count mismatch");
+
+    let expected_keys: std::collections::HashSet<Projector> =
+        expected.projectors().cloned().collect();
+    let actual_keys: std::collections::HashSet<Projector> = actual.projectors().cloned().collect();
+    assert_eq!(actual_keys, expected_keys, "projector keys mismatch");
+
+    for key in &expected_keys {
+        let a_patch = actual.get(key).expect("missing actual patch");
+        let e_patch = expected.get(key).expect("missing expected patch");
+        assert_eq!(
+            a_patch.data().link_dims(),
+            e_patch.data().link_dims(),
+            "link_dims mismatch for {key:?}"
+        );
+        let a_dense = a_patch
+            .data()
+            .contract_to_tensor()
+            .unwrap()
+            .to_vec::<Complex64>()
+            .unwrap();
+        let e_dense = e_patch
+            .data()
+            .contract_to_tensor()
+            .unwrap()
+            .to_vec::<Complex64>()
+            .unwrap();
+        assert_eq!(a_dense.len(), e_dense.len());
+        let diff_norm: f64 = a_dense
+            .iter()
+            .zip(e_dense.iter())
+            .map(|(a, e)| (a - e).norm_sqr())
+            .sum::<f64>()
+            .sqrt();
+        let ref_norm: f64 = e_dense.iter().map(|e| e.norm_sqr()).sum::<f64>().sqrt();
+        assert!(
+            diff_norm <= rtol * ref_norm.max(1.0),
+            "patch {key:?} relative difference {diff_norm:e} / {ref_norm:e} exceeds {rtol:e}"
+        );
+    }
+}
+
 #[test]
 fn lane_add_matches_serial() {
     let k = DynIndex::new_dyn(2);
@@ -159,6 +210,12 @@ fn lane_add_matches_serial() {
         Some(vec![s.clone(), k.clone()]),
     ];
 
+    let mut lanes_ref = make_lanes(1);
+    let lane1_trunc_ref = left
+        .add_truncated_on_lanes(&right, &0, trunc_opts, None, &mut lanes_ref)
+        .unwrap();
+    assert_partitions_close_to_serial(&lane1_trunc_ref, &serial_trunc, 1e-12);
+
     for lane_count in [1usize, 2, 4] {
         let mut lanes = make_lanes(lane_count);
         assert_eq!(lanes.lane_count(), lane_count);
@@ -171,7 +228,8 @@ fn lane_add_matches_serial() {
             let trunc = left
                 .add_truncated_on_lanes(&right, &0, trunc_opts, item_sites.clone(), &mut lanes)
                 .unwrap();
-            assert_partitions_bit_identical(&trunc, &serial_trunc);
+            assert_partitions_bit_identical(&trunc, &lane1_trunc_ref);
+            assert_partitions_close_to_serial(&trunc, &serial_trunc, 1e-12);
         }
     }
 }
@@ -213,6 +271,18 @@ fn lane_add_preserves_coverage_intersection_and_clipping() {
     assert_eq!(serial_exact.coverage(), Some(&[p00.clone()][..]));
     assert!(serial_exact.get(&p01).is_none());
 
+    let mut lanes_ref = make_lanes(1);
+    let lane1_trunc_ref = left
+        .add_truncated_on_lanes(
+            &right,
+            &0,
+            trunc_opts,
+            Some(vec![k.clone()]),
+            &mut lanes_ref,
+        )
+        .unwrap();
+    assert_partitions_close_to_serial(&lane1_trunc_ref, &serial_trunc, 1e-12);
+
     for lane_count in [1usize, 2] {
         let mut lanes = make_lanes(lane_count);
         let exact = left
@@ -223,7 +293,8 @@ fn lane_add_preserves_coverage_intersection_and_clipping() {
         let trunc = left
             .add_truncated_on_lanes(&right, &0, trunc_opts, Some(vec![k.clone()]), &mut lanes)
             .unwrap();
-        assert_partitions_bit_identical(&trunc, &serial_trunc);
+        assert_partitions_bit_identical(&trunc, &lane1_trunc_ref);
+        assert_partitions_close_to_serial(&trunc, &serial_trunc, 1e-12);
     }
 }
 
@@ -289,4 +360,156 @@ fn lane_add_rejects_invalid_item_sites() {
         err,
         PartitionedTreeTNError::InvalidItemSites { ref index } if index == &s
     ));
+}
+
+#[test]
+fn lane_add_rejects_invalid_item_sites_on_empty_clipped_intersection_and_dim_mismatch() {
+    let k = DynIndex::new_dyn(2);
+    let s = DynIndex::new_dyn(2);
+    let x = DynIndex::new_dyn(2);
+    let foreign = DynIndex::new_dyn(2);
+
+    let pk0 = Projector::from_pairs([(k.clone(), 0)]).unwrap();
+    let pk1 = Projector::from_pairs([(k.clone(), 1)]).unwrap();
+
+    // Disjoint coverages: intersection is empty, so clipping empties all_keys.
+    let left = PartitionedTreeTN::from_subdomains(vec![SubDomainTreeTN::new(
+        make_complex_chain(&k, &s, &x, 1, 1.0),
+        pk0.clone(),
+    )
+    .unwrap()])
+    .unwrap()
+    .with_coverage(vec![pk0])
+    .unwrap();
+
+    let right = PartitionedTreeTN::from_subdomains(vec![SubDomainTreeTN::new(
+        make_complex_chain(&k, &s, &x, 1, 2.0),
+        pk1.clone(),
+    )
+    .unwrap()])
+    .unwrap()
+    .with_coverage(vec![pk1])
+    .unwrap();
+
+    let mut lanes = make_lanes(2);
+    let err = left
+        .add_on_lanes(&right, Some(vec![foreign.clone()]), &mut lanes)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        PartitionedTreeTNError::InvalidItemSites { ref index } if index == &foreign
+    ));
+
+    // Same DynIndex ID/tags/plev as `k`, but mismatched dimension (larger and smaller).
+    let mut k_larger = k.clone();
+    k_larger.dim = 4;
+    let err = left
+        .add_on_lanes(&left, Some(vec![k_larger]), &mut lanes)
+        .unwrap_err();
+    assert!(matches!(err, PartitionedTreeTNError::SiteIndexMismatch));
+
+    let mut k_smaller = k.clone();
+    k_smaller.dim = 1;
+    let err = left
+        .add_on_lanes(&left, Some(vec![k_smaller]), &mut lanes)
+        .unwrap_err();
+    assert!(matches!(err, PartitionedTreeTNError::SiteIndexMismatch));
+}
+
+#[test]
+fn lane_add_handles_empty_or_cheap_subproblem_item() {
+    let k = DynIndex::new_dyn(2);
+    let s = DynIndex::new_dyn(2);
+    let x = DynIndex::new_dyn(2);
+
+    // Sub-problem k=0 has two heavier patches present in both operands;
+    // sub-problem k=1 has one cheap rank-1 patch present on only one side.
+    let p00 = Projector::from_pairs([(k.clone(), 0), (s.clone(), 0)]).unwrap();
+    let p01 = Projector::from_pairs([(k.clone(), 0), (s.clone(), 1)]).unwrap();
+    let p10 = Projector::from_pairs([(k.clone(), 1), (s.clone(), 0)]).unwrap();
+
+    let left = PartitionedTreeTN::from_subdomains(vec![
+        SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 3, 1.0), p00.clone()).unwrap(),
+        SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 3, 2.0), p01.clone()).unwrap(),
+        SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 1, 3.0), p10).unwrap(),
+    ])
+    .unwrap();
+    let right = PartitionedTreeTN::from_subdomains(vec![
+        SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 3, 4.0), p00).unwrap(),
+        SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 3, 5.0), p01).unwrap(),
+    ])
+    .unwrap();
+
+    let serial_exact = left.add(&right).unwrap();
+    let trunc_opts = TruncationOptions::default().with_max_bond_dim(2);
+    let serial_trunc = left.add_truncated(&right, &0, trunc_opts).unwrap();
+
+    let mut lanes = make_lanes(2);
+    let lane_trunc_ref = left
+        .add_truncated_on_lanes(&right, &0, trunc_opts, None, &mut lanes)
+        .unwrap();
+    assert_partitions_close_to_serial(&lane_trunc_ref, &serial_trunc, 1e-12);
+
+    for item_sites in [None, Some(vec![k])] {
+        let exact = left
+            .add_on_lanes(&right, item_sites.clone(), &mut lanes)
+            .unwrap();
+        assert_partitions_bit_identical(&exact, &serial_exact);
+
+        let trunc = left
+            .add_truncated_on_lanes(&right, &0, trunc_opts, item_sites, &mut lanes)
+            .unwrap();
+        assert_partitions_bit_identical(&trunc, &lane_trunc_ref);
+        assert_partitions_close_to_serial(&trunc, &serial_trunc, 1e-12);
+    }
+}
+
+#[test]
+fn lane_add_and_truncated_add_never_enter_global_backend() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use tensor4all_tensorbackend::with_default_backend;
+
+    let k = DynIndex::new_dyn(2);
+    let s = DynIndex::new_dyn(2);
+    let x = DynIndex::new_dyn(2);
+
+    let p00 = Projector::from_pairs([(k.clone(), 0), (s.clone(), 0)]).unwrap();
+    let p01 = Projector::from_pairs([(k.clone(), 0), (s.clone(), 1)]).unwrap();
+    let p10 = Projector::from_pairs([(k.clone(), 1), (s.clone(), 0)]).unwrap();
+
+    let left = PartitionedTreeTN::from_subdomains(vec![
+        SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 3, 1.0), p00.clone()).unwrap(),
+        SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 3, 2.0), p01.clone()).unwrap(),
+        SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 2, 3.0), p10).unwrap(),
+    ])
+    .unwrap();
+    let right = PartitionedTreeTN::from_subdomains(vec![
+        SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 3, 4.0), p00).unwrap(),
+        SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 3, 5.0), p01).unwrap(),
+    ])
+    .unwrap();
+    let trunc_opts = TruncationOptions::default().with_max_bond_dim(2);
+
+    // Holding the process-global backend makes any route that enters it block.
+    with_default_backend(|_global| {
+        let (done_tx, done_rx) = mpsc::channel();
+        let k_worker = k.clone();
+        let worker = std::thread::spawn(move || {
+            let mut lanes = make_lanes(2);
+            let exact = left
+                .add_on_lanes(&right, Some(vec![k_worker.clone()]), &mut lanes)
+                .unwrap();
+            let trunc = left
+                .add_truncated_on_lanes(&right, &0, trunc_opts, Some(vec![k_worker]), &mut lanes)
+                .unwrap();
+            done_tx.send((exact.len(), trunc.len())).unwrap();
+        });
+        let (exact_len, trunc_len) = done_rx
+            .recv_timeout(Duration::from_secs(60))
+            .expect("lane add/add_truncated blocked on the process-global backend");
+        worker.join().unwrap();
+        assert_eq!(exact_len, 3);
+        assert_eq!(trunc_len, 3);
+    });
 }
