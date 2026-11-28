@@ -336,70 +336,65 @@ where
         }
 
         let site_positions = template_site_positions(left_template.data());
+
+        // Compute the unclipped target projector set purely from projector
+        // metadata on the caller thread; tensor projections run inside
+        // `map_in_lanes` on each lane's explicit `Session`.
+        let unclipped_keys: Vec<Projector> =
+            if ensure_union_disjoint(&self.data, &other.data).is_ok() {
+                let mut keys: Vec<Projector> = self.data.keys().cloned().collect();
+                for key in other.data.keys() {
+                    if !self.data.contains_key(key) {
+                        keys.push(key.clone());
+                    }
+                }
+                keys
+            } else {
+                let atoms = Self::common_refinement(&[self, other])?;
+                ensure_refinement_within(atoms.len(), limit)?;
+                atoms
+            };
+
         if let Some(sites) = item_sites {
-            // Validate item_sites against the template site space up front so
-            // invalid sites or dimension mismatches are caught even when
-            // coverage clipping empties the active patch set.
-            let _ = resolve_item_sites(&site_positions, sites)?;
+            // Validate item_sites against the template site space and against
+            // every unclipped patch up front so invalid or unprojected sites
+            // are rejected even when coverage clipping empties the active set.
+            let resolved = resolve_item_sites(&site_positions, sites)?;
+            for (_, _, site) in &resolved {
+                if unclipped_keys.iter().any(|key| !key.is_projected_at(site)) {
+                    return Err(PartitionedTreeTNError::InvalidItemSites {
+                        index: site.clone(),
+                    });
+                }
+            }
         }
-
-        if ensure_union_disjoint(&self.data, &other.data).is_ok() {
-            return self.add_patchwise_on_lanes(
-                other,
-                truncation,
-                &site_positions,
-                item_sites,
-                lanes,
-            );
-        }
-        let atoms = Self::common_refinement(&[self, other])?;
-        ensure_refinement_within(atoms.len(), limit)?;
-        let left = self.refine_to(&atoms)?;
-        let right = other.refine_to(&atoms)?;
-        left.add_patchwise_on_lanes(&right, truncation, &site_positions, item_sites, lanes)
-    }
-
-    fn add_patchwise_on_lanes(
-        &self,
-        other: &Self,
-        truncation: Option<(&V, TruncationOptions)>,
-        site_positions: &SitePositions<V>,
-        item_sites: Option<&[DynIndex]>,
-        lanes: &mut TenferroLanes,
-    ) -> Result<Self> {
-        ensure_union_disjoint(&self.data, &other.data)?;
 
         let result_coverage = intersect_coverages(self.coverage(), other.coverage());
-        if let Some(ref cov) = result_coverage {
-            let needs_clip = self
-                .data
-                .keys()
-                .chain(other.data.keys())
+        let target_keys: Vec<Projector> = if let Some(ref cov) = result_coverage {
+            let needs_clip = unclipped_keys
+                .iter()
                 .any(|projector| !projector_covered_by(projector, cov));
             if needs_clip {
                 let cells = disjoint_cover(cov);
-                let left = self.refine_to(&cells)?;
-                let right = other.refine_to(&cells)?;
-                let mut summed = left.add_patchwise_on_lanes(
-                    &right,
-                    truncation,
-                    site_positions,
-                    item_sites,
-                    lanes,
-                )?;
-                summed.coverage = result_coverage;
-                return Ok(summed);
+                let mut clipped: Vec<Projector> = Vec::new();
+                for key in &unclipped_keys {
+                    for cell in &cells {
+                        if let Some(inter) = key.intersection(cell)
+                            && !clipped.contains(&inter)
+                        {
+                            clipped.push(inter);
+                        }
+                    }
+                }
+                clipped
+            } else {
+                unclipped_keys
             }
-        }
+        } else {
+            unclipped_keys
+        };
 
-        let mut all_keys: Vec<Projector> = self.data.keys().cloned().collect();
-        for key in other.data.keys() {
-            if !self.data.contains_key(key) {
-                all_keys.push(key.clone());
-            }
-        }
-
-        let groups = group_patch_keys(site_positions, all_keys, item_sites)?;
+        let groups = group_patch_keys(&site_positions, target_keys, item_sites)?;
         let indexed_groups: Vec<(usize, Vec<Projector>)> = groups.into_iter().enumerate().collect();
         let errors: Mutex<Vec<Option<PartitionedTreeTNError>>> =
             Mutex::new((0..indexed_groups.len()).map(|_| None).collect());
@@ -407,36 +402,53 @@ where
         let outcome = map_in_lanes(lanes, indexed_groups, |(group_idx, keys), lane| {
             let mut session = tensor4all_tensorbackend::explicit::Session::new(lane);
             let mut results: Vec<(Projector, SubDomainTreeTN<V>)> = Vec::with_capacity(keys.len());
+            let record_err = |err: PartitionedTreeTNError| -> String {
+                let msg = err.to_string();
+                if let Ok(mut slots) = errors.lock()
+                    && let Some(slot) = slots.get_mut(group_idx)
+                {
+                    *slot = Some(err);
+                }
+                msg
+            };
+            let resolve_patch = |partition: &Self,
+                                 projector: &Projector,
+                                 session: &mut tensor4all_tensorbackend::explicit::Session<'_>|
+             -> Result<Option<SubDomainTreeTN<V>>> {
+                if let Some(exact) = partition.data.get(projector) {
+                    return Ok(Some(exact.clone()));
+                }
+                for src in partition.data.values() {
+                    if src.projector().intersection(projector).is_some() {
+                        return src.project_on_session(projector, session);
+                    }
+                }
+                Ok(None)
+            };
             for projector in keys {
-                let patch = match (self.data.get(&projector), other.data.get(&projector)) {
+                let left_patch = match resolve_patch(self, &projector, &mut session) {
+                    Ok(patch) => patch,
+                    Err(err) => return Err(record_err(err)),
+                };
+                let right_patch = match resolve_patch(other, &projector, &mut session) {
+                    Ok(patch) => patch,
+                    Err(err) => return Err(record_err(err)),
+                };
+                let patch = match (left_patch, right_patch) {
                     (Some(left), Some(right)) => {
-                        let mut sum = match left.add(right) {
+                        let mut sum = match left.add_on_session(&right, &mut session) {
                             Ok(sum) => sum,
-                            Err(err) => {
-                                let msg = err.to_string();
-                                if let Ok(mut slots) = errors.lock()
-                                    && let Some(slot) = slots.get_mut(group_idx)
-                                {
-                                    *slot = Some(err);
-                                }
-                                return Err(msg);
-                            }
+                            Err(err) => return Err(record_err(err)),
                         };
                         if let Some((center, options)) = truncation
                             && let Err(err) = sum.truncate_on_session(center, options, &mut session)
                         {
-                            let msg = err.to_string();
-                            if let Ok(mut slots) = errors.lock()
-                                && let Some(slot) = slots.get_mut(group_idx)
-                            {
-                                *slot = Some(err);
-                            }
-                            return Err(msg);
+                            return Err(record_err(err));
                         }
                         sum
                     }
-                    (Some(left), None) => left.clone(),
-                    (None, Some(right)) => right.clone(),
+                    (Some(left), None) => left,
+                    (None, Some(right)) => right,
                     (None, None) => continue,
                 };
                 results.push((projector, patch));

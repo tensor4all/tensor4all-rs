@@ -323,19 +323,63 @@ where
         V: Ord,
         <T::Index as IndexLike>::Id: Ord,
     {
+        self.truncate_impl_with(
+            canonical_region,
+            svd_policy,
+            max_bond_dim,
+            context_name,
+            |tree, center_node, form, label| {
+                if let Some(execution) = context {
+                    // A tree loaded from disk or materialised by TCI carries no
+                    // eager runtime of its own, so the sweeps below would combine
+                    // factors from two runtimes. Adopt the whole tree first.
+                    if let Err(error) = tree.adopt_into_in(execution) {
+                        let error = anyhow::Error::new(error);
+                        let cause = error.root_cause().to_string();
+                        return Err(error
+                            .context(format!("{context_name}: context adoption failed: {cause}")));
+                    }
+                    tree.canonicalize_impl_in([center_node], form, label, execution)
+                } else {
+                    tree.canonicalize_impl([center_node], form, label)
+                }
+            },
+            |tree, plan| {
+                let mut updater = match context {
+                    Some(execution) => {
+                        TruncateUpdater::new_in(max_bond_dim, svd_policy, execution.clone())
+                    }
+                    None => TruncateUpdater::new(max_bond_dim, svd_policy),
+                };
+                apply_local_update_sweep(tree, plan, &mut updater).map_err(anyhow::Error::from)
+            },
+        )
+    }
+
+    fn truncate_impl_with<PreCanon, RunSweep>(
+        &mut self,
+        canonical_region: impl IntoIterator<Item = V>,
+        svd_policy: Option<SvdTruncationPolicy>,
+        max_bond_dim: Option<usize>,
+        context_name: &str,
+        pre_canonicalize: PreCanon,
+        run_sweep: RunSweep,
+    ) -> Result<()>
+    where
+        V: Ord,
+        <T::Index as IndexLike>::Id: Ord,
+        PreCanon: FnOnce(&mut Self, V, CanonicalForm, &str) -> Result<()>,
+        RunSweep: FnOnce(&mut Self, &LocalUpdateSweepPlan<V>) -> Result<()>,
+    {
         // Validate before the empty-center no-op shortcut so a NaN policy or
         // `max_bond_dim == 0` is rejected on single-node and empty sweeps too.
         validate_svd_truncation_options(max_bond_dim, svd_policy)
             .with_context(|| format!("{context_name}: invalid truncation options"))?;
 
-        // Collect center nodes
         let center_nodes: HashSet<V> = canonical_region.into_iter().collect();
-
         if center_nodes.is_empty() {
-            return Ok(()); // Nothing to do
+            return Ok(());
         }
-
-        // Currently only single-node center is supported for truncation
         if center_nodes.len() != 1 {
             return Err(anyhow::anyhow!(
                 "truncate currently requires a single-node center, got {} nodes",
@@ -349,63 +393,30 @@ where
             .next()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("truncate requires a center node"))
-            .context(format!("{}: missing center node", context_name))?;
+            .context(format!("{context_name}: missing center node"))?;
 
-        // Step 1: Canonicalize towards the center (required before truncation sweep)
         let canonicalize_options =
             CanonicalizationOptions::default().with_form(CanonicalForm::Unitary);
-        if let Some(execution) = context {
-            // A tree loaded from disk or materialised by TCI carries no eager
-            // runtime of its own, so the sweeps below would combine factors
-            // from two runtimes. Adopt the whole tree first, exactly as the
-            // context-scoped unfold adopts a host tensor.
-            if let Err(error) = self.adopt_into_in(execution) {
-                // Name the root cause in the top-level message: it is all that
-                // `TreeTNOperationError::Operation`'s `Display` shows.
-                let error = anyhow::Error::new(error);
-                let cause = error.root_cause().to_string();
-                return Err(
-                    error.context(format!("{context_name}: context adoption failed: {cause}"))
-                );
-            }
-        }
-        match context {
-            Some(execution) => self.canonicalize_impl_in(
-                [center_node.clone()],
-                canonicalize_options.form,
-                &format!("{}: pre-canonicalize", context_name),
-                execution,
-            )?,
-            None => self.canonicalize_impl(
-                [center_node.clone()],
-                canonicalize_options.form,
-                &format!("{}: pre-canonicalize", context_name),
-            )?,
-        }
+        pre_canonicalize(
+            self,
+            center_node.clone(),
+            canonicalize_options.form,
+            &format!("{context_name}: pre-canonicalize"),
+        )?;
 
-        // Step 2: Generate sweep plan (nsite=2 for two-site truncation)
         let plan = LocalUpdateSweepPlan::from_treetn(self, &center_node, 2)
             .ok_or_else(|| {
                 anyhow::anyhow!("Failed to create sweep plan from center {:?}", center_node)
             })
-            .context(format!("{}: sweep plan creation failed", context_name))?;
+            .context(format!("{context_name}: sweep plan creation failed"))?;
 
-        // If no steps (single node network), nothing more to do
         if plan.is_empty() {
             return Ok(());
         }
 
-        // Step 3: Apply truncation sweep
-        let mut updater = match context {
-            Some(execution) => TruncateUpdater::new_in(max_bond_dim, svd_policy, execution.clone()),
-            None => TruncateUpdater::new(max_bond_dim, svd_policy),
-        };
-        apply_local_update_sweep(self, &plan, &mut updater)
-            .context(format!("{}: truncation sweep failed", context_name))?;
+        run_sweep(self, &plan).context(format!("{context_name}: truncation sweep failed"))?;
 
-        // The canonical form is maintained by the sweep
         self.canonical_form = Some(CanonicalForm::Unitary);
-
         Ok(())
     }
 }
@@ -513,54 +524,29 @@ where
         context_name: &str,
         session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
     ) -> Result<()> {
-        validate_svd_truncation_options(max_bond_dim, svd_policy)
-            .with_context(|| format!("{context_name}: invalid truncation options"))?;
-
-        let center_nodes: HashSet<V> = canonical_region.into_iter().collect();
-        if center_nodes.is_empty() {
-            return Ok(());
-        }
-        if center_nodes.len() != 1 {
-            return Err(anyhow::anyhow!(
-                "truncate currently requires a single-node center, got {} nodes",
-                center_nodes.len()
-            )
-            .context(format!("{context_name}: multi-node center not supported")));
-        }
-
-        let center_node = center_nodes
-            .iter()
-            .next()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("truncate requires a center node"))
-            .context(format!("{context_name}: missing center node"))?;
-
-        self.canonicalize_impl_on_session(
-            [center_node.clone()],
-            CanonicalForm::Unitary,
-            &format!("{context_name}: pre-canonicalize"),
-            session,
-        )?;
-
-        let plan = LocalUpdateSweepPlan::from_treetn(self, &center_node, 2)
-            .ok_or_else(|| {
-                anyhow::anyhow!("Failed to create sweep plan from center {:?}", center_node)
-            })
-            .context(format!("{context_name}: sweep plan creation failed"))?;
-
-        if plan.is_empty() {
-            return Ok(());
-        }
-
-        let mut updater = super::localupdate::SessionTruncateUpdater {
-            max_bond_dim,
+        let session = std::cell::RefCell::new(session);
+        self.truncate_impl_with(
+            canonical_region,
             svd_policy,
-            session,
-        };
-        apply_local_update_sweep(self, &plan, &mut updater)
-            .context(format!("{context_name}: truncation sweep failed"))?;
-
-        self.canonical_form = Some(CanonicalForm::Unitary);
-        Ok(())
+            max_bond_dim,
+            context_name,
+            |tree, center_node, form, label| {
+                tree.canonicalize_impl_on_session(
+                    [center_node],
+                    form,
+                    label,
+                    &mut session.borrow_mut(),
+                )
+            },
+            |tree, plan| {
+                let mut session_ref = session.borrow_mut();
+                let mut updater = super::localupdate::SessionTruncateUpdater {
+                    max_bond_dim,
+                    svd_policy,
+                    session: &mut session_ref,
+                };
+                apply_local_update_sweep(tree, plan, &mut updater).map_err(anyhow::Error::from)
+            },
+        )
     }
 }

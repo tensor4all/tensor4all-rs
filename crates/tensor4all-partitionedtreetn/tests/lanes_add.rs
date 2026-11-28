@@ -400,6 +400,16 @@ fn lane_add_rejects_invalid_item_sites_on_empty_clipped_intersection_and_dim_mis
         PartitionedTreeTNError::InvalidItemSites { ref index } if index == &foreign
     ));
 
+    // Template site `s` is in the layout, but not projected by the patches;
+    // must still be rejected even when coverage clipping empties the result.
+    let err = left
+        .add_on_lanes(&right, Some(vec![s.clone()]), &mut lanes)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        PartitionedTreeTNError::InvalidItemSites { ref index } if index == &s
+    ));
+
     // Same DynIndex ID/tags/plev as `k`, but mismatched dimension (larger and smaller).
     let mut k_larger = k.clone();
     k_larger.dim = 4;
@@ -481,14 +491,106 @@ fn lane_add_and_truncated_add_never_enter_global_backend() {
     let left = PartitionedTreeTN::from_subdomains(vec![
         SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 3, 1.0), p00.clone()).unwrap(),
         SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 3, 2.0), p01.clone()).unwrap(),
-        SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 2, 3.0), p10).unwrap(),
+        SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 2, 3.0), p10.clone()).unwrap(),
     ])
     .unwrap();
     let right = PartitionedTreeTN::from_subdomains(vec![
-        SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 3, 4.0), p00).unwrap(),
+        SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 3, 4.0), p00.clone()).unwrap(),
         SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 3, 5.0), p01).unwrap(),
     ])
     .unwrap();
+
+    // Case (ii): 1-node partition with permuted site order between operands.
+    let t1_left = IdxTensor::from_dense(
+        vec![k.clone(), s.clone()],
+        vec![
+            Complex64::new(1.0, 0.5),
+            Complex64::new(2.0, -0.5),
+            Complex64::new(3.0, 0.25),
+            Complex64::new(4.0, -0.25),
+        ],
+    )
+    .unwrap();
+    let t1_right = IdxTensor::from_dense(
+        vec![s.clone(), k.clone()],
+        vec![
+            Complex64::new(0.5, 1.0),
+            Complex64::new(-0.5, 2.0),
+            Complex64::new(0.25, 3.0),
+            Complex64::new(-0.25, 4.0),
+        ],
+    )
+    .unwrap();
+    let one_node_left = PartitionedTreeTN::from_subdomains(vec![SubDomainTreeTN::new(
+        TreeTN::from_tensors(vec![t1_left], vec![0usize]).unwrap(),
+        p00.clone(),
+    )
+    .unwrap()])
+    .unwrap();
+    let one_node_right = PartitionedTreeTN::from_subdomains(vec![SubDomainTreeTN::new(
+        TreeTN::from_tensors(vec![t1_right], vec![0usize]).unwrap(),
+        p00.clone(),
+    )
+    .unwrap()])
+    .unwrap();
+
+    // Case (iii): overlapping patches + coverage clipping.
+    let pk0 = Projector::from_pairs([(k.clone(), 0)]).unwrap();
+    let clip_left = PartitionedTreeTN::from_subdomains(vec![SubDomainTreeTN::new(
+        make_complex_chain(&k, &s, &x, 2, 1.5),
+        pk0.clone(),
+    )
+    .unwrap()])
+    .unwrap()
+    .with_coverage(vec![pk0])
+    .unwrap();
+    let clip_right = PartitionedTreeTN::from_subdomains(vec![
+        SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 2, 2.5), p00.clone()).unwrap(),
+        SubDomainTreeTN::new(make_complex_chain(&k, &s, &x, 2, 3.5), p10.clone()).unwrap(),
+    ])
+    .unwrap()
+    .with_coverage(vec![p00.clone(), p10])
+    .unwrap();
+
+    // Case (iv): 2-node tree with a site-free endpoint node (node 0 has only bond).
+    let make_site_free = |seed: f64| {
+        let bond = DynIndex::new_dyn(3);
+        let t0 = IdxTensor::from_dense(
+            vec![bond.clone()],
+            vec![
+                Complex64::new(seed, 0.1),
+                Complex64::new(seed + 1.0, -0.2),
+                Complex64::new(seed + 2.0, 0.3),
+            ],
+        )
+        .unwrap();
+        let t1 = IdxTensor::from_dense(
+            vec![bond, k.clone()],
+            vec![
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.5, 0.25),
+                Complex64::new(-0.5, 0.5),
+                Complex64::new(0.25, -0.5),
+                Complex64::new(2.0, 0.1),
+                Complex64::new(-1.0, 0.2),
+            ],
+        )
+        .unwrap();
+        TreeTN::from_tensors(vec![t0, t1], vec![0usize, 1]).unwrap()
+    };
+    let sf_left = PartitionedTreeTN::from_subdomains(vec![SubDomainTreeTN::new(
+        make_site_free(1.0),
+        Projector::from_pairs([(k.clone(), 0)]).unwrap(),
+    )
+    .unwrap()])
+    .unwrap();
+    let sf_right = PartitionedTreeTN::from_subdomains(vec![SubDomainTreeTN::new(
+        make_site_free(2.0),
+        Projector::from_pairs([(k.clone(), 0)]).unwrap(),
+    )
+    .unwrap()])
+    .unwrap();
+
     let trunc_opts = TruncationOptions::default().with_max_bond_dim(2);
 
     // Holding the process-global backend makes any route that enters it block.
@@ -497,20 +599,85 @@ fn lane_add_and_truncated_add_never_enter_global_backend() {
         let k_worker = k.clone();
         let worker = std::thread::spawn(move || {
             let mut lanes = make_lanes(2);
+            // (i) Multi-node disjoint.
             let exact = left
                 .add_on_lanes(&right, Some(vec![k_worker.clone()]), &mut lanes)
                 .unwrap();
             let trunc = left
-                .add_truncated_on_lanes(&right, &0, trunc_opts, Some(vec![k_worker]), &mut lanes)
+                .add_truncated_on_lanes(
+                    &right,
+                    &0,
+                    trunc_opts,
+                    Some(vec![k_worker.clone()]),
+                    &mut lanes,
+                )
                 .unwrap();
-            done_tx.send((exact.len(), trunc.len())).unwrap();
+            // (ii) 1-node partition with permuted site order.
+            let one_exact = one_node_left
+                .add_on_lanes(&one_node_right, Some(vec![k_worker.clone()]), &mut lanes)
+                .unwrap();
+            let one_trunc = one_node_left
+                .add_truncated_on_lanes(
+                    &one_node_right,
+                    &0,
+                    trunc_opts,
+                    Some(vec![k_worker.clone()]),
+                    &mut lanes,
+                )
+                .unwrap();
+            // (iii) Overlapping patches + coverage clipping.
+            let clip_exact = clip_left
+                .add_on_lanes(&clip_right, Some(vec![k_worker.clone()]), &mut lanes)
+                .unwrap();
+            let clip_trunc = clip_left
+                .add_truncated_on_lanes(
+                    &clip_right,
+                    &0,
+                    trunc_opts,
+                    Some(vec![k_worker.clone()]),
+                    &mut lanes,
+                )
+                .unwrap();
+            // (iv) Site-free endpoint node.
+            let sf_trunc = sf_left
+                .add_truncated_on_lanes(&sf_right, &1, trunc_opts, Some(vec![k_worker]), &mut lanes)
+                .unwrap();
+            done_tx
+                .send((
+                    exact.len(),
+                    trunc.len(),
+                    one_exact.len(),
+                    one_trunc.len(),
+                    clip_exact.len(),
+                    clip_trunc.len(),
+                    sf_trunc.len(),
+                ))
+                .unwrap();
         });
-        let (exact_len, trunc_len) = done_rx
-            .recv_timeout(Duration::from_secs(60))
+        let (
+            exact_len,
+            trunc_len,
+            one_exact_len,
+            one_trunc_len,
+            clip_exact_len,
+            clip_trunc_len,
+            sf_trunc_len,
+        ) = done_rx
+            .recv_timeout(Duration::from_secs(10))
             .expect("lane add/add_truncated blocked on the process-global backend");
         worker.join().unwrap();
         assert_eq!(exact_len, 3);
         assert_eq!(trunc_len, 3);
+        assert_eq!(
+            (
+                one_exact_len,
+                one_trunc_len,
+                clip_exact_len,
+                clip_trunc_len,
+                sf_trunc_len
+            ),
+            (1, 1, 1, 1, 1)
+        );
     });
 }
 

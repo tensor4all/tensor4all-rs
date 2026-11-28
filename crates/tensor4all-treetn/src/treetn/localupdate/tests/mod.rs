@@ -795,3 +795,59 @@ fn test_truncate_updater_conditioned_route_matches_the_direct_one() {
         );
     }
 }
+
+#[test]
+fn truncate_on_session_site_free_endpoint_never_enters_global_backend() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use tensor4all_tensorbackend::{explicit::Session, with_default_backend, CpuBackend};
+
+    let bond = DynIndex::new_dyn(3);
+    let site = DynIndex::new_dyn(2);
+    // Node 0 is site-free (only the bond); node 1 carries `site`.
+    let t0 = IdxTensor::from_dense(vec![bond.clone()], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let t1 = IdxTensor::from_dense(vec![bond, site], vec![1.0_f64, 0.5, -0.25, 0.75, -1.0, 2.0])
+        .unwrap();
+    let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0, t1], vec![0usize, 1]).unwrap();
+    let expected = tn
+        .clone()
+        .truncate(
+            [1],
+            crate::TruncationOptions::default().with_max_bond_dim(1),
+        )
+        .unwrap()
+        .contract_to_tensor()
+        .unwrap()
+        .to_vec::<f64>()
+        .unwrap();
+
+    let truncated = with_default_backend(|_global| {
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut backend = CpuBackend::with_threads(1).unwrap();
+            let mut session = Session::new(backend.engine_mut());
+            let truncated = tn
+                .truncate_on_session(
+                    [1],
+                    crate::TruncationOptions::default().with_max_bond_dim(1),
+                    &mut session,
+                )
+                .unwrap();
+            done_tx.send(truncated).unwrap();
+        });
+        let truncated = done_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("truncate_on_session with site-free endpoint blocked on global backend");
+        worker.join().unwrap();
+        truncated
+    });
+    assert_eq!(truncated.link_dims(), vec![1]);
+    let actual = truncated
+        .contract_to_tensor()
+        .unwrap()
+        .to_vec::<f64>()
+        .unwrap();
+    for (a, e) in actual.iter().zip(&expected) {
+        assert!((a - e).abs() <= 1e-12, "mismatch {a} vs {e}");
+    }
+}

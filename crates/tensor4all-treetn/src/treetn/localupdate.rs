@@ -551,160 +551,175 @@ where
     ///
     fn update(
         &mut self,
-        mut subtree: TreeTN<T, V>,
+        subtree: TreeTN<T, V>,
         step: &LocalUpdateStep<V>,
         _full_treetn: &TreeTN<T, V>,
     ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError> {
-        // TruncateUpdater is designed for nsite=2
-        if step.nodes.len() != 2 {
-            return Err(anyhow::anyhow!(
-                "TruncateUpdater requires exactly 2 nodes, got {}",
-                step.nodes.len()
-            )
-            .into());
-        }
+        let context = self.context.as_ref();
+        truncate_two_site_step_with(
+            subtree,
+            step,
+            self.max_bond_dim,
+            self.svd_policy,
+            |tensor, left, opts| match context {
+                Some(context) => tensor.factorize_in(left, opts, context),
+                None => tensor.factorize(left, opts),
+            },
+            |lhs, rhs| T::contract(&[lhs, rhs]).map_err(anyhow::Error::from),
+            super::global_stack::<T>,
+            super::global_select::<T>,
+        )
+    }
+}
 
-        let node_a = &step.nodes[0];
-        let node_b = &step.nodes[1];
+/// Shared two-site truncation step parameterized by the tensor-level
+/// factorization, contraction, and singleton-axis operations.
+///
+/// Both [`TruncateUpdater`] (eager / context-scoped) and
+/// [`SessionTruncateUpdater`] (caller-owned explicit `Session`) delegate to
+/// this single implementation so conditioning QR, empty-side handling, and
+/// canonical-center updates cannot drift between routes.
+#[allow(clippy::too_many_arguments)]
+fn truncate_two_site_step_with<T, V, Factorize, Contract, Stack, Select>(
+    mut subtree: TreeTN<T, V>,
+    step: &LocalUpdateStep<V>,
+    max_bond_dim: Option<usize>,
+    svd_policy: Option<SvdTruncationPolicy>,
+    factorize: Factorize,
+    contract_pair: Contract,
+    stack: Stack,
+    select: Select,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+    Factorize: Fn(
+        &T,
+        &[T::Index],
+        &FactorizeOptions,
+    ) -> std::result::Result<
+        tensor4all_core::FactorizeResult<T>,
+        tensor4all_core::FactorizeError,
+    >,
+    Contract: Fn(&T, &T) -> anyhow::Result<T>,
+    Stack: Fn(&T, T::Index, isize) -> anyhow::Result<T>,
+    Select: Fn(&T, &T::Index, usize) -> anyhow::Result<T>,
+{
+    if step.nodes.len() != 2 {
+        return Err(anyhow::anyhow!(
+            "TruncateUpdater requires exactly 2 nodes, got {}",
+            step.nodes.len()
+        )
+        .into());
+    }
 
-        // Get node indices
-        let idx_a = subtree
-            .node_index(node_a)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in subtree", node_a))?;
-        let idx_b = subtree
-            .node_index(node_b)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in subtree", node_b))?;
+    let node_a = &step.nodes[0];
+    let node_b = &step.nodes[1];
 
-        // Get the bond between A and B
-        let edge_ab = subtree
-            .edge_between(node_a, node_b)
-            .ok_or_else(|| anyhow::anyhow!("No edge between {:?} and {:?}", node_a, node_b))?;
-        let bond_ab = subtree
-            .bond_index(edge_ab)
-            .ok_or_else(|| anyhow::anyhow!("Bond index not found"))?
-            .clone();
+    let idx_a = subtree
+        .node_index(node_a)
+        .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in subtree", node_a))?;
+    let idx_b = subtree
+        .node_index(node_b)
+        .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in subtree", node_b))?;
 
-        // Contract A and B
-        let tensor_a = subtree
-            .tensor(idx_a)
-            .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in subtree", node_a))?;
-        let tensor_b = subtree
-            .tensor(idx_b)
-            .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in subtree", node_b))?;
+    let edge_ab = subtree
+        .edge_between(node_a, node_b)
+        .ok_or_else(|| anyhow::anyhow!("No edge between {:?} and {:?}", node_a, node_b))?;
+    let bond_ab = subtree
+        .bond_index(edge_ab)
+        .ok_or_else(|| anyhow::anyhow!("Bond index not found"))?
+        .clone();
 
-        // Determine left indices (indices that will remain on A after factorization)
-        // These are: all indices of A except the bond to B
-        let left_inds: Vec<_> = tensor_a
-            .external_indices()
-            .iter()
-            .filter(|idx| *idx != &bond_ab)
-            .cloned()
-            .collect();
+    let tensor_a = subtree
+        .tensor(idx_a)
+        .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in subtree", node_a))?;
+    let tensor_b = subtree
+        .tensor(idx_b)
+        .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in subtree", node_b))?;
 
-        // Set up factorization options
-        let mut options = FactorizeOptions::svd().with_canonical(Canonical::Left); // Left canonical: A is isometry, B has the norm
+    let left_inds: Vec<_> = tensor_a
+        .external_indices()
+        .iter()
+        .filter(|idx| *idx != &bond_ab)
+        .cloned()
+        .collect();
 
-        if let Some(max_bond_dim) = self.max_bond_dim {
-            options = options.with_max_bond_dim(max_bond_dim);
-        }
-        if let Some(policy) = self.svd_policy {
-            options = options.with_svd_policy(policy);
-        }
+    let mut options = FactorizeOptions::svd().with_canonical(Canonical::Left);
+    if let Some(max_bond_dim) = max_bond_dim {
+        options = options.with_max_bond_dim(max_bond_dim);
+    }
+    if let Some(policy) = svd_policy {
+        options = options.with_svd_policy(policy);
+    }
+    options
+        .validate()
+        .map_err(|error| anyhow::anyhow!("Invalid factorization options: {error}"))?;
 
-        // Validate through the shared factorize guard (fit/zipup already do) so
-        // a NaN policy or `max_bond_dim == 0` cannot slip past an updater used
-        // independently of `truncate_impl`.
-        options
-            .validate()
-            .map_err(|error| anyhow::anyhow!("Invalid factorization options: {error}"))?;
-
-        // Condition A by an exact QR before contracting. `A = Q R` with `Q`
-        // isometric gives `AB = Q (R B)`, so `R B` carries AB's singular
-        // values, its retained rank and its truncated value; only the work
-        // shrinks. The conditioning pays only when the bond is smaller than
-        // both matricization dimensions of the block: then a QR of `A`
-        // followed by an SVD of the `bond x columns` remainder is cheaper than
-        // an SVD of the full block. On a comb, the step that leaves the hub
-        // carries the other branches on the left, which is exactly that case.
-        // A QR that cannot read the storage (a diagonal tensor, for one) or that
-        // had to drop a row (A is rank-deficient on the bond) keeps the
-        // unconditioned route: the conditioning is an optimization, and the
-        // direct factorization is exact on its own.
-        let columns: usize = tensor_b
-            .external_indices()
-            .iter()
-            .filter(|index| *index != &bond_ab)
-            .map(|index| index.dim())
-            .product();
-        let rows: usize = left_inds.iter().map(|index| index.dim()).product();
-        let qr_options = FactorizeOptions::qr().with_qr_rtol(0.0);
-        let conditioned = if rows.min(columns) <= bond_ab.dim() {
-            None
-        } else {
-            match self.context.as_ref() {
-                Some(context) => tensor_a.factorize_in(&left_inds, &qr_options, context),
-                None => tensor_a.factorize(&left_inds, &qr_options),
-            }
+    // Condition A by an exact QR before contracting when the bond is smaller
+    // than both matricization dimensions of the block.
+    let columns: usize = tensor_b
+        .external_indices()
+        .iter()
+        .filter(|index| *index != &bond_ab)
+        .map(|index| index.dim())
+        .product();
+    let rows: usize = left_inds.iter().map(|index| index.dim()).product();
+    let qr_options = FactorizeOptions::qr().with_qr_rtol(0.0);
+    let conditioned = if rows.min(columns) <= bond_ab.dim() {
+        None
+    } else {
+        factorize(tensor_a, &left_inds, &qr_options)
             .ok()
             .filter(|qr| qr.rank == bond_ab.dim())
-        };
+    };
 
-        // A site-free endpoint leaves one side of the split empty; the shared
-        // helper handles that case with a dimension-one bond.
-        let context = self.context.as_ref();
-        let (left_prefix, factor_input, factor_left_inds) = match conditioned {
-            Some(qr) => {
-                let reduced = T::contract(&[&qr.right, tensor_b])
-                    .context("Failed to contract the conditioned A with B")?;
-                (Some(qr.left), reduced, vec![qr.bond_index])
-            }
-            None => (
-                None,
-                T::contract(&[tensor_a, tensor_b]).context("Failed to contract A and B")?,
-                left_inds,
-            ),
-        };
-        let factorize_result = super::factorize_allowing_empty_side(
-            &factor_input,
-            &factor_left_inds,
-            |tensor, left| {
-                match context {
-                    Some(context) => tensor.factorize_in(left, &options, context),
-                    None => tensor.factorize(left, &options),
-                }
-                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
-            },
-        )?;
-        let new_tensor_a = match left_prefix {
-            Some(q) => T::contract(&[&q, &factorize_result.left])
-                .context("Failed to apply the conditioning QR to A")?,
-            None => factorize_result.left,
-        };
-        let new_tensor_b = factorize_result.right;
-        let new_bond = factorize_result.bond_index;
+    let (left_prefix, factor_input, factor_left_inds) = match conditioned {
+        Some(qr) => {
+            let reduced = contract_pair(&qr.right, tensor_b)
+                .context("Failed to contract the conditioned A with B")?;
+            (Some(qr.left), reduced, vec![qr.bond_index])
+        }
+        None => (
+            None,
+            contract_pair(tensor_a, tensor_b).context("Failed to contract A and B")?,
+            left_inds,
+        ),
+    };
 
-        // Update the subtree - first update the edge bond, then the tensors
-        // The factorize result creates a new bond index, so we update the edge to use it
-        subtree.replace_edge_bond(edge_ab, new_bond.clone())?;
-        subtree.replace_tensor(idx_a, new_tensor_a)?;
-        subtree.replace_tensor(idx_b, new_tensor_b)?;
+    let factorize_result = super::factorize_allowing_empty_side_with(
+        &factor_input,
+        &factor_left_inds,
+        |tensor, left| {
+            factorize(tensor, left, &options)
+                .map_err(|e| anyhow::anyhow!("Factorization failed: {e}"))
+        },
+        stack,
+        select,
+    )?;
 
-        // Set ortho_towards: bond points towards new_center (B)
-        subtree.set_ortho_towards(&new_bond, Some(step.new_center.clone()));
+    let new_tensor_a = match left_prefix {
+        Some(q) => contract_pair(&q, &factorize_result.left)
+            .context("Failed to apply the conditioning QR to A")?,
+        None => factorize_result.left,
+    };
+    let new_tensor_b = factorize_result.right;
+    let new_bond = factorize_result.bond_index;
 
-        // Set canonical center to the new center
-        subtree.set_canonical_region([step.new_center.clone()])?;
+    subtree.replace_edge_bond(edge_ab, new_bond.clone())?;
+    subtree.replace_tensor(idx_a, new_tensor_a)?;
+    subtree.replace_tensor(idx_b, new_tensor_b)?;
+    subtree.set_ortho_towards(&new_bond, Some(step.new_center.clone()));
+    subtree.set_canonical_region([step.new_center.clone()])?;
 
-        Ok(subtree)
-    }
+    Ok(subtree)
 }
 
 /// Two-site truncation updater bound to a caller-owned explicit `Session`.
 ///
-/// Mirrors [`TruncateUpdater`] for concrete [`IdxTensor`] networks while
-/// routing both the conditioning QR, the two-site SVD, and every internal
-/// pairwise contraction through `session` so no call enters the process-global
-/// execution backend.
+/// Delegates to [`truncate_two_site_step_with`] while routing every QR, SVD,
+/// pairwise contraction, and singleton-axis stack/select through `session` so
+/// no call enters the process-global execution backend.
 pub(crate) struct SessionTruncateUpdater<'a, 'b> {
     pub(crate) max_bond_dim: Option<usize>,
     pub(crate) svd_policy: Option<SvdTruncationPolicy>,
@@ -717,123 +732,43 @@ where
 {
     fn update(
         &mut self,
-        mut subtree: TreeTN<tensor4all_core::IdxTensor, V>,
+        subtree: TreeTN<tensor4all_core::IdxTensor, V>,
         step: &LocalUpdateStep<V>,
         _full_treetn: &TreeTN<tensor4all_core::IdxTensor, V>,
     ) -> std::result::Result<TreeTN<tensor4all_core::IdxTensor, V>, TreeTNOperationError> {
         use tensor4all_core::{
-            contract_pair_on_session, factorize_on_session, PairwiseContractionOptions, TensorIndex,
+            contract_pair_on_session, factorize_on_session, select_indices_on_session,
+            stack_along_new_index_on_session, PairwiseContractionOptions,
         };
 
-        if step.nodes.len() != 2 {
-            return Err(anyhow::anyhow!(
-                "SessionTruncateUpdater requires exactly 2 nodes, got {}",
-                step.nodes.len()
-            )
-            .into());
-        }
-
-        let node_a = &step.nodes[0];
-        let node_b = &step.nodes[1];
-
-        let idx_a = subtree
-            .node_index(node_a)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in subtree", node_a))?;
-        let idx_b = subtree
-            .node_index(node_b)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in subtree", node_b))?;
-
-        let edge_ab = subtree
-            .edge_between(node_a, node_b)
-            .ok_or_else(|| anyhow::anyhow!("No edge between {:?} and {:?}", node_a, node_b))?;
-        let bond_ab = subtree
-            .bond_index(edge_ab)
-            .ok_or_else(|| anyhow::anyhow!("Bond index not found"))?
-            .clone();
-
-        let tensor_a = subtree
-            .tensor(idx_a)
-            .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in subtree", node_a))?;
-        let tensor_b = subtree
-            .tensor(idx_b)
-            .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in subtree", node_b))?;
-
-        let left_inds: Vec<_> = tensor_a
-            .external_indices()
-            .iter()
-            .filter(|idx| *idx != &bond_ab)
-            .cloned()
-            .collect();
-
-        let mut options = FactorizeOptions::svd().with_canonical(Canonical::Left);
-        if let Some(max_bond_dim) = self.max_bond_dim {
-            options = options.with_max_bond_dim(max_bond_dim);
-        }
-        if let Some(policy) = self.svd_policy {
-            options = options.with_svd_policy(policy);
-        }
-        options
-            .validate()
-            .map_err(|error| anyhow::anyhow!("Invalid factorization options: {error}"))?;
-
-        let columns: usize = tensor_b
-            .external_indices()
-            .iter()
-            .filter(|index| *index != &bond_ab)
-            .map(|index| index.dim())
-            .product();
-        let rows: usize = left_inds.iter().map(|index| index.dim()).product();
-        let qr_options = FactorizeOptions::qr().with_qr_rtol(0.0);
-        let conditioned = if rows.min(columns) <= bond_ab.dim() {
-            None
-        } else {
-            factorize_on_session(self.session, tensor_a, &left_inds, &qr_options)
-                .ok()
-                .filter(|qr| qr.rank == bond_ab.dim())
-        };
-
+        let session = std::cell::RefCell::new(&mut *self.session);
         let contract_opts = PairwiseContractionOptions::default();
-        let (left_prefix, factor_input, factor_left_inds) = match conditioned {
-            Some(qr) => {
-                let reduced =
-                    contract_pair_on_session(self.session, &qr.right, tensor_b, contract_opts)
-                        .context("Failed to contract the conditioned A with B on session")?;
-                (Some(qr.left), reduced, vec![qr.bond_index])
-            }
-            None => (
-                None,
-                contract_pair_on_session(self.session, tensor_a, tensor_b, contract_opts)
-                    .context("Failed to contract A and B on session")?,
-                left_inds,
-            ),
-        };
-
-        let factorize_result = super::factorize_allowing_empty_side(
-            &factor_input,
-            &factor_left_inds,
-            |tensor, left| {
-                factorize_on_session(self.session, tensor, left, &options)
-                    .map_err(|e| anyhow::anyhow!("Factorization on session failed: {e}"))
+        truncate_two_site_step_with(
+            subtree,
+            step,
+            self.max_bond_dim,
+            self.svd_policy,
+            |tensor, left, opts| {
+                factorize_on_session(&mut session.borrow_mut(), tensor, left, opts)
             },
-        )?;
-
-        let new_tensor_a = match left_prefix {
-            Some(q) => {
-                contract_pair_on_session(self.session, &q, &factorize_result.left, contract_opts)
-                    .context("Failed to apply the conditioning QR to A on session")?
-            }
-            None => factorize_result.left,
-        };
-        let new_tensor_b = factorize_result.right;
-        let new_bond = factorize_result.bond_index;
-
-        subtree.replace_edge_bond(edge_ab, new_bond.clone())?;
-        subtree.replace_tensor(idx_a, new_tensor_a)?;
-        subtree.replace_tensor(idx_b, new_tensor_b)?;
-        subtree.set_ortho_towards(&new_bond, Some(step.new_center.clone()));
-        subtree.set_canonical_region([step.new_center.clone()])?;
-
-        Ok(subtree)
+            |lhs, rhs| {
+                contract_pair_on_session(&mut session.borrow_mut(), lhs, rhs, contract_opts)
+                    .map_err(anyhow::Error::from)
+            },
+            |tensor, index, axis| {
+                stack_along_new_index_on_session(&mut session.borrow_mut(), &[tensor], index, axis)
+                    .map_err(anyhow::Error::from)
+            },
+            |tensor, index, position| {
+                select_indices_on_session(
+                    &mut session.borrow_mut(),
+                    tensor,
+                    std::slice::from_ref(index),
+                    &[position],
+                )
+                .map_err(anyhow::Error::from)
+            },
+        )
     }
 }
 
