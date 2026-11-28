@@ -1397,16 +1397,20 @@ bitwise identity across lane counts, at a fixed per-lane engine profile.** For
 a fixed seed, a deterministic evaluator and a deterministic engine, this
 adaptive driver's `patched_interpolate_on_lanes` and
 `patched_elementwise_on_lanes` give the same report and stored node tensors, bit for
-bit, on one lane and on eight, provided every lane of both runs has the same
-profile: the same engine kind and the same per-lane thread count, with each lane
-serial internally (one thread per lane engine, such as `CpuEngine::serial()`).
-The scope and the exclusions are Tier 1's: the same machine and build, no
-cross-machine claim. `report.norm` is not excluded as a whole: its reference,
+bit, on one lane and on eight, when every lane runs one serial engine of the
+same kind (one thread per lane, as with `CpuEngine::serial()`). The scope and
+exclusions are Tier 1's: the same machine and build, no cross-machine claim.
+For an L2 run, `report.norm` is not excluded as a whole: its reference,
 source, allowance, domain size, certified fraction and global error statistic
-are compared bitwise. Only `approximation_rms`, `rounding_allowance_rms`,
-`relative_error_bound` and `relative_bound_estimate` allow rounding, with
-`rounding_limited` compared only away from its threshold. The counts, ordered
-patch records (including `log_norm`) and stored node tensors are checked too.
+are compared bitwise. A `SampledMax` run also records the reference search's
+wall time (`search.seconds`), which stays outside this claim. The L2 rounding
+exclusions are `approximation_rms`, `rounding_allowance_rms`,
+`relative_error_bound` and `relative_bound_estimate`, with
+`rounding_limited` compared only away from its threshold. Counts, ordered
+patch records and stored node tensors are checked too. The norm
+canonicalization caveat also applies to per-patch `log_norm`: #1528 checks it
+bitwise for its fixtures, which is stronger than the general norm-readout
+promise and does not establish every canonicalization path.
 
 This promise is not implied by Tier 1. Tier 1 is identity at a fixed thread count
 only, and changing the lane count changes the number of threads in the run. The
@@ -1433,20 +1437,28 @@ a lane that sees a different order is a seam bug to fix, not a reason to sort.
 Coverage status (2026-11-28), scoped to these two adaptive-driver entries:
 
 - The existing interpolation tests compare the serial entry with one and two
-  serial lanes, checking reports exactly and stored patches within `1e-12`;
-  the elementwise unit test compares three lanes with serial within `1e-12`.
-- Companion PR #1528 adds bitwise report and stored-tensor comparisons on
-  one, two and four serial lanes for a splitting TreeTCI fixture and an
-  elementwise product of six patches by one. The latter's restricted inputs
-  have site-free nodes, so it provides empirical generic-path evidence too.
-  This does not establish every layout, dtype or pooled-evaluator history,
-  and it does not instrument N-ary operand sequences. Those tests belong to
-  #1528; they are not added by this documentation PR.
-- Separate `tensor4all-interpolativeqtt` APIs already have bitwise lane tests:
-  `interpolate_patched_nd_on_lanes` (`src/patched/tests/parallel.rs`) and
+  serial lanes, checking report counters and records with equality and the
+  norm's debug representation, and stored patches within `1e-12`. Debug
+  equality is not a bitwise check of floating-point representations. The
+  elementwise unit test compares three lanes with serial within `1e-12`.
+- Companion PR #1528 adds fixture-level lane-count checks for TreeTCI
+  interpolation and an elementwise product; see its test definitions for the
+  lane counts and partition sizes. The tests compare stored tensor bits and
+  report counters/records, with global norm diagnostics using
+  `assert_same_norm` and an additional bitwise `log_norm` check.
+  Source routing classifies the elementwise restricted inputs as generic:
+  `restrict_fixed_sites` removes fixed site legs, leaving site-free nodes that
+  `raw_centre_route_available` rejects. This is a code-reading classification,
+  not an instrumented assertion of the production route. The tests do not
+  establish every layout, dtype or pooled history, instrument N-ary operand
+  sequences, or assert concurrent execution. They belong to #1528 and are
+  not added by this documentation PR.
+- Separate `tensor4all-interpolativeqtt` APIs already have lane tests:
+  `interpolate_patched_nd_on_lanes` (`src/patched/tests/parallel.rs`) compares
+  values with `assert_eq!`, which does not distinguish signed zero;
   `interpolate_chebyshev_patches_on_lanes`
-  (`src/chebyshev_patches/tests/parallel.rs`). Their coverage does not prove
-  the adaptive partitioned driver or its pooled evaluators.
+  (`src/chebyshev_patches/tests/parallel.rs`) compares bit patterns. Neither
+  establishes the adaptive partitioned driver or its pooled evaluators.
 - The contraction, sums, truncation and Fourier lane variants requested in
   #1495/#1497 do not exist yet. Their tests must also compare N-ary operand
   sequences when applicable. The broader generic-path and two-process

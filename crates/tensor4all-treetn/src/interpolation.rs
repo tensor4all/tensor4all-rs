@@ -176,8 +176,9 @@ impl<'a> EvalContext<'a> {
 
     /// The parallelism budget of the application's own code.
     ///
-    /// This never describes the backend's execution: operations issued through
-    /// [`Self::session`] follow the backend's own lane policy.
+    /// Operations issued through [`Self::session`] run on the engine owned
+    /// by that session, with the thread count chosen when the caller built
+    /// the engine. This budget only bounds the application's own fan-out.
     pub fn parallelism(&self) -> Parallelism<'_> {
         self.parallelism
     }

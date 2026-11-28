@@ -294,9 +294,11 @@
 //! profile: every lane uses the same engine kind and runs serially (for
 //! example `tenferro_cpu::CpuEngine::serial()`). A multi-threaded lane voids
 //! this separate promise, which is not implied by fixed-thread-count Tier 1.
-//! The norm-field exclusions above apply. Canonical wave merging fixes the
-//! driver's output order; it does not prove that a stateful evaluator's
-//! arithmetic is independent of the lane's prior work. In particular, the
+//! The norm-field exclusions above apply. A `SampledMax` reference search's
+//! wall time (`search.seconds`) is diagnostic and outside the bitwise claim;
+//! norm canonicalization's per-patch `log_norm` remains unaudited generally.
+//! Canonical wave merging fixes the driver's output order; it does not prove
+//! that a stateful evaluator's arithmetic is independent of the lane's prior work. In particular, the
 //! elementwise entry pools cached evaluators across lanes.
 //!
 //! The authoritative scope, verification procedure and coverage status are

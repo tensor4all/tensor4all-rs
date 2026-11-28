@@ -134,8 +134,8 @@ where
 /// # Determinism
 ///
 /// The result is to be bitwise identical across lane counts when every lane
-/// has the same engine kind and per-lane thread count and runs serially, as
-/// with `CpuEngine::serial()` below; a multi-threaded lane voids this. See
+/// runs one serial engine of the same kind (one thread per lane, as with
+/// `CpuEngine::serial()` below); a multi-threaded lane voids this. See
 /// [lane-count identity](crate::adaptive_interpolation#lane-count-identity)
 /// for the scope and for what the tests check today.
 ///
