@@ -3,7 +3,9 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use super::PartitionedTreeTN;
+use super::{
+    ensure_covered, intersect_coverages, projector_covered_by, validate_coverage, PartitionedTreeTN,
+};
 use crate::error::{PartitionedTreeTNError, Result};
 use crate::projector::Projector;
 
@@ -23,15 +25,36 @@ where
     /// source patches and `selection` are pairwise disjoint, the resulting
     /// patches are pairwise disjoint as well.
     ///
+    /// # Coverage contract
+    ///
+    /// The result's [`Self::coverage`] is `selection ∩ self.coverage()`, where
+    /// `None` stands for the whole domain:
+    /// - a selected region inside the source coverage with no stored patch is a
+    ///   **known zero**: it needs no patch and stays inside the result's
+    ///   coverage, so it can be selected;
+    /// - a selected region outside the source coverage is **uncomputed**: it is
+    ///   refused, never turned into a zero;
+    /// - the result's coverage is `None` only when the source's coverage is
+    ///   `None` and `selection` covers the whole domain, so a restriction never
+    ///   declares more of the domain known than the source did.
+    ///
+    /// `None` means "defined on the whole space", while `Some(list)` is an
+    /// explicit **known set**. A selection that merely enumerates every point
+    /// of a dimension (for example one projector per value of an index) is
+    /// still a list, so the result carries `Some(list)` rather than `None`:
+    /// its coverage is that known set, not "all of the space" by definition.
+    /// Only the single empty projector [`Projector::new`] selects the whole
+    /// domain symbolically.
+    ///
     /// The number of pair projections is bounded by
-    /// `self.len() * selection.len()`. An empty `selection` returns a valid
-    /// empty partition.
+    /// `self.len() * selection.len()`. An empty `selection` returns an empty
+    /// partition whose coverage is the empty list (nothing is known).
     ///
     /// # Arguments
     ///
     /// * `selection` - Pairwise-disjoint projectors describing the region to
-    ///   keep. Every point of every projector in `selection` must be covered by
-    ///   the source partition's patches.
+    ///   keep. They may extend beyond the stored patches but must stay inside the
+    ///   source coverage; see the coverage contract above.
     ///
     /// # Returns
     ///
@@ -50,9 +73,6 @@ where
     /// - [`PartitionedTreeTNError::ProjectorCoordinateOutOfBounds`] when a
     ///   selected projector coordinate is out of range for the matched site
     ///   index;
-    /// - [`PartitionedTreeTNError::InvalidOptions`] when a selected projector
-    ///   extends outside the region covered by `self`'s patches (including when
-    ///   `self` is empty and `selection` is non-empty);
     /// - plus the patch, dtype, and topology validation errors documented by
     ///   [`Self::from_subdomain`].
     ///
@@ -85,7 +105,16 @@ where
     /// assert_eq!(restricted.len(), 2);
     /// assert!(restricted.contains(&selection[0]));
     /// assert!(restricted.contains(&selection[1]));
-    /// assert!(partition.restrict(&[])?.is_empty());
+    /// // The selection is only part of the domain, so the result is partial.
+    /// assert_eq!(restricted.coverage().map(<[_]>::len), Some(2));
+    ///
+    /// // Selecting nothing leaves nothing known.
+    /// let none = partition.restrict(&[])?;
+    /// assert!(none.is_empty());
+    /// assert_eq!(none.coverage().map(<[_]>::len), Some(0));
+    ///
+    /// // Selecting the whole domain of a partition defined everywhere keeps `None`.
+    /// assert_eq!(partition.restrict(&[Projector::new()])?.coverage(), None);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn restrict(&self, selection: &[Projector]) -> Result<Self> {
@@ -93,43 +122,33 @@ where
         if !Projector::are_disjoint(selection) {
             return Err(PartitionedTreeTNError::OverlappingProjectors);
         }
-        if selection.is_empty() {
-            return Ok(Self::new());
+        // Validate the selection against the source site space (when known).
+        if let Some(template) = self.values().next() {
+            let (sites, _) = template
+                .data()
+                .all_site_indices()
+                .map_err(PartitionedTreeTNError::from)?;
+            validate_coverage(selection, Some(&sites), std::iter::empty::<Projector>())?;
         }
-
-        let ordered_patches = self.ordered_patches();
-        if ordered_patches.is_empty() {
-            return Err(PartitionedTreeTNError::InvalidOptions {
-                operation: "PartitionedTreeTN::restrict",
-                reason: "selected projector extends outside the source partition domain; select only regions covered by the source patches",
-            });
+        for selected in selection {
+            ensure_covered(selected, self.coverage())?;
         }
 
         let mut projected_patches = Vec::new();
-        for selected in selection {
-            let mut uncovered = vec![selected.clone()];
-            for &patch in &ordered_patches {
+        for patch in self.ordered_patches() {
+            for selected in selection {
                 if let Some(projected) = patch.project(selected)? {
                     projected_patches.push(projected);
-                    let mut next_uncovered = Vec::new();
-                    for cell in uncovered {
-                        if let Some(mut pieces) = cell.split_by(patch.projector()) {
-                            next_uncovered.extend(pieces.drain(1..));
-                        } else {
-                            next_uncovered.push(cell);
-                        }
-                    }
-                    uncovered = next_uncovered;
                 }
-            }
-            if !uncovered.is_empty() {
-                return Err(PartitionedTreeTNError::InvalidOptions {
-                    operation: "PartitionedTreeTN::restrict",
-                    reason: "selected projector extends outside the source partition domain; select only regions covered by the source patches",
-                });
             }
         }
 
-        Self::from_subdomains(projected_patches)
+        let selects_all = projector_covered_by(&Projector::new(), selection);
+        let coverage = if self.coverage().is_none() && selects_all {
+            None
+        } else {
+            intersect_coverages(Some(selection), self.coverage())
+        };
+        Ok(Self::from_subdomains(projected_patches)?.with_canonical_coverage(coverage))
     }
 }

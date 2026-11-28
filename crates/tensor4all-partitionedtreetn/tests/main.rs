@@ -18,6 +18,7 @@ mod adaptive_m2_golden;
 mod adaptive_patch_size;
 mod adaptive_rounding_calibration;
 mod coverage;
+mod dense_restrict_coverage;
 mod heavy_adaptive_l2_corner_miss;
 mod heavy_project_first_add;
 mod map;

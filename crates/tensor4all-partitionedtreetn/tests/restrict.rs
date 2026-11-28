@@ -171,22 +171,21 @@ fn restrict_is_pairwise_and_matches_the_hand_written_loop() -> anyhow::Result<()
         PartitionedTreeTNError::OverlappingProjectors
     ));
 
-    // 5. Refusal of selection outside the source domain:
-    //    (a) completely uncovered region (s0 = 1, s1 = 1)
-    let uncovered_err = partition
-        .restrict(&[proj(&[(&s0, 1), (&s1, 1)])?])
-        .unwrap_err();
-    assert!(matches!(
-        uncovered_err,
-        PartitionedTreeTNError::InvalidOptions { .. }
-    ));
+    // 5. The source has coverage `None` (defined everywhere), so a selection
+    //    with no stored patch is a known zero, not an error (the merged
+    //    version refused it).
+    //    (a) region with no patch (s0 = 1, s1 = 1): known zero, no patch kept
+    let zero_cell = proj(&[(&s0, 1), (&s1, 1)])?;
+    let known_zero = partition.restrict(std::slice::from_ref(&zero_cell))?;
+    assert!(known_zero.is_empty());
+    assert_eq!(known_zero.coverage(), Some(&[zero_cell][..]));
 
-    //    (b) partially uncovered region (s0 = 1 covers s1 = 0 but not s1 = 1)
-    let partial_err = partition.restrict(&[proj(&[(&s0, 1)])?]).unwrap_err();
-    assert!(matches!(
-        partial_err,
-        PartitionedTreeTNError::InvalidOptions { .. }
-    ));
+    //    (b) partially patched region (s0 = 1 holds s1 = 0 only): the stored
+    //        part is kept and the whole selection is declared known
+    let partial_sel = proj(&[(&s0, 1)])?;
+    let partial = partition.restrict(std::slice::from_ref(&partial_sel))?;
+    assert_eq!(partial.len(), 1);
+    assert_eq!(partial.coverage(), Some(&[partial_sel][..]));
 
     //    (c) index absent from the TreeTN site space
     let unknown = DynIndex::new_dyn(2);
@@ -196,14 +195,10 @@ fn restrict_is_pairwise_and_matches_the_hand_written_loop() -> anyhow::Result<()
         PartitionedTreeTNError::ProjectorIndexNotFound { .. }
     ));
 
-    //    (d) empty source partition with non-empty selection
-    let empty_source_err = PartitionedTreeTN::<usize>::new()
-        .restrict(&[selection[0].clone()])
-        .unwrap_err();
-    assert!(matches!(
-        empty_source_err,
-        PartitionedTreeTNError::InvalidOptions { .. }
-    ));
+    //    (d) empty source partition (coverage `None`): every selection is a known zero
+    let empty_source = PartitionedTreeTN::<usize>::new().restrict(&[selection[0].clone()])?;
+    assert!(empty_source.is_empty());
+    assert_eq!(empty_source.coverage(), Some(&selection[..1]));
 
     // Source partition is unchanged.
     assert_eq!(partition.len(), 2);
